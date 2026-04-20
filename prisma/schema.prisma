@@ -1,0 +1,250 @@
+// AgBro data model.
+// Single-user MVP (expandable) — tracks principal, trades, agent runs, strategy,
+// the company "brain" and a comprehensive internal stock knowledge base.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// -------------------- User & Account --------------------
+
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  name          String?
+  createdAt     DateTime @default(now())
+  account       Account?
+  strategies    Strategy[]
+  notes         UserNote[]
+  notifications Notification[]
+}
+
+model Account {
+  id                  String   @id @default(cuid())
+  userId              String   @unique
+  user                User     @relation(fields: [userId], references: [id])
+  principalCents      BigInt   @default(0)         // total money ever deposited
+  depositedCents      BigInt   @default(0)         // cumulative deposits
+  withdrawnCents      BigInt   @default(0)
+  expectedAnnualPct   Float    @default(12.0)      // user-set target
+  riskTolerance       String   @default("moderate") // conservative | moderate | aggressive
+  isPaused            Boolean  @default(false)
+  isStopped           Boolean  @default(false)
+  maxPositionPct      Float    @default(15.0)
+  maxDailyTrades      Int      @default(3)
+  minCashReservePct   Float    @default(10.0)
+  tradingHoursStart   String   @default("09:45")    // ET, avoid the open bell
+  tradingHoursEnd     String   @default("15:45")    // avoid the close
+  agentCadenceMinutes Int      @default(60)         // how often an agent wakes up
+  allowDayTrades      Boolean  @default(false)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  deposits            Deposit[]
+}
+
+model Deposit {
+  id          String   @id @default(cuid())
+  accountId   String
+  account     Account  @relation(fields: [accountId], references: [id])
+  amountCents BigInt
+  note        String?
+  createdAt   DateTime @default(now())
+}
+
+// -------------------- Strategies --------------------
+
+model Strategy {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id])
+  name         String
+  isActive     Boolean  @default(false)
+  version      Int      @default(1)
+  summary      String   @db.Text
+  rules        Json     // structured rules: sectors, pe_max, div_min, moat_required, etc.
+  buffettScore Int      @default(0) // 0-100 internal "how Buffett-like"
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  turns        StrategyTurn[]
+}
+
+// Conversational history for collaborative strategy wizard.
+model StrategyTurn {
+  id         String   @id @default(cuid())
+  strategyId String
+  strategy   Strategy @relation(fields: [strategyId], references: [id])
+  role       String   // "user" | "agent"
+  content    String   @db.Text
+  createdAt  DateTime @default(now())
+}
+
+// -------------------- Trading --------------------
+
+model Trade {
+  id            String     @id @default(cuid())
+  alpacaOrderId String?    @unique
+  symbol        String
+  side          String     // "buy" | "sell"
+  qty           Float
+  fillPriceCents BigInt?
+  submittedAt   DateTime   @default(now())
+  filledAt      DateTime?
+  status        String     // "submitted" | "filled" | "rejected" | "canceled"
+  orderType     String     @default("market")
+  bullCase      String     @db.Text
+  bearCase      String     @db.Text
+  thesis        String     @db.Text
+  marginOfSafetyPct Float?
+  intrinsicValuePerShareCents BigInt?
+  confidence    Float       // 0..1 from the agent
+  agentRunId    String?
+  agentRun      AgentRun?   @relation(fields: [agentRunId], references: [id])
+  strategyId    String?
+  closedAt      DateTime?
+  realizedPnlCents BigInt?  // set when closed
+  notifications Notification[]
+}
+
+model Position {
+  id             String  @id @default(cuid())
+  symbol         String  @unique
+  qty            Float
+  avgCostCents   BigInt
+  openedAt       DateTime @default(now())
+  lastSyncedAt   DateTime @default(now())
+  // Snapshot only; source of truth is Alpaca.
+}
+
+// -------------------- Agent runs & decisions --------------------
+
+model AgentRun {
+  id            String    @id @default(cuid())
+  startedAt     DateTime  @default(now())
+  endedAt       DateTime?
+  trigger       String    // "schedule" | "manual" | "user_deposit" | "market_event"
+  model         String    // always claude-opus-4-7 for trade decisions
+  costUsd       Float?
+  summary       String?   @db.Text
+  status        String    @default("running") // running|completed|errored|skipped
+  decision      String?   // "trade" | "hold" | "research_more" | "rebalance"
+  errorMessage  String?   @db.Text
+  trades        Trade[]
+  decisions     AgentDecision[]
+  researchNotes ResearchNote[]
+}
+
+// Granular reasoning steps / tool calls.
+model AgentDecision {
+  id         String   @id @default(cuid())
+  agentRunId String
+  agentRun   AgentRun @relation(fields: [agentRunId], references: [id])
+  kind       String   // "tool_call" | "thought" | "final"
+  payload    Json
+  createdAt  DateTime @default(now())
+}
+
+model ResearchNote {
+  id          String    @id @default(cuid())
+  agentRunId  String?
+  agentRun    AgentRun? @relation(fields: [agentRunId], references: [id])
+  symbol      String?
+  topic       String
+  source      String    // "perplexity" | "google" | "internal" | "claude"
+  bullCase    String?   @db.Text
+  bearCase    String?   @db.Text
+  summary     String    @db.Text
+  rawExcerpt  String?   @db.Text
+  scoreDelta  Int       @default(0)
+  createdAt   DateTime  @default(now())
+
+  @@index([symbol])
+}
+
+// -------------------- Company "Brain" --------------------
+
+model BrainEntry {
+  id        String   @id @default(cuid())
+  kind      String   // "weekly_update" | "post_mortem" | "lesson" | "principle" | "market_memo"
+  title     String
+  body      String   @db.Text
+  tags      String[] @default([])
+  relatedSymbols String[] @default([])
+  createdAt DateTime @default(now())
+
+  @@index([kind])
+}
+
+model UserNote {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  body      String   @db.Text
+  createdAt DateTime @default(now())
+}
+
+// -------------------- Comprehensive Stock DB --------------------
+
+// Internal universe + fundamentals cache. Seeded at install, enriched by agents.
+model Stock {
+  symbol         String   @id
+  name           String
+  sector         String?
+  industry       String?
+  marketCapCents BigInt?
+  peRatio        Float?
+  pbRatio        Float?
+  dividendYield  Float?
+  payoutRatio    Float?
+  debtToEquity   Float?
+  returnOnEquity Float?
+  grossMarginPct Float?
+  fcfYieldPct    Float?
+  moatScore      Int?     // 0-100 internal, durable competitive advantage
+  buffettScore   Int?     // 0-100 internal, Buffett-style fit
+  notes          String?  @db.Text
+  onWatchlist    Boolean  @default(false)
+  lastAnalyzedAt DateTime?
+  updatedAt      DateTime @updatedAt
+  prices         PriceSnapshot[]
+}
+
+model PriceSnapshot {
+  id         String   @id @default(cuid())
+  symbol     String
+  stock      Stock    @relation(fields: [symbol], references: [symbol])
+  at         DateTime @default(now())
+  priceCents BigInt
+  source     String   @default("alpaca")
+
+  @@index([symbol, at])
+}
+
+// -------------------- Notifications & Audit --------------------
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  tradeId   String?
+  trade     Trade?   @relation(fields: [tradeId], references: [id])
+  kind      String   // "trade_placed" | "trade_filled" | "agent_paused" | "weekly_update" | "error"
+  title     String
+  body      String   @db.Text
+  readAt    DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  actor     String   // "agent" | "user" | "system"
+  action    String
+  payload   Json
+  createdAt DateTime @default(now())
+}

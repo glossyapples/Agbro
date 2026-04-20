@@ -1,0 +1,35 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html, body { height: 100%; }
+  body {
+    -webkit-tap-highlight-color: transparent;
+    background: radial-gradient(1200px 600px at 50% -20%, rgba(31,203,130,0.07), transparent),
+                #10131c;
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-2xl border border-ink-700/60 bg-ink-800/60 p-4 shadow-[0_1px_0_rgba(255,255,255,0.03)_inset];
+  }
+  .btn {
+    @apply inline-flex items-center justify-center rounded-xl px-4 py-2 text-sm font-medium transition active:scale-[0.98];
+  }
+  .btn-primary { @apply btn bg-brand-500 text-ink-900 hover:bg-brand-400; }
+  .btn-secondary { @apply btn bg-ink-700 text-ink-100 hover:bg-ink-600; }
+  .btn-danger { @apply btn bg-red-500/90 text-white hover:bg-red-500; }
+  .btn-ghost { @apply btn bg-transparent text-ink-200 hover:bg-ink-700/60; }
+  .stat-label { @apply text-xs uppercase tracking-wide text-ink-400; }
+  .stat-value { @apply text-2xl font-semibold text-ink-50; }
+  .pill { @apply inline-flex items-center rounded-full bg-ink-700 px-2 py-0.5 text-xs font-medium text-ink-200; }
+  .pill-good { @apply pill bg-brand-900/60 text-brand-300; }
+  .pill-bad { @apply pill bg-red-900/60 text-red-300; }
+  .pill-warn { @apply pill bg-amber-900/60 text-amber-300; }
+  input, textarea, select {
+    @apply w-full rounded-xl border border-ink-700 bg-ink-800 px-3 py-2 text-sm text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none;
+  }
+  label { @apply block text-sm font-medium text-ink-200; }
+}
