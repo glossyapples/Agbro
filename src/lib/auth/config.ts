@@ -21,7 +21,14 @@ export const authConfig: NextAuthConfig = {
   // Auth.js v5 refuses to process requests for non-localhost hostnames and
   // every page that calls auth() throws.
   trustHost: true,
-  pages: { signIn: '/login', verifyRequest: '/login?check=1' },
+  pages: {
+    signIn: '/login',
+    // verifyRequest deliberately omitted — setting it to a custom path with a
+    // query string confuses Auth.js v5's action router (UnknownAction).
+    // The built-in /api/auth/verify-request page is minimal but functional;
+    // a custom styled page can land on a dedicated route (e.g. /auth/check)
+    // later if we want.
+  },
   providers: [
     Resend({
       apiKey: process.env.RESEND_API_KEY ?? 'dev-no-op',

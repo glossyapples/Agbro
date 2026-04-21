@@ -21,7 +21,6 @@ export default async function LoginPage({
   const session = await auth();
   if (session?.user) redirect('/');
 
-  const check = searchParams.check === '1';
   const from = sanitizeRedirect(searchParams.from);
 
   async function handleSignIn(formData: FormData) {
@@ -40,12 +39,7 @@ export default async function LoginPage({
         </p>
       </header>
 
-      {check ? (
-        <div className="rounded-lg border border-brand-400/40 bg-brand-400/10 p-4 text-sm">
-          Check your email for a sign-in link. It expires in 24 hours.
-        </div>
-      ) : (
-        <form action={handleSignIn} className="flex flex-col gap-3">
+      <form action={handleSignIn} className="flex flex-col gap-3">
           <label htmlFor="email" className="text-sm font-medium text-ink-300">
             Email
           </label>
@@ -66,7 +60,6 @@ export default async function LoginPage({
             Email me a sign-in link
           </button>
         </form>
-      )}
 
       <p className="text-xs text-ink-500">
         By continuing you accept the{' '}
