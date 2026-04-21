@@ -7,12 +7,15 @@
 // Trade decisions are HARDCODED to Opus 4.7. See models.ts.
 
 import Anthropic from '@anthropic-ai/sdk';
+import type { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { TRADE_DECISION_MODEL, assertTradeModel } from './models';
 import { AGBRO_PRINCIPLES } from './prompts';
 import { TOOL_DEFS, runTool } from './tools';
 
 const MAX_TURNS = 16;
+const MAX_TOOL_OUTPUT_BYTES = 60_000;
+const TRUNCATION_MARKER = '\n…[truncated by orchestrator]';
 
 export type RunAgentArgs = {
   userId: string;
@@ -113,17 +116,35 @@ export async function runAgent(args: RunAgentArgs): Promise<RunAgentResult> {
           isError = true;
           result = { error: (err as Error).message };
         }
+        const serialized = JSON.stringify(result, bigintReplacer);
+        const truncated = serialized.length > MAX_TOOL_OUTPUT_BYTES;
+        const content = truncated
+          ? serialized.slice(0, MAX_TOOL_OUTPUT_BYTES - TRUNCATION_MARKER.length) + TRUNCATION_MARKER
+          : serialized;
+        if (truncated) {
+          console.warn(
+            `agent.tool_output_truncated name=${use.name} runId=${run.id} bytes=${serialized.length}`
+          );
+        }
+        const decisionPayload = {
+          name: use.name,
+          input: use.input,
+          output: result,
+          isError,
+          truncated,
+          outputBytes: serialized.length,
+        } as unknown as Prisma.InputJsonValue;
         await prisma.agentDecision.create({
           data: {
             agentRunId: run.id,
             kind: 'tool_call',
-            payload: { name: use.name, input: use.input, output: result, isError },
+            payload: decisionPayload,
           },
         });
         toolResults.push({
           type: 'tool_result',
           tool_use_id: use.id,
-          content: JSON.stringify(result, bigintReplacer).slice(0, 60_000),
+          content,
           is_error: isError,
         });
         if (use.name === 'finalize_run') finalized = true;

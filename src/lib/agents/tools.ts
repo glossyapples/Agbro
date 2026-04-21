@@ -2,6 +2,7 @@
 // Every tool returns JSON-serialisable data and has a strict input schema.
 
 import type Anthropic from '@anthropic-ai/sdk';
+import { z } from 'zod';
 import { prisma } from '@/lib/db';
 import { analyze, positionSizeCents, type AnalyzerInput } from '@/lib/analyzer';
 import {
@@ -14,6 +15,26 @@ import {
 import { perplexitySearch } from '@/lib/research/perplexity';
 import { googleSearch } from '@/lib/research/google';
 import { toCents } from '@/lib/money';
+import { startOfDayET } from '@/lib/time';
+
+const PlaceTradeInput = z.object({
+  symbol: z.string().min(1).max(12),
+  side: z.enum(['buy', 'sell']),
+  qty: z.number().positive().finite().max(1_000_000),
+  orderType: z.enum(['market', 'limit']).optional(),
+  limitPrice: z.number().positive().finite().optional(),
+  bullCase: z.string().min(1).max(4_000),
+  bearCase: z.string().min(1).max(4_000),
+  thesis: z.string().min(1).max(4_000),
+  confidence: z.number().min(0).max(1),
+  intrinsicValuePerShare: z.number().nonnegative().finite().optional(),
+  marginOfSafetyPct: z.number().min(-100).max(100).optional(),
+});
+
+const SizePositionInput = z.object({
+  buffettScore: z.number().min(0).max(100),
+  confidence: z.number().min(0).max(1),
+});
 
 export const TOOL_DEFS: Anthropic.Tool[] = [
   {
@@ -290,14 +311,18 @@ async function getAccountState(ctx: ToolContext) {
 }
 
 async function sizePositionTool(ctx: ToolContext, input: Record<string, unknown>) {
+  const parsed = SizePositionInput.safeParse(input);
+  if (!parsed.success) {
+    throw new Error(`size_position: invalid input — ${parsed.error.message}`);
+  }
   const account = await prisma.account.findUnique({ where: { userId: ctx.userId } });
   if (!account) throw new Error('account not found');
   const broker = await getBrokerAccount();
   const cents = positionSizeCents({
     portfolioValueCents: broker.portfolioValueCents,
     cashCents: broker.cashCents,
-    buffettScore: Number(input.buffettScore),
-    confidence: Number(input.confidence),
+    buffettScore: parsed.data.buffettScore,
+    confidence: parsed.data.confidence,
     maxPositionPct: account.maxPositionPct,
     minCashReservePct: account.minCashReservePct,
   });
@@ -305,14 +330,19 @@ async function sizePositionTool(ctx: ToolContext, input: Record<string, unknown>
 }
 
 async function placeTradeTool(ctx: ToolContext, input: Record<string, unknown>) {
+  const parsed = PlaceTradeInput.safeParse(input);
+  if (!parsed.success) {
+    throw new Error(`place_trade: invalid input — ${parsed.error.message}`);
+  }
+  const p = parsed.data;
+
   const account = await prisma.account.findUnique({ where: { userId: ctx.userId } });
   if (!account) throw new Error('account not found');
   if (account.isStopped) throw new Error('account is stopped; trading disabled');
   if (account.isPaused) throw new Error('account is paused; trading disabled');
 
-  // Enforce daily trade cap server-side.
-  const since = new Date();
-  since.setHours(0, 0, 0, 0);
+  // Enforce daily trade cap server-side, anchored to midnight ET (not host local time).
+  const since = startOfDayET();
   const todaysTrades = await prisma.trade.count({
     where: { submittedAt: { gte: since } },
   });
@@ -320,34 +350,37 @@ async function placeTradeTool(ctx: ToolContext, input: Record<string, unknown>) 
     throw new Error(`daily trade cap reached (${account.maxDailyTrades})`);
   }
 
-  const symbol = String(input.symbol).toUpperCase();
-  const side = String(input.side) as 'buy' | 'sell';
-  const qty = Number(input.qty);
-  if (!(qty > 0)) throw new Error('qty must be positive');
+  const symbol = p.symbol.toUpperCase();
+  const orderType = p.orderType ?? 'market';
+  if (orderType === 'limit' && p.limitPrice == null) {
+    throw new Error('place_trade: limitPrice required when orderType=limit');
+  }
 
   const order = await placeOrder({
     symbol,
-    qty,
-    side,
-    orderType: (input.orderType as 'market' | 'limit') ?? 'market',
-    limitPrice: input.limitPrice as number | undefined,
+    qty: p.qty,
+    side: p.side,
+    orderType,
+    limitPrice: p.limitPrice,
   });
 
-  const intrinsic = Number(input.intrinsicValuePerShare ?? 0);
   const trade = await prisma.trade.create({
     data: {
       alpacaOrderId: order.id,
       symbol,
-      side,
-      qty,
+      side: p.side,
+      qty: p.qty,
       status: 'submitted',
-      orderType: (input.orderType as string) ?? 'market',
-      bullCase: String(input.bullCase),
-      bearCase: String(input.bearCase),
-      thesis: String(input.thesis),
-      confidence: Number(input.confidence),
-      marginOfSafetyPct: input.marginOfSafetyPct as number | undefined,
-      intrinsicValuePerShareCents: intrinsic > 0 ? toCents(intrinsic) : null,
+      orderType,
+      bullCase: p.bullCase,
+      bearCase: p.bearCase,
+      thesis: p.thesis,
+      confidence: p.confidence,
+      marginOfSafetyPct: p.marginOfSafetyPct,
+      intrinsicValuePerShareCents:
+        p.intrinsicValuePerShare && p.intrinsicValuePerShare > 0
+          ? toCents(p.intrinsicValuePerShare)
+          : null,
       agentRunId: ctx.agentRunId,
     },
   });
@@ -357,8 +390,8 @@ async function placeTradeTool(ctx: ToolContext, input: Record<string, unknown>) 
       userId: ctx.userId,
       tradeId: trade.id,
       kind: 'trade_placed',
-      title: `${side.toUpperCase()} ${qty} ${symbol}`,
-      body: `Thesis: ${String(input.thesis).slice(0, 240)}`,
+      title: `${p.side.toUpperCase()} ${p.qty} ${symbol}`,
+      body: `Thesis: ${p.thesis.slice(0, 240)}`,
     },
   });
 

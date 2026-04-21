@@ -1,28 +1,44 @@
 import { NextResponse } from 'next/server';
+import { z } from 'zod';
 import { prisma } from '@/lib/db';
-import { getCurrentUser } from '@/lib/auth';
+import { apiError, requireUser } from '@/lib/api';
 import { toCents } from '@/lib/money';
 
 export const runtime = 'nodejs';
 
-export async function POST(req: Request) {
-  const { amount, note } = (await req.json()) as { amount: number; note?: string };
-  if (!(amount > 0)) return NextResponse.json({ error: 'amount must be > 0' }, { status: 400 });
-  const user = await getCurrentUser();
-  if (!user.account) return NextResponse.json({ error: 'no account' }, { status: 400 });
+const DepositBody = z.object({
+  // Dollars. Bounds keep one mis-typed decimal from creating a catastrophic deposit row.
+  amount: z.number().positive().finite().max(10_000_000),
+  note: z.string().max(500).optional(),
+});
 
-  const cents = toCents(amount);
-  await prisma.$transaction([
-    prisma.deposit.create({
-      data: { accountId: user.account.id, amountCents: cents, note },
-    }),
-    prisma.account.update({
-      where: { id: user.account.id },
-      data: {
-        depositedCents: { increment: cents },
-        principalCents: { increment: cents },
-      },
-    }),
-  ]);
-  return NextResponse.json({ ok: true });
+export async function POST(req: Request) {
+  const user = await requireUser();
+  if (user instanceof NextResponse) return user;
+
+  try {
+    const parsed = DepositBody.safeParse(await req.json());
+    if (!parsed.success) {
+      return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+    }
+    const { amount, note } = parsed.data;
+    if (!user.account) return NextResponse.json({ error: 'no account' }, { status: 400 });
+
+    const cents = toCents(amount);
+    await prisma.$transaction([
+      prisma.deposit.create({
+        data: { accountId: user.account.id, amountCents: cents, note },
+      }),
+      prisma.account.update({
+        where: { id: user.account.id },
+        data: {
+          depositedCents: { increment: cents },
+          principalCents: { increment: cents },
+        },
+      }),
+    ]);
+    return NextResponse.json({ ok: true });
+  } catch (err) {
+    return apiError(err, 500, 'deposit failed', 'account.deposit');
+  }
 }
