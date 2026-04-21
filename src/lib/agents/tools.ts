@@ -2,7 +2,6 @@
 // Every tool returns JSON-serialisable data and has a strict input schema.
 
 import type Anthropic from '@anthropic-ai/sdk';
-import { z } from 'zod';
 import { prisma } from '@/lib/db';
 import { analyze, positionSizeCents, type AnalyzerInput } from '@/lib/analyzer';
 import {
@@ -16,25 +15,7 @@ import { perplexitySearch } from '@/lib/research/perplexity';
 import { googleSearch } from '@/lib/research/google';
 import { toCents } from '@/lib/money';
 import { startOfDayET } from '@/lib/time';
-
-const PlaceTradeInput = z.object({
-  symbol: z.string().min(1).max(12),
-  side: z.enum(['buy', 'sell']),
-  qty: z.number().positive().finite().max(1_000_000),
-  orderType: z.enum(['market', 'limit']).optional(),
-  limitPrice: z.number().positive().finite().optional(),
-  bullCase: z.string().min(1).max(4_000),
-  bearCase: z.string().min(1).max(4_000),
-  thesis: z.string().min(1).max(4_000),
-  confidence: z.number().min(0).max(1),
-  intrinsicValuePerShare: z.number().nonnegative().finite().optional(),
-  marginOfSafetyPct: z.number().min(-100).max(100).optional(),
-});
-
-const SizePositionInput = z.object({
-  buffettScore: z.number().min(0).max(100),
-  confidence: z.number().min(0).max(1),
-});
+import { PlaceTradeInput, SizePositionInput } from './schemas';
 
 export const TOOL_DEFS: Anthropic.Tool[] = [
   {

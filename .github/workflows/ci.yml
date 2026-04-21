@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      # Prisma client generation needs these set to something. Tests don't
+      # open a real connection; if a future test does, it can override these.
+      DATABASE_URL: postgresql://user:pass@localhost:5432/agbro
+      # Prevent `next build` / `next-auth` runtime from complaining on import.
+      AUTH_SECRET: ci-dummy-secret-do-not-use-in-prod
+      ANTHROPIC_API_KEY: ci-dummy
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # `postinstall` runs prisma generate, but we re-run here defensively
+      # in case something (e.g. a stale cache) skipped it.
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Tests
+        run: npm run test:run
+
+      # Full build is optional but catches Next.js-only compile errors that
+      # tsc won't flag (edge runtime, Server Actions, etc.).
+      - name: Build
+        run: npx next build
