@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import { prisma } from '@/lib/db';
 import { apiError, requireUser } from '@/lib/api';
@@ -37,6 +38,9 @@ export async function POST(req: Request) {
         },
       }),
     ]);
+    revalidatePath('/');
+    revalidatePath('/settings');
+    revalidatePath('/analytics');
     return NextResponse.json({ ok: true });
   } catch (err) {
     return apiError(err, 500, 'deposit failed', 'account.deposit');

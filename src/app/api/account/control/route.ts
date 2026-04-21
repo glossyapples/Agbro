@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import { prisma } from '@/lib/db';
 import { apiError, requireUser } from '@/lib/api';
@@ -46,6 +47,7 @@ export async function POST(req: Request) {
         body: `User ${action}d the agent at ${new Date().toISOString()}`,
       },
     });
+    revalidatePath('/');
     return NextResponse.json({ ok: true });
   } catch (err) {
     return apiError(err, 500, 'control action failed', 'account.control');

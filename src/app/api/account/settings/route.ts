@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import { prisma } from '@/lib/db';
 import { apiError, requireUser } from '@/lib/api';
@@ -37,6 +38,12 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
     }
     await prisma.account.update({ where: { userId: user.id }, data: parsed.data });
+    // Settings affect what the home, settings, and analytics pages render.
+    // Invalidate them so the next visit re-renders against fresh DB state
+    // instead of serving the previous server-render from cache.
+    revalidatePath('/');
+    revalidatePath('/settings');
+    revalidatePath('/analytics');
     return NextResponse.json({ ok: true });
   } catch (err) {
     return apiError(err, 500, 'settings update failed', 'account.settings');
