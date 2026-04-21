@@ -134,6 +134,10 @@ export default async function OverviewPage() {
           <h2 className="text-sm font-semibold text-ink-100">Last agent run</h2>
           <RunAgentButton />
         </div>
+        <p className="mt-1 text-[11px] text-ink-400">
+          Auto-wakes every {account.agentCadenceMinutes} min between{' '}
+          {account.tradingHoursStart} and {account.tradingHoursEnd} ET on weekdays.
+        </p>
         {lastRun ? (
           <div className="mt-2 space-y-1 text-sm">
             <p className="text-ink-200">

@@ -1,0 +1,44 @@
+name: Agent tick
+
+# Default cadence for AgBro's agent wake-ups. Fires every 30 minutes during
+# regular US market hours (9:30am–4:00pm ET) on weekdays. The app itself
+# enforces trading hours, weekend skip, and your per-user
+# agentCadenceMinutes — this workflow is just the outer heartbeat, so the
+# actual number of agent runs per day is controlled in /settings.
+#
+# Times below are UTC. 13:30–20:30 UTC ≈ 9:30am–4:30pm ET during DST
+# (EDT, UTC-4); during EST (UTC-5) the same UTC window covers 8:30am–3:30pm
+# ET, which still fully contains the market's active hours. The app's
+# server-side trading-hours check keeps us honest either way.
+#
+# GitHub Actions cron has ~15-minute scheduling variance. That's fine —
+# the agent is gated on cadence, not exact timing.
+
+on:
+  schedule:
+    # "0,30" = at :00 and :30 past every hour in the 13..20 UTC window,
+    # Mon–Fri. ≈ 16 invocations/day; after the app's cadence + trading-hours
+    # gates, expect ~6–7 real agent runs on a normal weekday.
+    - cron: '0,30 13-20 * * 1-5'
+  workflow_dispatch: {}
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: POST /api/cron/tick
+        env:
+          AGBRO_URL: ${{ vars.AGBRO_URL }}
+          AGBRO_CRON_SECRET: ${{ secrets.AGBRO_CRON_SECRET }}
+        run: |
+          if [ -z "$AGBRO_URL" ] || [ -z "$AGBRO_CRON_SECRET" ]; then
+            echo "::error::AGBRO_URL (repo variable) or AGBRO_CRON_SECRET (repo secret) missing"
+            exit 1
+          fi
+          # -f fails on 4xx/5xx so a broken deploy breaks the workflow run.
+          # --max-time 300 matches the route's maxDuration budget.
+          curl -sSf --max-time 300 \
+            -X POST \
+            -H "x-agbro-cron-secret: $AGBRO_CRON_SECRET" \
+            "$AGBRO_URL/api/cron/tick"

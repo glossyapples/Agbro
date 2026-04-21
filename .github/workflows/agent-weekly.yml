@@ -1,0 +1,33 @@
+name: Agent weekly brain
+
+# Friday evening writeup: post-mortems on closed positions, a scoreboard,
+# open questions, and next-week plan. Fires once a week after market close.
+#
+# 22:00 UTC Friday ≈ 6:00pm ET during DST (EDT) / 5:00pm ET during EST.
+# Either way the market has been closed for 2+ hours so the day's data is
+# final. The app's weekly endpoint skips users with no activity that week,
+# so a quiet week costs nothing.
+
+on:
+  schedule:
+    - cron: '0 22 * * 5'
+  workflow_dispatch: {}
+
+jobs:
+  weekly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: POST /api/cron/weekly
+        env:
+          AGBRO_URL: ${{ vars.AGBRO_URL }}
+          AGBRO_CRON_SECRET: ${{ secrets.AGBRO_CRON_SECRET }}
+        run: |
+          if [ -z "$AGBRO_URL" ] || [ -z "$AGBRO_CRON_SECRET" ]; then
+            echo "::error::AGBRO_URL (repo variable) or AGBRO_CRON_SECRET (repo secret) missing"
+            exit 1
+          fi
+          curl -sSf --max-time 300 \
+            -X POST \
+            -H "x-agbro-cron-secret: $AGBRO_CRON_SECRET" \
+            "$AGBRO_URL/api/cron/weekly"
