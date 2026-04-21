@@ -8,6 +8,7 @@ import { PrismaAdapter } from '@auth/prisma-adapter';
 import Resend from 'next-auth/providers/resend';
 import { prisma } from '@/lib/db';
 import { log } from '@/lib/logger';
+import { bootstrapNewUser } from './bootstrap';
 
 const ALLOWED_EMAILS = (process.env.AGBRO_ALLOWED_EMAILS ?? '')
   .split(',')
@@ -75,65 +76,7 @@ export const authConfig: NextAuthConfig = {
   },
   events: {
     async createUser({ user }) {
-      // New sign-up: bootstrap a trading Account, a default Strategy, and
-      // a Day-0 charter brain entry. Defaults mirror prisma/seed.ts so dev
-      // seed and prod sign-up converge.
-      if (!user.id) return;
-      await prisma.account.upsert({
-        where: { userId: user.id },
-        update: {},
-        create: {
-          userId: user.id,
-          expectedAnnualPct: 12.0,
-          riskTolerance: 'moderate',
-          maxPositionPct: Number(process.env.MAX_POSITION_PCT ?? 15),
-          maxDailyTrades: Number(process.env.MAX_DAILY_TRADES ?? 3),
-          minCashReservePct: Number(process.env.MIN_CASH_RESERVE_PCT ?? 10),
-        },
-      });
-      const existingStrategy = await prisma.strategy.findFirst({
-        where: { userId: user.id },
-      });
-      if (!existingStrategy) {
-        await prisma.strategy.create({
-          data: {
-            userId: user.id,
-            name: 'Buffett-style Value + Dividend Core',
-            isActive: true,
-            version: 1,
-            buffettScore: 85,
-            summary:
-              'Buy durable-moat businesses trading below intrinsic value with a 20%+ margin of safety. ' +
-              'Prefer dividend payers with ROE > 15% and manageable debt. Ballast with broad-market ETFs. ' +
-              'Hold for years. Only sell on thesis break or materially better opportunity.',
-            rules: {
-              minMarginOfSafetyPct: 20,
-              minMoatSignal: 'narrow',
-              minROEPct: 15,
-              maxDebtToEquity: 1.5,
-              preferDividend: true,
-              maxPosition: 15,
-              minCashReserve: 10,
-              maxDailyTrades: 3,
-              allowDayTrades: false,
-              targetAnnualReturnPct: 12,
-            },
-          },
-        });
-      }
-      await prisma.brainEntry.create({
-        data: {
-          userId: user.id,
-          kind: 'principle',
-          title: 'Day 0 — The Charter',
-          body:
-            'AgBro exists to preserve principal first, and grow it second. ' +
-            'No options. No shorting. No margin. Minimal day trading. ' +
-            'Every trade must pass the internal analyzer AND carry a written Bull/Bear case. ' +
-            'Margin of safety is non-negotiable. We learn in public: every closed position gets a post-mortem.',
-          tags: ['charter', 'principles'],
-        },
-      });
+      if (user.id) await bootstrapNewUser(user.id);
     },
   },
 };
