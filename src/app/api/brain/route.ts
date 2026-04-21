@@ -6,11 +6,15 @@ import { apiError, requireUser } from '@/lib/api';
 export const runtime = 'nodejs';
 
 const BRAIN_KINDS = [
-  'weekly_update',
-  'post_mortem',
-  'lesson',
   'principle',
+  'checklist',
+  'pitfall',
+  'sector_primer',
+  'case_study',
+  'lesson',
   'market_memo',
+  'post_mortem',
+  'weekly_update',
   'agent_run_summary',
 ] as const;
 

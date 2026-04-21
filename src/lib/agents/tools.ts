@@ -54,11 +54,34 @@ export const TOOL_DEFS: Anthropic.Tool[] = [
   {
     name: 'read_brain',
     description:
-      'Fetch the most recent brain entries (lessons, weekly updates, post-mortems). Use this at the start of every run to pick up where the last agent left off.',
+      "Fetch brain entries. ALWAYS pass `kinds` — pulling everything is wasteful.\n\n" +
+      "Recommended usage by phase:\n" +
+      "  - At wake-up (orient): kinds=[\"principle\",\"pitfall\",\"weekly_update\",\"agent_run_summary\"] — the rules, the biases to resist, and where the last agent left off.\n" +
+      "  - Before researching a candidate: kinds=[\"sector_primer\",\"case_study\"] — what 'good' looks like in this sector + any historical pattern match. Optionally include \"lesson\".\n" +
+      "  - Before a trade: kinds=[\"checklist\"] (esp. pre-trade) + any symbol-scoped post_mortem.\n" +
+      "  - For retros / summaries: kinds=[\"post_mortem\",\"weekly_update\"].\n\n" +
+      "Available kinds: principle, checklist, pitfall, sector_primer, case_study, lesson, market_memo, post_mortem, weekly_update, agent_run_summary. Default limit=20.",
     input_schema: {
       type: 'object',
       properties: {
-        kinds: { type: 'array', items: { type: 'string' } },
+        kinds: {
+          type: 'array',
+          items: {
+            type: 'string',
+            enum: [
+              'principle',
+              'checklist',
+              'pitfall',
+              'sector_primer',
+              'case_study',
+              'lesson',
+              'market_memo',
+              'post_mortem',
+              'weekly_update',
+              'agent_run_summary',
+            ],
+          },
+        },
         limit: { type: 'number' },
       },
       required: [],

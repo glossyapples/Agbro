@@ -12,6 +12,7 @@
     "postinstall": "prisma generate",
     "db:push": "prisma db push",
     "db:seed": "tsx prisma/seed.ts",
+    "db:seed-brain": "tsx prisma/seed-brain.ts",
     "agent:run": "tsx scripts/run-agent.ts",
     "agent:weekly": "tsx scripts/weekly-brain.ts",
     "lint": "next lint",

@@ -4,6 +4,8 @@
 // exactly once. Idempotent: re-runs are no-ops.
 
 import { prisma } from '@/lib/db';
+import { log } from '@/lib/logger';
+import { seedBrainForUser } from '@/lib/brain/seed-brain';
 
 export async function bootstrapNewUser(userId: string): Promise<void> {
   await prisma.account.upsert({
@@ -66,4 +68,21 @@ export async function bootstrapNewUser(userId: string): Promise<void> {
       },
     });
   }
+
+  // Load the full starter brain (principles, checklists, pitfalls, sector
+  // primers, case studies) + archived alternative strategies. Fire-and-forget
+  // so a transient Postgres hiccup doesn't stall the magic-link flow. If it
+  // fails, the user can still use the in-app "Load starter brain" button
+  // on /brain as a fallback.
+  void seedBrainForUser(userId)
+    .then((r) =>
+      log.info('bootstrap.brain_seeded', {
+        userId,
+        brainInserted: r.brainEntries.inserted,
+        strategiesInserted: r.strategies.inserted,
+      })
+    )
+    .catch((err) => {
+      log.error('bootstrap.brain_seed_failed', err, { userId });
+    });
 }
