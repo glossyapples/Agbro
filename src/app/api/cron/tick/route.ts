@@ -10,7 +10,7 @@
 
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
-import { runAgent } from '@/lib/agents/orchestrator';
+import { runAgent, AgentRunInflightError } from '@/lib/agents/orchestrator';
 import { apiError, assertCronSecret } from '@/lib/api';
 import { log } from '@/lib/logger';
 
@@ -109,6 +109,17 @@ export async function POST(req: Request) {
           status: result.status,
         });
       } catch (err) {
+        // AgentRunInflightError means another run (cron overlap, manual
+        // trigger racing with cron) holds the per-user slot. Not a failure —
+        // skip this tick and let the next one pick it up.
+        if (err instanceof AgentRunInflightError) {
+          outcomes.push({
+            userId: account.userId,
+            skipped: true,
+            reason: `inflight:${err.inflightRunId.slice(0, 8)}`,
+          });
+          continue;
+        }
         log.error('cron.tick.agent_failed', err, { userId: account.userId });
         outcomes.push({
           userId: account.userId,

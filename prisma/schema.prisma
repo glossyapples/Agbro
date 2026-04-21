@@ -100,12 +100,18 @@ model Account {
 }
 
 model Deposit {
-  id          String   @id @default(cuid())
-  accountId   String
-  account     Account  @relation(fields: [accountId], references: [id])
-  amountCents BigInt
-  note        String?
-  createdAt   DateTime @default(now())
+  id              String   @id @default(cuid())
+  accountId       String
+  account         Account  @relation(fields: [accountId], references: [id])
+  // Client-supplied (UUID). NULL for legacy rows created before idempotency
+  // shipped; Postgres unique indexes treat NULLs as distinct by default, so
+  // old rows never collide with each other or with new keyed rows.
+  idempotencyKey  String?
+  amountCents     BigInt
+  note            String?
+  createdAt       DateTime @default(now())
+
+  @@unique([accountId, idempotencyKey])
 }
 
 // -------------------- Strategies --------------------

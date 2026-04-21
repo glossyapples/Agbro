@@ -367,50 +367,61 @@ async function placeTradeTool(ctx: ToolContext, input: Record<string, unknown>) 
   }
   const p = parsed.data;
 
-  const account = await prisma.account.findUnique({ where: { userId: ctx.userId } });
-  if (!account) throw new Error('account not found');
-  if (account.isStopped) throw new Error('account is stopped; trading disabled');
-  if (account.isPaused) throw new Error('account is paused; trading disabled');
-
-  // Enforce daily trade cap server-side, anchored to midnight ET (not host local time).
-  // Pending rows count too — they represent in-flight intent.
-  const since = startOfDayET();
-  const todaysTrades = await prisma.trade.count({
-    where: { userId: ctx.userId, submittedAt: { gte: since } },
-  });
-  if (todaysTrades >= account.maxDailyTrades) {
-    throw new Error(`daily trade cap reached (${account.maxDailyTrades})`);
-  }
-
   const symbol = p.symbol.toUpperCase();
   const orderType = p.orderType ?? 'market';
   if (orderType === 'limit' && p.limitPrice == null) {
     throw new Error('place_trade: limitPrice required when orderType=limit');
   }
 
-  // Step 1: write a pending row BEFORE talking to Alpaca. Guarantees we have
-  // a record of every attempt, even if the broker call or the post-fill DB
-  // update fails. This is the audit trail.
-  const pending = await prisma.trade.create({
-    data: {
-      userId: ctx.userId,
-      alpacaOrderId: null,
-      symbol,
-      side: p.side,
-      qty: p.qty,
-      status: 'pending',
-      orderType,
-      bullCase: p.bullCase,
-      bearCase: p.bearCase,
-      thesis: p.thesis,
-      confidence: p.confidence,
-      marginOfSafetyPct: p.marginOfSafetyPct,
-      intrinsicValuePerShareCents:
-        p.intrinsicValuePerShare && p.intrinsicValuePerShare > 0
-          ? toCents(p.intrinsicValuePerShare)
-          : null,
-      agentRunId: ctx.agentRunId,
-    },
+  // Atomically: take a per-user write lock, re-read pause/stop + cap under the
+  // lock, count today's trades, and reserve a 'pending' Trade row. The lock
+  // serialises concurrent place_trade calls for the same user so the
+  // count-then-insert pair can't be double-passed by two callers (closes the
+  // maxDailyTrades race). It also re-checks pause/stop AFTER acquiring the
+  // lock so a user flip between tool entry and the broker call can't slip
+  // through (closes the pause-race window).
+  const since = startOfDayET();
+  const pending = await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT id FROM "Account" WHERE "userId" = ${ctx.userId} FOR UPDATE`;
+
+    const acct = await tx.account.findUnique({ where: { userId: ctx.userId } });
+    if (!acct) throw new Error('account not found');
+    if (acct.isStopped) throw new Error('account is stopped; trading disabled');
+    if (acct.isPaused) throw new Error('account is paused; trading disabled');
+
+    // Pending + submitted + filled all count toward the daily cap — they
+    // represent intent that's either at the broker or already executed.
+    const todaysTrades = await tx.trade.count({
+      where: { userId: ctx.userId, submittedAt: { gte: since } },
+    });
+    if (todaysTrades >= acct.maxDailyTrades) {
+      throw new Error(`daily trade cap reached (${acct.maxDailyTrades})`);
+    }
+
+    // Write the pending row BEFORE talking to Alpaca. Guarantees we have a
+    // record of every attempt even if the broker call fails. This is the
+    // audit trail, and it also reserves the daily-cap slot under the lock.
+    return tx.trade.create({
+      data: {
+        userId: ctx.userId,
+        alpacaOrderId: null,
+        symbol,
+        side: p.side,
+        qty: p.qty,
+        status: 'pending',
+        orderType,
+        bullCase: p.bullCase,
+        bearCase: p.bearCase,
+        thesis: p.thesis,
+        confidence: p.confidence,
+        marginOfSafetyPct: p.marginOfSafetyPct,
+        intrinsicValuePerShareCents:
+          p.intrinsicValuePerShare && p.intrinsicValuePerShare > 0
+            ? toCents(p.intrinsicValuePerShare)
+            : null,
+        agentRunId: ctx.agentRunId,
+      },
+    });
   });
 
   // Step 2: place the order with the broker.

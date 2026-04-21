@@ -1,10 +1,15 @@
 // The wake-up loop. On every tick (or manual trigger), we:
 //   1. Sync local positions from Alpaca (keeps the UI honest)
-//   2. Create an AgentRun row
+//   2. Create an AgentRun row (atomically — refuses if another run is in flight
+//      for this user, so two overlapping cron ticks or a manual trigger during
+//      a cron run can't spawn parallel orchestrators)
 //   3. Spin up a Claude Opus 4.7 session with the trade-decision tools
-//   4. Let it run until it calls `finalize_run`
+//   4. Let it run until it calls `finalize_run` (or hits MAX_TURNS)
 //   5. Persist every tool use as an AgentDecision
 //   6. Sum Anthropic token usage → cost USD on the AgentRun row
+//
+// On EVERY exit path — finalize_run, end_turn, exception, MAX_TURNS fall-through
+// — AgentRun.status is moved off 'running' so an inflight check is authoritative.
 //
 // Trade decisions are HARDCODED to Opus 4.7. See models.ts.
 
@@ -22,6 +27,20 @@ import { toCents } from '@/lib/money';
 const MAX_TURNS = 16;
 const MAX_TOOL_OUTPUT_BYTES = 60_000;
 const TRUNCATION_MARKER = '\n…[truncated by orchestrator]';
+
+// Soft-lock window. A run that hasn't terminated within this window is treated
+// as orphaned (process crash mid-run) and ignored by the inflight check. Must
+// be >= the longest we'd expect the orchestrator to take, with headroom.
+const INFLIGHT_STALE_MS = 10 * 60_000; // 10 minutes
+
+export class AgentRunInflightError extends Error {
+  readonly inflightRunId: string;
+  constructor(inflightRunId: string) {
+    super(`agent run already in flight: ${inflightRunId}`);
+    this.name = 'AgentRunInflightError';
+    this.inflightRunId = inflightRunId;
+  }
+}
 
 export type RunAgentArgs = {
   userId: string;
@@ -52,13 +71,36 @@ export async function runAgent(args: RunAgentArgs): Promise<RunAgentResult> {
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY missing');
 
   const client = new Anthropic({ apiKey });
-  const run = await prisma.agentRun.create({
-    data: {
-      userId: args.userId,
-      trigger: args.trigger,
-      model: TRADE_DECISION_MODEL,
-      status: 'running',
-    },
+
+  // Atomic create with inflight check. Locks the Account row for this user so
+  // two concurrent callers serialize; whichever runs second sees the first's
+  // 'running' AgentRun and bails with AgentRunInflightError. A 'running' run
+  // older than INFLIGHT_STALE_MS is treated as orphaned (process crash) and
+  // is not a barrier — the old run gets swept to 'errored' inside the same
+  // transaction so the new run has a clean slate.
+  const run = await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT id FROM "Account" WHERE "userId" = ${args.userId} FOR UPDATE`;
+
+    const staleCutoff = new Date(Date.now() - INFLIGHT_STALE_MS);
+    await tx.agentRun.updateMany({
+      where: { userId: args.userId, status: 'running', startedAt: { lt: staleCutoff } },
+      data: { status: 'errored', endedAt: new Date(), errorMessage: 'orphaned run swept on next start' },
+    });
+
+    const inflight = await tx.agentRun.findFirst({
+      where: { userId: args.userId, status: 'running' },
+      select: { id: true },
+    });
+    if (inflight) throw new AgentRunInflightError(inflight.id);
+
+    return tx.agentRun.create({
+      data: {
+        userId: args.userId,
+        trigger: args.trigger,
+        model: TRADE_DECISION_MODEL,
+        status: 'running',
+      },
+    });
   });
 
   const log = child({ agentRunId: run.id, userId: args.userId });
@@ -198,6 +240,26 @@ export async function runAgent(args: RunAgentArgs): Promise<RunAgentResult> {
   }
 
   const costUsd = estimateCostUsd(TRADE_DECISION_MODEL, totalUsage);
+
+  // Belt-and-suspenders: if the loop fell through MAX_TURNS without the agent
+  // ever calling finalize_run and without stop_reason='end_turn' (which both
+  // set status='completed' above), move it off 'running' so the inflight check
+  // on the next tick doesn't treat this run as still live. Use updateMany with
+  // a status='running' guard so we never clobber an already-terminal row.
+  await prisma.agentRun.updateMany({
+    where: { id: run.id, status: 'running' },
+    data: {
+      status: 'exhausted_turns',
+      endedAt: new Date(),
+      summary:
+        `Hit MAX_TURNS (${MAX_TURNS}) without calling finalize_run. ` +
+        `The agent ran out of turns — likely too much research or looping tool calls.`,
+      costUsd,
+    },
+  });
+
+  // Separately, always persist costUsd (the updateMany above only fires on the
+  // MAX_TURNS path; the completed/finalize paths set costUsd here).
   await prisma.agentRun.update({
     where: { id: run.id },
     data: { costUsd },

@@ -18,10 +18,20 @@ export function DepositForm() {
     }
     setBusy(true);
     setError(null);
+    // Idempotency key per submit. If the network retries, the double-click
+    // guard misses, or the server replays the request, the backend dedupes
+    // on this key so we never double-credit the account.
+    const idempotencyKey =
+      typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? crypto.randomUUID()
+        : `dep-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
     try {
       const res = await fetch('/api/account/deposit', {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: {
+          'content-type': 'application/json',
+          'idempotency-key': idempotencyKey,
+        },
         body: JSON.stringify({ amount: n, note }),
       });
       if (!res.ok) {
