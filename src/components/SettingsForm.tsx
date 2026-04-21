@@ -30,6 +30,28 @@ type FormState = {
   allowDayTrades: boolean;
 };
 
+// Zod's flatten() output comes through as { fieldErrors, formErrors }. Pick
+// the first field message if any; otherwise the first form-level message;
+// otherwise a generic fallback. Keeps error rendering to a single line.
+function formatApiError(raw: unknown): string {
+  if (typeof raw === 'string') return raw;
+  if (raw && typeof raw === 'object') {
+    const maybe = raw as {
+      fieldErrors?: Record<string, string[] | undefined>;
+      formErrors?: string[];
+    };
+    if (maybe.fieldErrors) {
+      for (const [field, messages] of Object.entries(maybe.fieldErrors)) {
+        const msg = messages?.[0];
+        if (msg) return `${field}: ${msg}`;
+      }
+    }
+    const formMsg = maybe.formErrors?.[0];
+    if (formMsg) return formMsg;
+  }
+  return 'Save failed — check your inputs.';
+}
+
 function toForm(initial: SettingsInitial): FormState {
   return {
     expectedAnnualPct: String(initial.expectedAnnualPct),
@@ -86,7 +108,7 @@ export function SettingsForm({ initial }: { initial: SettingsInitial }) {
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        setError(typeof body.error === 'string' ? body.error : 'Save failed — check your inputs.');
+        setError(formatApiError(body.error));
         return;
       }
       setSaved(true);
@@ -113,7 +135,7 @@ export function SettingsForm({ initial }: { initial: SettingsInitial }) {
           max={100}
         />
         <p className="mt-1 text-[11px] text-ink-400">
-          AgBro&apos;s survival goal. Miss this for too long and we re-evaluate the strategy.
+          AgBro&apos;s survival goal. 0–100%. Miss this for too long and we re-evaluate the strategy.
         </p>
       </div>
 
