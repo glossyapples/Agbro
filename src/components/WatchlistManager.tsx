@@ -14,7 +14,23 @@ type WatchlistStock = {
   dividendYield: number | null;
   notes: string | null;
   lastAnalyzedAt: string | null;
+  fundamentalsSource: string | null;
+  fundamentalsUpdatedAt: string | null;
 };
+
+// Map a data source + age to a tiny status pill. We want the agent AND the
+// user to be able to glance at the watchlist and see which rows are trustworthy.
+function dataFreshness(s: WatchlistStock): { label: string; className: string } {
+  if (s.fundamentalsSource === 'edgar' && s.fundamentalsUpdatedAt) {
+    const ageDays = (Date.now() - new Date(s.fundamentalsUpdatedAt).getTime()) / 86_400_000;
+    if (ageDays < 7) return { label: 'EDGAR · fresh', className: 'pill-good' };
+    if (ageDays < 30) return { label: `EDGAR · ${Math.round(ageDays)}d`, className: 'pill' };
+    return { label: `EDGAR · ${Math.round(ageDays)}d old`, className: 'pill-warn' };
+  }
+  if (s.fundamentalsSource === 'agent') return { label: 'Agent-entered', className: 'pill' };
+  if (s.fundamentalsSource === 'seed') return { label: 'Seed (unverified)', className: 'pill-warn' };
+  return { label: 'No data yet', className: 'pill-warn' };
+}
 
 export function WatchlistManager({ initial }: { initial: WatchlistStock[] }) {
   const router = useRouter();
@@ -74,6 +90,19 @@ export function WatchlistManager({ initial }: { initial: WatchlistStock[] }) {
     });
   }
 
+  async function refreshFromSec() {
+    setError(null);
+    startBusy(async () => {
+      const res = await fetch('/api/watchlist/refresh-fundamentals', { method: 'POST' });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        setError(typeof body.error === 'string' ? body.error : 'Refresh failed. Check server logs.');
+        return;
+      }
+      router.refresh();
+    });
+  }
+
   return (
     <>
       <section className="card flex flex-col gap-3">
@@ -119,11 +148,21 @@ export function WatchlistManager({ initial }: { initial: WatchlistStock[] }) {
 
       {initial.length > 0 && (
         <section className="card flex flex-col gap-3">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-sm font-semibold">Watchlist ({initial.length})</h2>
-            <button onClick={loadDefaults} disabled={busy} className="btn-ghost text-xs disabled:opacity-50">
-              + Load 29 starter stocks
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={refreshFromSec}
+                disabled={busy}
+                className="btn-ghost text-xs disabled:opacity-50"
+                title="Pulls fresh filings data directly from SEC EDGAR for every symbol below. Takes ~10-30 seconds."
+              >
+                ↻ Refresh from SEC
+              </button>
+              <button onClick={loadDefaults} disabled={busy} className="btn-ghost text-xs disabled:opacity-50">
+                + Load 29 starter stocks
+              </button>
+            </div>
           </div>
           <ul className="divide-y divide-ink-700/60">
             {initial.map((s) => (
@@ -138,6 +177,12 @@ export function WatchlistManager({ initial }: { initial: WatchlistStock[] }) {
                     {s.buffettScore != null ? `Buffett ${s.buffettScore}` : 'not scored yet'} ·{' '}
                     {s.moatScore != null ? `Moat ${s.moatScore}` : 'moat —'}
                     {s.dividendYield != null && s.dividendYield > 0 && ` · Div ${s.dividendYield.toFixed(2)}%`}
+                  </p>
+                  <p className="mt-0.5">
+                    {(() => {
+                      const f = dataFreshness(s);
+                      return <span className={`${f.className} text-[10px]`}>{f.label}</span>;
+                    })()}
                   </p>
                 </div>
                 <button

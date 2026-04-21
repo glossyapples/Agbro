@@ -18,6 +18,7 @@ import { toCents } from '@/lib/money';
 import { startOfDayET } from '@/lib/time';
 import { log } from '@/lib/logger';
 import { PlaceTradeInput, SizePositionInput, UpdateStockFundamentalsInput } from './schemas';
+import { refreshFundamentalsForSymbol } from '@/lib/data/refresh-fundamentals';
 
 export const TOOL_DEFS: Anthropic.Tool[] = [
   {
@@ -174,9 +175,19 @@ export const TOOL_DEFS: Anthropic.Tool[] = [
     },
   },
   {
+    name: 'refresh_fundamentals',
+    description:
+      "PREFERRED way to get fresh fundamentals. Pulls directly from SEC EDGAR (the authoritative source behind every paid data provider) and upserts into the Stock row. Use this BEFORE run_analyzer whenever the Stock's fundamentalsUpdatedAt is older than 7 days or fundamentalsSource is 'seed'. Returns the snapshot it wrote, or status='not_found' for non-US ADRs / ETFs that EDGAR doesn't cover. For ETFs, fall back to research_perplexity.",
+    input_schema: {
+      type: 'object',
+      properties: { symbol: { type: 'string' } },
+      required: ['symbol'],
+    },
+  },
+  {
     name: 'update_stock_fundamentals',
     description:
-      "Refresh fundamentals on a watched stock after research. Provide only the fields you have fresh data for — omitted fields are left untouched. Bumps lastAnalyzedAt. Use this so the watchlist doesn't drift from reality.",
+      "Manual override — set fundamentals when SEC EDGAR doesn't cover the asset (ETFs, foreign ADRs) or when you have better data than the last filing (between-quarter news). Prefer refresh_fundamentals for US equities. Provide only fields you have fresh data for — omitted fields are left untouched.",
     input_schema: {
       type: 'object',
       properties: {
@@ -304,6 +315,8 @@ export async function runTool(
       return placeTradeTool(ctx, input);
     case 'update_stock_fundamentals':
       return updateStockFundamentalsTool(input);
+    case 'refresh_fundamentals':
+      return refreshFundamentalsForSymbol(String(input.symbol));
     case 'finalize_run':
       return finalizeRunTool(ctx, input);
     default:

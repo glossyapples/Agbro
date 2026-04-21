@@ -278,6 +278,16 @@ model Stock {
   returnOnEquity Float?
   grossMarginPct Float?
   fcfYieldPct    Float?
+  epsTTM                 Float?
+  bookValuePerShare      Float?
+  dividendPerShare       Float?
+  sharesOutstanding      Float?
+  epsGrowthPct5y         Float?
+  // Where the numbers above came from. 'edgar' = authoritative SEC filing,
+  // 'seed' = hand-entered starter value (may be stale/approximate), 'agent' =
+  // the Claude agent updated it during a run, null = never refreshed.
+  fundamentalsSource     String?
+  fundamentalsUpdatedAt  DateTime?
   moatScore      Int?     // 0-100 internal, durable competitive advantage
   buffettScore   Int?     // 0-100 internal, Buffett-style fit
   notes          String?  @db.Text

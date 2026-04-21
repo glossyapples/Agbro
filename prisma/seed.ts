@@ -36,8 +36,13 @@ const STOCKS: Seed[] = [
   { symbol: 'PG',    name: 'Procter & Gamble', sector: 'Consumer Defensive', industry: 'Household Products', peRatio: 25, pbRatio: 8, dividendYield: 2.4, debtToEquity: 0.7, returnOnEquity: 30, grossMarginPct: 51, moatScore: 82, buffettScore: 80, notes: 'Brand moat, consistent cash.' },
   { symbol: 'WMT',   name: 'Walmart', sector: 'Consumer Defensive', industry: 'Discount Stores', peRatio: 28, pbRatio: 7, dividendYield: 1.2, debtToEquity: 0.8, returnOnEquity: 18, grossMarginPct: 24, moatScore: 78, buffettScore: 72, notes: 'Scale advantage; e-commerce catching up.' },
   { symbol: 'COST',  name: 'Costco', sector: 'Consumer Defensive', industry: 'Discount Stores', peRatio: 50, pbRatio: 20, dividendYield: 0.5, debtToEquity: 0.5, returnOnEquity: 30, grossMarginPct: 12, moatScore: 85, buffettScore: 70, notes: 'Membership model, ruthless pricing.' },
-  { symbol: 'HD',    name: 'Home Depot', sector: 'Consumer Cyclical', industry: 'Home Improvement', peRatio: 24, pbRatio: -20, dividendYield: 2.3, debtToEquity: -8, returnOnEquity: 1100, grossMarginPct: 34, moatScore: 80, buffettScore: 72, notes: 'Duopoly with LOW; cyclical.' },
-  { symbol: 'MCD',   name: "McDonald's", sector: 'Consumer Cyclical', industry: 'Restaurants', peRatio: 24, pbRatio: -30, dividendYield: 2.4, debtToEquity: -5, returnOnEquity: -50, grossMarginPct: 57, moatScore: 85, buffettScore: 75, notes: 'Real-estate moat + global brand.' },
+  // HD, LOW, MCD, ABBV all have negative book value due to aggressive buybacks;
+  // that makes P/B, D/E and ROE mechanically nonsensical. Seed them as null so
+  // the analyzer can't trust garbage; SEC EDGAR refresh will compute real
+  // numbers (which for these names will still be unusual — the agent should
+  // read the sector primer before reacting).
+  { symbol: 'HD',    name: 'Home Depot', sector: 'Consumer Cyclical', industry: 'Home Improvement', peRatio: 24, pbRatio: null, dividendYield: 2.3, debtToEquity: null, returnOnEquity: null, grossMarginPct: 34, moatScore: 80, buffettScore: 72, notes: 'Duopoly with LOW; cyclical. Negative book value from buybacks — trust EDGAR refresh, not seeded ratios.' },
+  { symbol: 'MCD',   name: "McDonald's", sector: 'Consumer Cyclical', industry: 'Restaurants', peRatio: 24, pbRatio: null, dividendYield: 2.4, debtToEquity: null, returnOnEquity: null, grossMarginPct: 57, moatScore: 85, buffettScore: 75, notes: 'Real-estate moat + global brand. Negative book value from buybacks — trust EDGAR refresh.' },
   { symbol: 'PEP',   name: 'PepsiCo', sector: 'Consumer Defensive', industry: 'Beverages', peRatio: 23, pbRatio: 12, dividendYield: 3.4, debtToEquity: 2.5, returnOnEquity: 48, grossMarginPct: 54, moatScore: 85, buffettScore: 80, notes: 'Frito-Lay gives it a broader moat than KO.' },
   { symbol: 'UNH',   name: 'UnitedHealth', sector: 'Healthcare', industry: 'Healthcare Plans', peRatio: 18, pbRatio: 5, dividendYield: 1.8, debtToEquity: 0.7, returnOnEquity: 24, grossMarginPct: 24, moatScore: 75, buffettScore: 70, notes: 'Scale + data; regulatory risk.' },
   { symbol: 'XOM',   name: 'ExxonMobil', sector: 'Energy', industry: 'Oil & Gas', peRatio: 12, pbRatio: 2, dividendYield: 3.5, debtToEquity: 0.2, returnOnEquity: 20, grossMarginPct: 33, moatScore: 60, buffettScore: 65, notes: 'Scale, integrated; commodity exposure.' },
@@ -46,7 +51,7 @@ const STOCKS: Seed[] = [
   { symbol: 'ADP',   name: 'Automatic Data Processing', sector: 'Industrials', industry: 'Staffing & Employment', peRatio: 28, pbRatio: 18, dividendYield: 2.3, debtToEquity: 0.7, returnOnEquity: 60, grossMarginPct: 45, moatScore: 78, buffettScore: 75, notes: 'Dividend aristocrat; sticky payroll moat.' },
   { symbol: 'ABBV',  name: 'AbbVie', sector: 'Healthcare', industry: 'Drug Manufacturers', peRatio: 16, pbRatio: 40, dividendYield: 3.8, debtToEquity: 8, returnOnEquity: 70, grossMarginPct: 70, moatScore: 70, buffettScore: 75, notes: 'Humira cliff behind it; dividend growth.' },
   { symbol: 'TXN',   name: 'Texas Instruments', sector: 'Technology', industry: 'Semiconductors', peRatio: 28, pbRatio: 11, dividendYield: 2.8, debtToEquity: 0.9, returnOnEquity: 40, grossMarginPct: 62, moatScore: 78, buffettScore: 75, notes: 'Analog chips moat, dividend grower.' },
-  { symbol: 'LOW',   name: "Lowe's", sector: 'Consumer Cyclical', industry: 'Home Improvement', peRatio: 20, pbRatio: -14, dividendYield: 1.8, debtToEquity: -4, returnOnEquity: -200, grossMarginPct: 33, moatScore: 77, buffettScore: 72, notes: 'Second player in HD/LOW duopoly.' },
+  { symbol: 'LOW',   name: "Lowe's", sector: 'Consumer Cyclical', industry: 'Home Improvement', peRatio: 20, pbRatio: null, dividendYield: 1.8, debtToEquity: null, returnOnEquity: null, grossMarginPct: 33, moatScore: 77, buffettScore: 72, notes: 'Second player in HD/LOW duopoly. Negative book value from buybacks — trust EDGAR refresh.' },
   { symbol: 'SPGI',  name: 'S&P Global', sector: 'Financial Services', industry: 'Financial Data', peRatio: 35, pbRatio: 5, dividendYield: 0.8, debtToEquity: 0.6, returnOnEquity: 12, grossMarginPct: 68, moatScore: 88, buffettScore: 78, notes: 'Ratings duopoly with MCO; regulated moat.' },
   { symbol: 'MCO',   name: "Moody's", sector: 'Financial Services', industry: 'Financial Data', peRatio: 40, pbRatio: 28, dividendYield: 0.8, debtToEquity: 2.3, returnOnEquity: 70, grossMarginPct: 72, moatScore: 90, buffettScore: 80, notes: 'Buffett holding; ratings oligopoly.' },
   { symbol: 'BLK',   name: 'BlackRock', sector: 'Financial Services', industry: 'Asset Management', peRatio: 22, pbRatio: 3.2, dividendYield: 2.3, debtToEquity: 0.7, returnOnEquity: 15, grossMarginPct: 49, moatScore: 82, buffettScore: 74, notes: 'Largest asset manager; iShares ETFs.' },
@@ -120,10 +125,26 @@ async function main() {
   });
 
   for (const s of STOCKS) {
+    // Mark seeded fundamentals explicitly so the agent (and the UI) knows to
+    // prefer EDGAR-backed data when available. Don't overwrite a row that's
+    // already been refreshed from EDGAR.
     await prisma.stock.upsert({
       where: { symbol: s.symbol },
-      update: { ...s, onWatchlist: true, lastAnalyzedAt: new Date() },
-      create: { ...s, onWatchlist: true, lastAnalyzedAt: new Date() },
+      update: {
+        name: s.name,
+        sector: s.sector,
+        industry: s.industry,
+        moatScore: s.moatScore,
+        buffettScore: s.buffettScore,
+        notes: s.notes,
+        onWatchlist: true,
+      },
+      create: {
+        ...s,
+        onWatchlist: true,
+        lastAnalyzedAt: new Date(),
+        fundamentalsSource: 'seed',
+      },
     });
   }
 

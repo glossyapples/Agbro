@@ -25,6 +25,8 @@ export default async function WatchlistPage() {
     dividendYield: s.dividendYield,
     notes: s.notes,
     lastAnalyzedAt: s.lastAnalyzedAt ? s.lastAnalyzedAt.toISOString() : null,
+    fundamentalsSource: s.fundamentalsSource,
+    fundamentalsUpdatedAt: s.fundamentalsUpdatedAt ? s.fundamentalsUpdatedAt.toISOString() : null,
   }));
 
   return (
