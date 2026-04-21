@@ -22,6 +22,7 @@ import { refreshFundamentalsForSymbol } from '@/lib/data/refresh-fundamentals';
 import { runScreen } from '@/lib/data/screener';
 import { getUpcomingEvents } from '@/lib/data/events';
 import { isInEarningsBlackout } from '@/lib/data/earnings';
+import { evaluateExits, syncPositionsFromAlpaca } from './exits';
 
 export const TOOL_DEFS: Anthropic.Tool[] = [
   {
@@ -244,6 +245,12 @@ export const TOOL_DEFS: Anthropic.Tool[] = [
     },
   },
   {
+    name: 'evaluate_exits',
+    description:
+      'Returns a per-open-position exit assessment: { symbol, signal: "hold"|"review"|"trim"|"sell", reason, thesis }. Signals come from the active strategy\'s exit rules (price target, time stop, thesis review, fundamentals deterioration, dividend safety). Earnings blackout converts any "sell" into "review" — you never auto-sell into an earnings release. CALL THIS FIRST every wake-up, before any new-buy research. Process every non-hold signal before considering new positions.',
+    input_schema: { type: 'object', properties: {}, required: [] },
+  },
+  {
     name: 'get_event_calendar',
     description:
       'Returns upcoming scheduled events (earnings, FOMC, CPI, market closures) within horizonDays (default 14). Pass symbol to narrow to one name + market-wide events; omit to see events for the whole watchlist. USE THIS before place_trade with side=buy — the server blocks buys within 3 days of a symbol\'s earnings report regardless, but checking first lets you plan around it.',
@@ -388,6 +395,12 @@ export async function runTool(
         throw new Error(`get_event_calendar: invalid input — ${parsed.error.message}`);
       }
       return { events: await getUpcomingEvents(parsed.data) };
+    }
+    case 'evaluate_exits': {
+      // Sync positions from Alpaca first so we don't miss a name the broker
+      // has that our DB doesn't. Keeps the thesis-metadata table aligned.
+      await syncPositionsFromAlpaca(ctx.userId);
+      return { assessments: await evaluateExits(ctx.userId) };
     }
     case 'finalize_run':
       return finalizeRunTool(ctx, input);
@@ -587,6 +600,61 @@ async function placeTradeTool(ctx: ToolContext, input: Record<string, unknown>) 
       // Notification failure shouldn't fail the trade — the trade is real.
       log.error('trade.notification_failed', notifErr, { tradeId: trade.id });
     });
+
+  // Stamp thesis metadata onto the Position row (buys only). We copy the
+  // holding-period bias from the active strategy so the exit evaluator can
+  // apply the right exit rules even if the user later switches strategy.
+  // targetPriceCents comes from the agent's intrinsicValuePerShare — used by
+  // price-target strategies (Graham) and harmless for everyone else.
+  if (p.side === 'buy') {
+    try {
+      const [active, rules] = await Promise.all([
+        prisma.strategy.findFirst({
+          where: { userId: ctx.userId, isActive: true },
+          select: { id: true, rules: true },
+        }),
+        Promise.resolve(null),
+      ]);
+      void rules; // keeping Promise.all shape for clarity
+      const r = (active?.rules ?? {}) as { holdingPeriodBias?: string; thesisReviewDays?: number | null };
+      const reviewDays = r.thesisReviewDays ?? 180;
+      const reviewDue =
+        reviewDays != null && reviewDays > 0
+          ? new Date(Date.now() + reviewDays * 86_400_000)
+          : null;
+      await prisma.position.upsert({
+        where: { userId_symbol: { userId: ctx.userId, symbol } },
+        update: {
+          thesis: p.thesis.slice(0, 4_000),
+          targetPriceCents:
+            p.intrinsicValuePerShare && p.intrinsicValuePerShare > 0
+              ? toCents(p.intrinsicValuePerShare)
+              : undefined,
+          holdingBias: r.holdingPeriodBias ?? undefined,
+          thesisReviewDueAt: reviewDue ?? undefined,
+          openedUnderStrategyId: active?.id ?? undefined,
+        },
+        create: {
+          userId: ctx.userId,
+          symbol,
+          qty: p.qty,
+          avgCostCents: BigInt(0), // real value populated by syncPositionsFromAlpaca on next wake-up
+          thesis: p.thesis.slice(0, 4_000),
+          targetPriceCents:
+            p.intrinsicValuePerShare && p.intrinsicValuePerShare > 0
+              ? toCents(p.intrinsicValuePerShare)
+              : null,
+          holdingBias: r.holdingPeriodBias ?? null,
+          thesisReviewDueAt: reviewDue,
+          openedUnderStrategyId: active?.id ?? null,
+        },
+      });
+    } catch (psErr) {
+      // Thesis metadata is informational — never fail a successful trade on a
+      // Position-row write hiccup.
+      log.error('trade.position_state_write_failed', psErr, { tradeId: trade.id });
+    }
+  }
 
   return { tradeId: trade.id, alpacaOrderId: order.id, status: 'submitted' };
 }

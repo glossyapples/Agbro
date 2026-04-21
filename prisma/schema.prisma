@@ -187,9 +187,33 @@ model Position {
   avgCostCents   BigInt
   openedAt       DateTime @default(now())
   lastSyncedAt   DateTime @default(now())
-  // Snapshot only; source of truth is Alpaca.
+  // Snapshot only for the above fields; source of truth is Alpaca.
+  //
+  // The fields below are AgBro-owned thesis metadata — Alpaca doesn't store
+  // any of this. They answer "why do we own it, what's it worth, and when
+  // do we need to re-check our assumptions?"
+  //
+  // thesis: original written rationale from place_trade. The exit evaluator
+  //   quotes this back to the agent at re-review time.
+  // targetPriceCents: agent's fair-value estimate at buy time. Populated for
+  //   strategies that sell on price (Graham mean-reversion). Null = never
+  //   sell on price alone (Buffett Core, Quality Compounders, etc).
+  // holdingBias: 'forever' | 'long' | 'medium' | 'short'. Copied from the
+  //   active strategy at buy time so the position exits under the rules it
+  //   was entered under even if the user later switches strategies.
+  // thesisReviewDueAt: forces a structured re-review on the next wake-up
+  //   after this time. Set on open; bumped on every confirmed review.
+  // openedUnderStrategyId: audit trail of which strategy opened this.
+  // lastReviewedAt: set whenever the agent runs a thesis-review.
+  thesis                String?   @db.Text
+  targetPriceCents      BigInt?
+  holdingBias           String?
+  thesisReviewDueAt     DateTime?
+  lastReviewedAt        DateTime?
+  openedUnderStrategyId String?
 
   @@unique([userId, symbol])
+  @@index([userId, thesisReviewDueAt])
 }
 
 // -------------------- Agent runs & decisions --------------------

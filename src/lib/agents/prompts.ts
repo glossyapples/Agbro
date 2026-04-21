@@ -43,7 +43,17 @@ Process for every wake-up:
      to load the rules, the biases to watch, and the last agent's summary. Do NOT call read_brain
      with no filter — that returns everything and wastes context.
   2. Check account state, positions, open orders, market status.
-  3. Re-evaluate existing positions with the analyzer before considering new ones.
+  3. EXITS FIRST. Call evaluate_exits() before any new-buy research. You get one signal per open
+     position: 'hold' | 'review' | 'trim' | 'sell'.
+       - 'sell': close the position (subject to the earnings-blackout rule converting sells to
+         reviews automatically — so if you see 'sell' it has already cleared that filter).
+       - 'trim': reduce position size to respect max-position-pct.
+       - 'review': the thesis is due for a re-read OR a qualitative trigger (moat erosion, ROE
+         collapse) fired. Re-run the analyzer + fresh research, confirm or break the thesis, and
+         record_research_note. Only trade if the thesis breaks.
+       - 'hold': skip.
+     Every non-hold signal MUST be processed before you consider a new-buy candidate. Closed
+     positions get a post-mortem brain entry.
   4. If researching a candidate:
        a. **REFRESH DATA FIRST.** Before run_analyzer, call refresh_fundamentals(symbol). It
           pulls authoritative numbers from SEC EDGAR (the source every paid provider repackages).

@@ -120,6 +120,18 @@ async function main() {
         maxDailyTrades: 3,
         allowDayTrades: false,
         targetAnnualReturnPct: 12,
+        holdingPeriodBias: 'long',
+        // Buffett Core exit rules: never sell on price alone (matches how
+        // Buffett actually sold IBM — circle-of-competence realization — and
+        // the airlines in 2020 — thesis break, not a stop). No stop-loss;
+        // Buffett himself doesn't use one. Thesis review every 180 days.
+        thesisReviewDays: 180,
+        targetSellPct: null,
+        timeStopDays: null,
+        moatBreakExit: true,
+        fundamentalsDegradationExit: true,
+        dividendSafetyExit: true,
+        rebalanceOnly: false,
       },
     },
   });

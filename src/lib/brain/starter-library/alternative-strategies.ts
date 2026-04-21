@@ -33,7 +33,18 @@ export const ALTERNATIVE_STRATEGIES: StrategySeed[] = [
       allowDayTrades: false,
       targetAnnualReturnPct: 15,
       holdingPeriodBias: 'medium',
-      sellOnMeanReversionPct: 30,
+      // Graham sells on mean reversion: +30% from cost is the target. Canonical
+      // Graham rule also says "cut bait at 2 years if it never moved" — the
+      // time stop captures that. No moat-break exit (Graham didn't buy moats),
+      // and no dividend-safety (Graham didn't buy for yield).
+      sellOnMeanReversionPct: 30, // legacy alias retained for the wizard
+      targetSellPct: 30,
+      timeStopDays: 730,
+      thesisReviewDays: 90,
+      fundamentalsDegradationExit: true,
+      dividendSafetyExit: false,
+      moatBreakExit: false,
+      rebalanceOnly: false,
     },
   },
   {
@@ -68,7 +79,18 @@ export const ALTERNATIVE_STRATEGIES: StrategySeed[] = [
       allowDayTrades: false,
       targetAnnualReturnPct: 14,
       holdingPeriodBias: 'forever',
-      thesisReviewCadenceDays: 90,
+      thesisReviewCadenceDays: 90, // legacy alias
+      // Strictest hold profile. Never sell on price. Only exit if the moat
+      // erodes (qualitative → 'review' signal for the LLM) or fundamentals
+      // clearly deteriorate (ROE collapse). Munger: "the big money is not in
+      // the buying or selling, but in the waiting."
+      thesisReviewDays: 90,
+      targetSellPct: null,
+      timeStopDays: null,
+      moatBreakExit: true,
+      fundamentalsDegradationExit: true,
+      dividendSafetyExit: false,
+      rebalanceOnly: false,
     },
   },
   {
@@ -105,6 +127,17 @@ export const ALTERNATIVE_STRATEGIES: StrategySeed[] = [
       allowDayTrades: false,
       targetAnnualReturnPct: 10,
       holdingPeriodBias: 'long',
+      // Dividend strategy — the dividend IS the thesis. Sell triggers are
+      // dividend-centric (cut / suspension / streak broken). Never on price.
+      // Shorter-than-Compounders review cadence because the dividend streak
+      // needs ongoing verification.
+      thesisReviewDays: 90,
+      targetSellPct: null,
+      timeStopDays: null,
+      moatBreakExit: false,
+      fundamentalsDegradationExit: false,
+      dividendSafetyExit: true,
+      rebalanceOnly: false,
     },
   },
   {
@@ -134,6 +167,16 @@ export const ALTERNATIVE_STRATEGIES: StrategySeed[] = [
       targetAnnualReturnPct: 8,
       holdingPeriodBias: 'forever',
       activeResearchAllowed: false,
+      // Pure index discipline: no thesis-based exits. Rebalancing-only mode
+      // tells the exit evaluator to stay out of the way entirely; drift
+      // corrections happen via dedicated rebalance logic.
+      thesisReviewDays: null,
+      targetSellPct: null,
+      timeStopDays: null,
+      moatBreakExit: false,
+      fundamentalsDegradationExit: false,
+      dividendSafetyExit: false,
+      rebalanceOnly: true,
     },
   },
 ];
