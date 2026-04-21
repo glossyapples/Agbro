@@ -148,7 +148,7 @@ export async function runScreen(
   const prompt = buildScreenPrompt(c, exclude);
   let perplexity;
   try {
-    perplexity = await perplexitySearch(prompt);
+    perplexity = await perplexitySearch(prompt, { system: SCREENER_SYSTEM });
   } catch (err) {
     log.error('screener.perplexity_failed', err);
     return {
@@ -160,10 +160,32 @@ export async function runScreen(
     };
   }
 
+  // Diagnostic trail: the whole point of adding these is so that when a
+  // screen returns zero candidates we can tell *why* — did Perplexity return
+  // prose with no tickers, did every ticker land in the exclude set, or
+  // did the regex miss the format?
+  const rawMatches = [...perplexity.summary.matchAll(TICKER_RE)].map((m) =>
+    m[1].toUpperCase()
+  );
+  const uniqueRaw = [...new Set(rawMatches)];
+  log.info('screener.perplexity_response', {
+    summaryLength: perplexity.summary.length,
+    summaryPreview: perplexity.summary.slice(0, 1500),
+    citations: perplexity.citations.length,
+    rawMatchCount: rawMatches.length,
+    uniqueRaw: uniqueRaw.slice(0, 40),
+    excludeSize: exclude.size,
+  });
+
   const tickers = extractCandidateTickers(perplexity.summary, exclude).slice(
     0,
     MAX_CANDIDATES_PER_SCREEN
   );
+  log.info('screener.candidates_after_filter', {
+    keptCount: tickers.length,
+    kept: tickers,
+    droppedByFilter: uniqueRaw.filter((t) => !tickers.includes(t)).slice(0, 40),
+  });
 
   if (tickers.length === 0) {
     return {
@@ -242,11 +264,22 @@ export async function runScreen(
 
 // -------------------- Helpers --------------------
 
+// Screener-specific system prompt. The default perplexitySearch prompt wants
+// a Bull/Bear narrative per ticker, which pushes the model toward prose and
+// sometimes omits symbols in a machine-readable form. Here we want the exact
+// opposite: a tight, line-per-ticker list so the regex extractor sees every
+// pick it should.
+const SCREENER_SYSTEM =
+  'You are a stock screener that returns NEW US common stock tickers matching a user\'s value-investing criteria. Your entire response MUST be a plain list where each line starts with an uppercase ticker symbol followed by a colon. Example: "COST: Costco Wholesale — rare retailer with a moat from membership flywheel." Do not add preambles, headings, or bullet points. Never wrap tickers in markdown. Respect any exclusion list the user supplies.';
+
 function buildScreenPrompt(
   c: Required<ScreenCriteria>,
   excludeSet: Set<string>
 ): string {
-  const excludeList = [...excludeSet].sort().slice(0, 80).join(', ');
+  // Bumped from 80 — if the exclude list is truncated, Perplexity will keep
+  // re-suggesting watchlist names it thinks aren't excluded, and those get
+  // silently dropped by extractCandidateTickers with no candidates persisted.
+  const excludeList = [...excludeSet].sort().slice(0, 250).join(', ');
   const sectors = c.preferredSectors.length
     ? `Preferred sectors: ${c.preferredSectors.join(', ')}.`
     : 'Any sector.';
