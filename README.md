@@ -110,10 +110,14 @@ curl -X POST http://localhost:3000/api/agents/run -b cookies.txt
      which is bypassable by any restart or second instance.
    - `PERPLEXITY_API_KEY`, `GOOGLE_CSE_KEY`, `GOOGLE_CSE_CX` — optional;
      research tools gracefully no-op without them.
-4. **First boot.** Railway auto-detects `package.json`. The `build` script
-   runs `prisma migrate deploy` and `next build`. If the DB has no migrations
-   yet, a one-time `npx prisma db push` from a Railway shell will bootstrap
-   the schema; subsequent changes use `prisma migrate`.
+4. **First boot.** Railway auto-detects `package.json`. Build runs
+   `prisma generate && next build` (pure, no DB access). The start command
+   (`npm run start:prod`) runs `prisma db push --skip-generate` against
+   the live DB before booting Next — so the schema provisions itself on
+   every deploy. This is idempotent when the schema already matches.
+   Note: `db push` will **refuse** destructive schema changes without an
+   explicit `--accept-data-loss` flag; if a deploy fails on a rename, you
+   need to handle it by hand or switch to `prisma migrate`.
 5. **Schedule cron.** Add two Railway cron services (or hit the routes from
    any external scheduler):
    - `*/30 13-21 * * 1-5` → `POST /api/cron/tick` — wakes the agent on

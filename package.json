@@ -5,8 +5,10 @@
   "description": "AgBro - Agentic brokerage infrastructure. Warren Buffbot for the rest of us.",
   "scripts": {
     "dev": "next dev",
-    "build": "prisma generate && prisma migrate deploy && next build",
+    "build": "prisma generate && next build",
     "start": "next start -p ${PORT:-3000}",
+    "release": "prisma db push --skip-generate",
+    "start:prod": "npm run release && npm run start",
     "postinstall": "prisma generate",
     "db:push": "prisma db push",
     "db:seed": "tsx prisma/seed.ts",
