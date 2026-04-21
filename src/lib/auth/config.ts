@@ -17,6 +17,10 @@ const ALLOWED_EMAILS = (process.env.AGBRO_ALLOWED_EMAILS ?? '')
 export const authConfig: NextAuthConfig = {
   adapter: PrismaAdapter(prisma),
   session: { strategy: 'database' },
+  // Required behind a reverse proxy (Railway / Vercel / Fly). Without this,
+  // Auth.js v5 refuses to process requests for non-localhost hostnames and
+  // every page that calls auth() throws.
+  trustHost: true,
   pages: { signIn: '/login', verifyRequest: '/login?check=1' },
   providers: [
     Resend({
