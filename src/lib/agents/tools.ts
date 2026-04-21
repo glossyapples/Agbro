@@ -5,6 +5,7 @@ import type Anthropic from '@anthropic-ai/sdk';
 import { prisma } from '@/lib/db';
 import { analyze, positionSizeCents, type AnalyzerInput } from '@/lib/analyzer';
 import {
+  cancelOrder,
   getBrokerAccount,
   getLatestPrice,
   getPositions,
@@ -15,7 +16,7 @@ import { perplexitySearch } from '@/lib/research/perplexity';
 import { googleSearch } from '@/lib/research/google';
 import { toCents } from '@/lib/money';
 import { startOfDayET } from '@/lib/time';
-import { PlaceTradeInput, SizePositionInput } from './schemas';
+import { PlaceTradeInput, SizePositionInput, UpdateStockFundamentalsInput } from './schemas';
 
 export const TOOL_DEFS: Anthropic.Tool[] = [
   {
@@ -149,6 +150,29 @@ export const TOOL_DEFS: Anthropic.Tool[] = [
     },
   },
   {
+    name: 'update_stock_fundamentals',
+    description:
+      "Refresh fundamentals on a watched stock after research. Provide only the fields you have fresh data for — omitted fields are left untouched. Bumps lastAnalyzedAt. Use this so the watchlist doesn't drift from reality.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        symbol: { type: 'string' },
+        peRatio: { type: 'number' },
+        pbRatio: { type: 'number' },
+        dividendYield: { type: 'number' },
+        payoutRatio: { type: 'number' },
+        debtToEquity: { type: 'number' },
+        returnOnEquity: { type: 'number' },
+        grossMarginPct: { type: 'number' },
+        fcfYieldPct: { type: 'number' },
+        moatScore: { type: 'number' },
+        buffettScore: { type: 'number' },
+        notes: { type: 'string' },
+      },
+      required: ['symbol'],
+    },
+  },
+  {
     name: 'place_trade',
     description:
       'Submit an order to Alpaca. Requires symbol, side, qty, bullCase, bearCase, thesis, confidence (0..1), intrinsicValuePerShare, marginOfSafetyPct. Server re-validates ALL safety rails before routing.',
@@ -254,6 +278,8 @@ export async function runTool(
       return sizePositionTool(ctx, input);
     case 'place_trade':
       return placeTradeTool(ctx, input);
+    case 'update_stock_fundamentals':
+      return updateStockFundamentalsTool(input);
     case 'finalize_run':
       return finalizeRunTool(ctx, input);
     default:
@@ -323,6 +349,7 @@ async function placeTradeTool(ctx: ToolContext, input: Record<string, unknown>) 
   if (account.isPaused) throw new Error('account is paused; trading disabled');
 
   // Enforce daily trade cap server-side, anchored to midnight ET (not host local time).
+  // Pending rows count too — they represent in-flight intent.
   const since = startOfDayET();
   const todaysTrades = await prisma.trade.count({
     where: { userId: ctx.userId, submittedAt: { gte: since } },
@@ -337,22 +364,17 @@ async function placeTradeTool(ctx: ToolContext, input: Record<string, unknown>) 
     throw new Error('place_trade: limitPrice required when orderType=limit');
   }
 
-  const order = await placeOrder({
-    symbol,
-    qty: p.qty,
-    side: p.side,
-    orderType,
-    limitPrice: p.limitPrice,
-  });
-
-  const trade = await prisma.trade.create({
+  // Step 1: write a pending row BEFORE talking to Alpaca. Guarantees we have
+  // a record of every attempt, even if the broker call or the post-fill DB
+  // update fails. This is the audit trail.
+  const pending = await prisma.trade.create({
     data: {
       userId: ctx.userId,
-      alpacaOrderId: order.id,
+      alpacaOrderId: null,
       symbol,
       side: p.side,
       qty: p.qty,
-      status: 'submitted',
+      status: 'pending',
       orderType,
       bullCase: p.bullCase,
       bearCase: p.bearCase,
@@ -367,17 +389,97 @@ async function placeTradeTool(ctx: ToolContext, input: Record<string, unknown>) 
     },
   });
 
-  await prisma.notification.create({
-    data: {
-      userId: ctx.userId,
-      tradeId: trade.id,
-      kind: 'trade_placed',
-      title: `${p.side.toUpperCase()} ${p.qty} ${symbol}`,
-      body: `Thesis: ${p.thesis.slice(0, 240)}`,
-    },
-  });
+  // Step 2: place the order with the broker.
+  let order: Awaited<ReturnType<typeof placeOrder>>;
+  try {
+    order = await placeOrder({
+      symbol,
+      qty: p.qty,
+      side: p.side,
+      orderType,
+      limitPrice: p.limitPrice,
+    });
+  } catch (brokerErr) {
+    // Broker rejected. Mark the pending row so the agent (and the user)
+    // can see what went wrong.
+    await prisma.trade
+      .update({
+        where: { id: pending.id },
+        data: {
+          status: 'rejected',
+          errorMessage: (brokerErr as Error).message.slice(0, 500),
+        },
+      })
+      .catch((dbErr) => {
+        console.error('placeTradeTool: failed to mark pending row rejected', { tradeId: pending.id }, dbErr);
+      });
+    throw brokerErr;
+  }
+
+  // Step 3: stitch the order id back onto the trade row. If THIS fails,
+  // we've left the broker holding an order with no DB record — try to cancel
+  // it so the broker and DB stay in sync.
+  let trade;
+  try {
+    trade = await prisma.trade.update({
+      where: { id: pending.id },
+      data: { alpacaOrderId: order.id, status: 'submitted' },
+    });
+  } catch (dbErr) {
+    console.error('placeTradeTool: db update failed after broker accept', {
+      tradeId: pending.id,
+      alpacaOrderId: order.id,
+    }, dbErr);
+    await cancelOrder(order.id);
+    throw dbErr;
+  }
+
+  await prisma.notification
+    .create({
+      data: {
+        userId: ctx.userId,
+        tradeId: trade.id,
+        kind: 'trade_placed',
+        title: `${p.side.toUpperCase()} ${p.qty} ${symbol}`,
+        body: `Thesis: ${p.thesis.slice(0, 240)}`,
+      },
+    })
+    .catch((notifErr) => {
+      // Notification failure shouldn't fail the trade — the trade is real.
+      console.error('placeTradeTool: notification create failed', { tradeId: trade.id }, notifErr);
+    });
 
   return { tradeId: trade.id, alpacaOrderId: order.id, status: 'submitted' };
+}
+
+async function updateStockFundamentalsTool(input: Record<string, unknown>) {
+  const parsed = UpdateStockFundamentalsInput.safeParse(input);
+  if (!parsed.success) {
+    throw new Error(`update_stock_fundamentals: invalid input — ${parsed.error.message}`);
+  }
+  const { symbol, ...patch } = parsed.data;
+  const sym = symbol.toUpperCase();
+
+  // Only include keys the agent actually sent — don't overwrite existing
+  // values with `null` because a field was omitted.
+  const data: Record<string, unknown> = { lastAnalyzedAt: new Date() };
+  for (const [k, v] of Object.entries(patch)) {
+    if (v !== undefined) data[k] = v;
+  }
+
+  // upsert so the agent can also discover and add new tickers (we still
+  // require the symbol; name defaults to the symbol if the row is new).
+  const stock = await prisma.stock.upsert({
+    where: { symbol: sym },
+    update: data,
+    create: { symbol: sym, name: sym, onWatchlist: true, ...data },
+  });
+
+  return {
+    symbol: stock.symbol,
+    updatedFields: Object.keys(patch).filter((k) => patch[k as keyof typeof patch] !== undefined),
+    lastAnalyzedAt: stock.lastAnalyzedAt,
+  };
 }
 
 async function finalizeRunTool(ctx: ToolContext, input: Record<string, unknown>) {

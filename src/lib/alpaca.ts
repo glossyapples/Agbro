@@ -87,6 +87,19 @@ export async function cancelAllOrders() {
   return a.cancelAllOrders();
 }
 
+// Best-effort cancel by Alpaca order ID. Used when a DB write fails after a
+// successful order submission so we don't leave a phantom order at the broker.
+export async function cancelOrder(orderId: string): Promise<boolean> {
+  const a = getAlpaca();
+  try {
+    await a.cancelOrder(orderId);
+    return true;
+  } catch (err) {
+    console.error('alpaca.cancelOrder failed', { orderId }, err);
+    return false;
+  }
+}
+
 export async function isMarketOpen(): Promise<boolean> {
   const a = getAlpaca();
   const clock = await a.getClock();

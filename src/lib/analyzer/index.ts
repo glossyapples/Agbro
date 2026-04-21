@@ -209,6 +209,12 @@ export function analyze(input: AnalyzerInput): AnalyzerReport {
 }
 
 // Position sizing — Kelly-lite, capped by account policy.
+//
+// All money math is done in BigInt cents so we don't lose precision on large
+// portfolios (Number(BigInt) starts losing pennies past ~$90T but the larger
+// risk is silent rounding drift on smaller portfolios). Percent inputs and
+// the score*confidence scale are floats — they're bounded 0..100 / 0..1 so
+// fixed-point rasterisation (×10_000) is plenty.
 export function positionSizeCents(args: {
   portfolioValueCents: bigint;
   cashCents: bigint;
@@ -219,12 +225,32 @@ export function positionSizeCents(args: {
 }): bigint {
   const { portfolioValueCents, cashCents, buffettScore, confidence, maxPositionPct, minCashReservePct } = args;
   if (buffettScore < 40 || confidence < 0.5) return 0n;
-  const portfolio = Number(portfolioValueCents);
-  const cash = Number(cashCents);
-  const reserve = portfolio * (minCashReservePct / 100);
-  const deployable = Math.max(0, cash - reserve);
-  // Scale allocation by score*confidence, capped at maxPositionPct of portfolio.
-  const cap = portfolio * (maxPositionPct / 100);
-  const allocation = Math.min(cap, deployable * ((buffettScore / 100) * confidence));
-  return BigInt(Math.floor(allocation));
+  if (portfolioValueCents <= 0n || cashCents <= 0n) return 0n;
+
+  // Rasterise the percent inputs to basis-point integers (×100). Clamp to [0, 100%].
+  const reserveBps = bpsFromPct(minCashReservePct);
+  const capBps = bpsFromPct(maxPositionPct);
+
+  // reserveCents = portfolioValueCents * reserveBps / 10_000
+  const reserveCents = (portfolioValueCents * reserveBps) / 10_000n;
+  const deployableCents = cashCents > reserveCents ? cashCents - reserveCents : 0n;
+  if (deployableCents === 0n) return 0n;
+
+  // capCents = portfolioValueCents * capBps / 10_000
+  const capCents = (portfolioValueCents * capBps) / 10_000n;
+  if (capCents === 0n) return 0n;
+
+  // Scale ∈ [0, 1]. Rasterise to a millionths integer so we keep BigInt math.
+  const scaleNum = (buffettScore / 100) * confidence;
+  const SCALE_DEN = 1_000_000n;
+  const scaleScaled = BigInt(Math.max(0, Math.min(1_000_000, Math.round(scaleNum * 1_000_000))));
+  const scaledDeployable = (deployableCents * scaleScaled) / SCALE_DEN;
+
+  return scaledDeployable < capCents ? scaledDeployable : capCents;
+}
+
+function bpsFromPct(pct: number): bigint {
+  if (!Number.isFinite(pct) || pct <= 0) return 0n;
+  if (pct >= 100) return 10_000n;
+  return BigInt(Math.round(pct * 100));
 }

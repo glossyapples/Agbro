@@ -248,6 +248,11 @@ describe('positionSizeCents', () => {
     ).toBe(0n);
   });
 
+  it('returns 0 when portfolio or cash is non-positive', () => {
+    expect(positionSizeCents({ ...base, portfolioValueCents: 0n, buffettScore: 80, confidence: 1 })).toBe(0n);
+    expect(positionSizeCents({ ...base, cashCents: 0n, buffettScore: 80, confidence: 1 })).toBe(0n);
+  });
+
   it('caps allocation at maxPositionPct of portfolio', () => {
     const result = positionSizeCents({
       ...base,
@@ -277,5 +282,37 @@ describe('positionSizeCents', () => {
         confidence: 1,
       })
     ).toBe(0n);
+  });
+
+  it('keeps full BigInt precision for portfolios past Number.MAX_SAFE_INTEGER', () => {
+    // 100 trillion cents = $1T portfolio. 15% cap = 15 trillion cents.
+    // Number can't represent 100_000_000_000_000_00 exactly, but the
+    // BigInt-only path should hold the answer to the cent.
+    const huge = 100_000_000_000_000_00n; // 1e16 cents = $100T
+    const result = positionSizeCents({
+      portfolioValueCents: huge,
+      cashCents: huge,
+      buffettScore: 100,
+      confidence: 1,
+      maxPositionPct: 15,
+      minCashReservePct: 10,
+    });
+    // Cap binds: 15% of huge = huge * 1500 / 10000.
+    expect(result).toBe((huge * 1500n) / 10000n);
+  });
+
+  it('clamps fractional percent inputs into basis points without drift', () => {
+    // 0.5% reserve, 12.5% cap. With $1,000,000 portfolio:
+    //   reserve = 5000 cents, deployable = 1_000_000_00 - 5000 = 99_995_000 cents
+    //   cap     = 12_500_000 cents (binds)
+    const result = positionSizeCents({
+      portfolioValueCents: 1_000_000_00n,
+      cashCents: 1_000_000_00n,
+      buffettScore: 100,
+      confidence: 1,
+      maxPositionPct: 12.5,
+      minCashReservePct: 0.5,
+    });
+    expect(result).toBe(12_500_000n);
   });
 });

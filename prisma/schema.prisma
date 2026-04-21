@@ -148,7 +148,8 @@ model Trade {
   fillPriceCents BigInt?
   submittedAt   DateTime   @default(now())
   filledAt      DateTime?
-  status        String     // "submitted" | "filled" | "rejected" | "canceled"
+  status        String     // "pending" | "submitted" | "filled" | "rejected" | "canceled"
+  errorMessage  String?    @db.Text
   orderType     String     @default("market")
   bullCase      String     @db.Text
   bearCase      String     @db.Text

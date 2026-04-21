@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { PlaceTradeInput, SizePositionInput } from './schemas';
+import { PlaceTradeInput, SizePositionInput, UpdateStockFundamentalsInput } from './schemas';
 
 const validPlaceTrade = {
   symbol: 'AAPL',
@@ -105,5 +105,77 @@ describe('SizePositionInput', () => {
   it('rejects missing fields', () => {
     expect(SizePositionInput.safeParse({ buffettScore: 80 }).success).toBe(false);
     expect(SizePositionInput.safeParse({ confidence: 0.8 }).success).toBe(false);
+  });
+});
+
+describe('UpdateStockFundamentalsInput', () => {
+  it('accepts a minimal payload (just symbol)', () => {
+    expect(UpdateStockFundamentalsInput.safeParse({ symbol: 'AAPL' }).success).toBe(true);
+  });
+
+  it('accepts a fully-populated payload', () => {
+    const r = UpdateStockFundamentalsInput.safeParse({
+      symbol: 'KO',
+      peRatio: 25,
+      pbRatio: 10,
+      dividendYield: 3,
+      payoutRatio: 70,
+      debtToEquity: 1.7,
+      returnOnEquity: 40,
+      grossMarginPct: 60,
+      fcfYieldPct: 4,
+      moatScore: 90,
+      buffettScore: 85,
+      notes: 'Refreshed after earnings.',
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it('rejects missing symbol', () => {
+    expect(UpdateStockFundamentalsInput.safeParse({ peRatio: 22 }).success).toBe(false);
+  });
+
+  it('rejects empty / oversized symbol', () => {
+    expect(UpdateStockFundamentalsInput.safeParse({ symbol: '' }).success).toBe(false);
+    expect(UpdateStockFundamentalsInput.safeParse({ symbol: 'A'.repeat(13) }).success).toBe(false);
+  });
+
+  it('rejects non-finite numeric fields', () => {
+    expect(
+      UpdateStockFundamentalsInput.safeParse({ symbol: 'X', peRatio: Number.POSITIVE_INFINITY }).success
+    ).toBe(false);
+    expect(
+      UpdateStockFundamentalsInput.safeParse({ symbol: 'X', peRatio: Number.NaN }).success
+    ).toBe(false);
+  });
+
+  it('rejects out-of-range scores', () => {
+    expect(
+      UpdateStockFundamentalsInput.safeParse({ symbol: 'X', moatScore: 101 }).success
+    ).toBe(false);
+    expect(
+      UpdateStockFundamentalsInput.safeParse({ symbol: 'X', moatScore: -1 }).success
+    ).toBe(false);
+    expect(
+      UpdateStockFundamentalsInput.safeParse({ symbol: 'X', buffettScore: 200 }).success
+    ).toBe(false);
+  });
+
+  it('rejects non-integer scores', () => {
+    expect(
+      UpdateStockFundamentalsInput.safeParse({ symbol: 'X', moatScore: 50.5 }).success
+    ).toBe(false);
+  });
+
+  it('rejects negative dividend yield', () => {
+    expect(
+      UpdateStockFundamentalsInput.safeParse({ symbol: 'X', dividendYield: -1 }).success
+    ).toBe(false);
+  });
+
+  it('rejects oversized notes', () => {
+    expect(
+      UpdateStockFundamentalsInput.safeParse({ symbol: 'X', notes: 'a'.repeat(2_001) }).success
+    ).toBe(false);
   });
 });
