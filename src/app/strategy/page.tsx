@@ -1,9 +1,9 @@
 import Link from 'next/link';
 import { prisma } from '@/lib/db';
-import { getCurrentUser } from '@/lib/auth';
+import { requirePageUser } from '@/lib/auth';
 
 export default async function StrategyIndex() {
-  const user = await getCurrentUser();
+  const user = await requirePageUser('/strategy');
   const strategies = await prisma.strategy.findMany({
     where: { userId: user.id },
     orderBy: [{ isActive: 'desc' }, { createdAt: 'desc' }],

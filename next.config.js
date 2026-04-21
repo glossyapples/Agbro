@@ -7,11 +7,12 @@ const SECURITY_HEADERS = [
   { key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=(), interest-cohort=()' },
   {
     // Minimal CSP suited to a same-origin Next.js app. 'unsafe-inline' on scripts/styles
-    // is permitted because Next.js inlines hydration scripts; tighten later with nonces.
+    // is required for Next.js hydration inlines; tighten with nonces once we move to
+    // Next 15 strict-dynamic. 'unsafe-eval' is intentionally omitted.
     key: 'Content-Security-Policy',
     value: [
       "default-src 'self'",
-      "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+      "script-src 'self' 'unsafe-inline'",
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data: blob:",
       "font-src 'self' data:",

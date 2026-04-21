@@ -29,6 +29,15 @@ const redis =
     ? Redis.fromEnv()
     : null;
 
+if (!redis && process.env.NODE_ENV === 'production') {
+  // Loud warning on boot: the in-memory fallback is per-instance and can be
+  // trivially bypassed by any deployment running more than one container.
+  console.warn(
+    'ratelimit: UPSTASH_REDIS_REST_URL/TOKEN not set — falling back to in-memory limiter. ' +
+      'This is NOT safe for multi-instance production deployments.'
+  );
+}
+
 const limiters = new Map<Bucket, Ratelimit>();
 function upstashLimiter(bucket: Bucket): Ratelimit | null {
   if (!redis) return null;
@@ -45,14 +54,19 @@ function upstashLimiter(bucket: Bucket): Ratelimit | null {
   return rl;
 }
 
-// In-memory fallback (dev only). Sliding window approximated with epoch-bucket counters.
-type MemEntry = { windowStartMs: number; count: number };
+// In-memory fallback (dev / single-instance only). LRU-bounded Map to prevent
+// unbounded growth from adversarial or long-running traffic: Map preserves
+// insertion order, so we can evict the oldest entry when over capacity.
+const MEM_MAX_ENTRIES = 10_000;
+type MemEntry = { windowStartMs: number; count: number; lastTouchedMs: number };
 const memStore = new Map<string, MemEntry>();
+
 function windowMs(spec: { limit: number; window: Duration }): number {
   const [n, unit] = spec.window.split(' ');
   const mult = unit === 's' ? 1_000 : unit === 'm' ? 60_000 : 3_600_000;
   return Number(n) * mult;
 }
+
 function memCheck(
   bucket: Bucket,
   identifier: string
@@ -63,10 +77,20 @@ function memCheck(
   const key = `${bucket}:${identifier}`;
   const entry = memStore.get(key);
   if (!entry || now - entry.windowStartMs >= win) {
-    memStore.set(key, { windowStartMs: now, count: 1 });
+    // Evict oldest entries if we're over cap. Check before insert so we never
+    // allocate past the limit.
+    while (memStore.size >= MEM_MAX_ENTRIES) {
+      const oldest = memStore.keys().next().value;
+      if (oldest === undefined) break;
+      memStore.delete(oldest);
+    }
+    // Re-insert in LRU position by deleting first.
+    memStore.delete(key);
+    memStore.set(key, { windowStartMs: now, count: 1, lastTouchedMs: now });
     return { success: true, limit: spec.limit, remaining: spec.limit - 1, reset: now + win };
   }
   entry.count += 1;
+  entry.lastTouchedMs = now;
   const remaining = Math.max(0, spec.limit - entry.count);
   return {
     success: entry.count <= spec.limit,
@@ -74,6 +98,11 @@ function memCheck(
     remaining,
     reset: entry.windowStartMs + win,
   };
+}
+
+// Exposed for tests to reset state between runs.
+export function __resetMemStoreForTests() {
+  memStore.clear();
 }
 
 export type LimitResult = {

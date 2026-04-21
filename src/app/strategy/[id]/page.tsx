@@ -1,10 +1,10 @@
 import { notFound } from 'next/navigation';
 import { prisma } from '@/lib/db';
-import { getCurrentUser } from '@/lib/auth';
+import { requirePageUser } from '@/lib/auth';
 import { WizardChat } from '@/components/WizardChat';
 
 export default async function StrategyDetail({ params }: { params: { id: string } }) {
-  const user = await getCurrentUser();
+  const user = await requirePageUser(`/strategy/${params.id}`);
   const strategy = await prisma.strategy.findFirst({
     where: { id: params.id, userId: user.id },
     include: { turns: { orderBy: { createdAt: 'asc' } } },

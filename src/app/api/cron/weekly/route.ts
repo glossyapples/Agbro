@@ -13,7 +13,8 @@ export const maxDuration = 300;
 
 type Outcome =
   | { userId: string; skipped: true; reason: string }
-  | { userId: string; ok: true; brainEntryId: string };
+  | { userId: string; ok: true; brainEntryId: string }
+  | { userId: string; failed: true; reason: string };
 
 export async function POST(req: Request) {
   const unauthorized = assertCronSecret(req);
@@ -138,11 +139,22 @@ Return plain markdown. No preamble.`;
         outcomes.push({ userId: user.id, ok: true, brainEntryId: entry.id });
       } catch (err) {
         console.error('cron.weekly per-user failure', { userId: user.id }, err);
-        outcomes.push({ userId: user.id, skipped: true, reason: 'errored' });
+        outcomes.push({
+          userId: user.id,
+          failed: true,
+          reason: (err as Error).message.slice(0, 200),
+        });
       }
     }
 
-    return NextResponse.json({ ok: true, outcomes });
+    const failed = outcomes.filter((o) => 'failed' in o).length;
+    const ok = outcomes.filter((o) => 'ok' in o).length;
+    const skipped = outcomes.filter((o) => 'skipped' in o).length;
+
+    return NextResponse.json(
+      { total: outcomes.length, ok, skipped, failed, outcomes },
+      { status: failed > 0 ? 207 : 200 }
+    );
   } catch (err) {
     return apiError(err, 500, 'weekly cron failed', 'cron.weekly');
   }

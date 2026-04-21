@@ -5,7 +5,8 @@
 //   - current time is within the user's trading hours (ET)
 //   - cadence since last run has elapsed
 //
-// Runs sequentially per user. If the population grows, swap to a queue.
+// Runs sequentially per user with a per-user budget so a single slow user
+// can't consume the whole 300s cron window. At scale, swap to a queue.
 
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
@@ -14,6 +15,8 @@ import { apiError, assertCronSecret } from '@/lib/api';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300;
+
+const PER_USER_BUDGET_MS = 90_000; // 90s — leaves headroom inside the 300s cron cap
 
 function withinTradingHours(now: Date, start: string, end: string): boolean {
   const fmt = new Intl.DateTimeFormat('en-US', {
@@ -31,7 +34,24 @@ function withinTradingHours(now: Date, start: string, end: string): boolean {
 
 type Outcome =
   | { userId: string; skipped: true; reason: string }
-  | { userId: string; ran: true; agentRunId: string; decision: string | null; status: string };
+  | { userId: string; ran: true; agentRunId: string; decision: string | null; status: string }
+  | { userId: string; failed: true; reason: string };
+
+function withTimeout<T>(promise: Promise<T>, ms: number, tag: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${tag} timed out after ${ms}ms`)), ms);
+    promise.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      }
+    );
+  });
+}
 
 export async function POST(req: Request) {
   const unauthorized = assertCronSecret(req);
@@ -75,7 +95,11 @@ export async function POST(req: Request) {
       }
 
       try {
-        const result = await runAgent({ userId: account.userId, trigger: 'schedule' });
+        const result = await withTimeout(
+          runAgent({ userId: account.userId, trigger: 'schedule' }),
+          PER_USER_BUDGET_MS,
+          `agent(${account.userId})`
+        );
         outcomes.push({
           userId: account.userId,
           ran: true,
@@ -85,11 +109,22 @@ export async function POST(req: Request) {
         });
       } catch (err) {
         console.error('cron.tick agent failed', { userId: account.userId }, err);
-        outcomes.push({ userId: account.userId, skipped: true, reason: 'errored' });
+        outcomes.push({
+          userId: account.userId,
+          failed: true,
+          reason: (err as Error).message.slice(0, 200),
+        });
       }
     }
 
-    return NextResponse.json({ ran: outcomes.length, outcomes });
+    const failed = outcomes.filter((o) => 'failed' in o).length;
+    const ran = outcomes.filter((o) => 'ran' in o).length;
+    const skipped = outcomes.filter((o) => 'skipped' in o).length;
+
+    return NextResponse.json(
+      { total: outcomes.length, ran, skipped, failed, outcomes },
+      { status: failed > 0 ? 207 : 200 }
+    );
   } catch (err) {
     return apiError(err, 500, 'cron tick failed', 'cron.tick');
   }

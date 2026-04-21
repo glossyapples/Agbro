@@ -1,9 +1,9 @@
 import { prisma } from '@/lib/db';
-import { getCurrentUser } from '@/lib/auth';
+import { requirePageUser } from '@/lib/auth';
 import { formatPct, formatUsd } from '@/lib/money';
 
 export default async function AnalyticsPage() {
-  const user = await getCurrentUser();
+  const user = await requirePageUser('/analytics');
   const [trades, runs, positions, watchlist] = await Promise.all([
     prisma.trade.findMany({
       where: { userId: user.id },

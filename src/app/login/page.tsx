@@ -3,6 +3,16 @@ import { auth, signIn } from '@/lib/auth/config';
 
 export const runtime = 'nodejs';
 
+// Only accept same-origin relative paths as a post-login redirect target.
+// Auth.js v5 already blocks off-origin redirects, but we sanitize here too
+// so any future misconfiguration can't turn /login into an open redirect.
+function sanitizeRedirect(raw: unknown): string {
+  if (typeof raw !== 'string') return '/';
+  // Must start with a single slash (not `//` → protocol-relative to another host).
+  if (!raw.startsWith('/') || raw.startsWith('//')) return '/';
+  return raw;
+}
+
 export default async function LoginPage({
   searchParams,
 }: {
@@ -12,7 +22,7 @@ export default async function LoginPage({
   if (session?.user) redirect('/');
 
   const check = searchParams.check === '1';
-  const from = typeof searchParams.from === 'string' ? searchParams.from : '/';
+  const from = sanitizeRedirect(searchParams.from);
 
   async function handleSignIn(formData: FormData) {
     'use server';

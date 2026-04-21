@@ -1,12 +1,12 @@
 import Link from 'next/link';
-import { getCurrentUser } from '@/lib/auth';
+import { requirePageUser } from '@/lib/auth';
 import { formatPct, formatUsd } from '@/lib/money';
 import { SettingsForm } from '@/components/SettingsForm';
 import { DepositForm } from '@/components/DepositForm';
 import { SignOutButton } from '@/components/SignOutButton';
 
 export default async function SettingsPage() {
-  const user = await getCurrentUser();
+  const user = await requirePageUser('/settings');
   const a = user.account!;
 
   return (
