@@ -17,9 +17,11 @@ import { googleSearch } from '@/lib/research/google';
 import { toCents } from '@/lib/money';
 import { startOfDayET } from '@/lib/time';
 import { log } from '@/lib/logger';
-import { PlaceTradeInput, ScreenUniverseInput, SizePositionInput, UpdateStockFundamentalsInput } from './schemas';
+import { GetEventCalendarInput, PlaceTradeInput, ScreenUniverseInput, SizePositionInput, UpdateStockFundamentalsInput } from './schemas';
 import { refreshFundamentalsForSymbol } from '@/lib/data/refresh-fundamentals';
 import { runScreen } from '@/lib/data/screener';
+import { getUpcomingEvents } from '@/lib/data/events';
+import { isInEarningsBlackout } from '@/lib/data/earnings';
 
 export const TOOL_DEFS: Anthropic.Tool[] = [
   {
@@ -242,6 +244,19 @@ export const TOOL_DEFS: Anthropic.Tool[] = [
     },
   },
   {
+    name: 'get_event_calendar',
+    description:
+      'Returns upcoming scheduled events (earnings, FOMC, CPI, market closures) within horizonDays (default 14). Pass symbol to narrow to one name + market-wide events; omit to see events for the whole watchlist. USE THIS before place_trade with side=buy — the server blocks buys within 3 days of a symbol\'s earnings report regardless, but checking first lets you plan around it.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        symbol: { type: 'string', description: 'Optional — narrow to one ticker.' },
+        horizonDays: { type: 'number', description: 'Lookahead window in days. Default 14, max 90.' },
+      },
+      required: [],
+    },
+  },
+  {
     name: 'place_trade',
     description:
       'Submit an order to Alpaca. Requires symbol, side, qty, bullCase, bearCase, thesis, confidence (0..1), intrinsicValuePerShare, marginOfSafetyPct. Server re-validates ALL safety rails before routing.',
@@ -367,6 +382,13 @@ export async function runTool(
         autoPromoteHighConviction: account?.autoPromoteCandidates === true,
       });
     }
+    case 'get_event_calendar': {
+      const parsed = GetEventCalendarInput.safeParse(input);
+      if (!parsed.success) {
+        throw new Error(`get_event_calendar: invalid input — ${parsed.error.message}`);
+      }
+      return { events: await getUpcomingEvents(parsed.data) };
+    }
     case 'finalize_run':
       return finalizeRunTool(ctx, input);
     default:
@@ -434,6 +456,25 @@ async function placeTradeTool(ctx: ToolContext, input: Record<string, unknown>) 
   const orderType = p.orderType ?? 'market';
   if (orderType === 'limit' && p.limitPrice == null) {
     throw new Error('place_trade: limitPrice required when orderType=limit');
+  }
+
+  // Earnings blackout — hard block on BUYS within 3 days of a scheduled
+  // earnings report. Value investing is not speculation on binary events;
+  // a buy right before earnings is a gamble on the print. Sells/trims are
+  // always allowed (you never want to hold a broken thesis waiting on a
+  // call). No agent-side override in v1 — this is intentionally strict.
+  if (p.side === 'buy') {
+    const blackout = await isInEarningsBlackout(symbol);
+    if (blackout.blocked) {
+      log.info('trade.blocked_by_earnings', {
+        userId: ctx.userId,
+        symbol,
+        nextEarningsAt: blackout.nextEarningsAt?.toISOString() ?? null,
+      });
+      throw new Error(
+        `place_trade: blocked by earnings blackout — ${blackout.reason}. Wait until after the report. (Sells/trims would have been allowed.)`
+      );
+    }
   }
 
   // Atomically: take a per-user write lock, re-read pause/stop + cap under the

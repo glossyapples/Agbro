@@ -168,7 +168,37 @@ async function main() {
     });
   }
 
-  console.log(`Seeded ${STOCKS.length} stocks, 1 user, 1 account, 1 strategy, 1 brain entry.`);
+  // ── FOMC calendar ───────────────────────────────────────────────────────
+  // The Fed publishes meeting dates a full year in advance. Hardcoded here
+  // because the schedule is stable and there's no free API. Update yearly.
+  // Source: federalreserve.gov/monetarypolicy/fomccalendars.htm
+  const FOMC_MEETINGS: Array<{ date: string; description: string }> = [
+    // 2026 (announced Sep 2025)
+    { date: '2026-01-28', description: 'FOMC meeting (statement + press conference)' },
+    { date: '2026-03-18', description: 'FOMC meeting (SEP + press conference)' },
+    { date: '2026-04-29', description: 'FOMC meeting (statement + press conference)' },
+    { date: '2026-06-17', description: 'FOMC meeting (SEP + press conference)' },
+    { date: '2026-07-29', description: 'FOMC meeting (statement + press conference)' },
+    { date: '2026-09-16', description: 'FOMC meeting (SEP + press conference)' },
+    { date: '2026-10-28', description: 'FOMC meeting (statement + press conference)' },
+    { date: '2026-12-09', description: 'FOMC meeting (SEP + press conference)' },
+    // 2025 (remainder)
+    { date: '2025-12-10', description: 'FOMC meeting (SEP + press conference)' },
+  ];
+  for (const m of FOMC_MEETINGS) {
+    const occursAt = new Date(`${m.date}T18:00:00Z`); // 2pm ET == 19:00 UTC (EST) / 18:00 UTC (EDT). 18:00 UTC is close enough for blackout math.
+    // Idempotent: skip if a FOMC event already exists for this date.
+    const existing = await prisma.marketEvent.findFirst({
+      where: { kind: 'fomc', occursAt: { gte: new Date(`${m.date}T00:00:00Z`), lt: new Date(`${m.date}T23:59:59Z`) } },
+    });
+    if (!existing) {
+      await prisma.marketEvent.create({
+        data: { kind: 'fomc', occursAt, description: m.description },
+      });
+    }
+  }
+
+  console.log(`Seeded ${STOCKS.length} stocks, 1 user, 1 account, 1 strategy, 1 brain entry, ${FOMC_MEETINGS.length} FOMC meetings.`);
 }
 
 main()

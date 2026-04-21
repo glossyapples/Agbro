@@ -317,6 +317,12 @@ model Stock {
   // user-approved or seed rows. Kept for audit + future "agent added these"
   // UI on the watchlist.
   autoPromotedAt  DateTime?
+  // Next earnings report date (best-effort). Populated by an event-calendar
+  // refresh — usually Perplexity-sourced and good to within a few days.
+  // Used by the pre-trade earnings blackout + the home-page events card.
+  nextEarningsAt  DateTime?
+  earningsSource  String?   // 'perplexity' | 'edgar_predicted' | 'alpaca' | null
+  earningsCheckedAt DateTime?
   lastAnalyzedAt DateTime?
   updatedAt      DateTime @updatedAt
   prices         PriceSnapshot[]
@@ -331,6 +337,25 @@ model PriceSnapshot {
   source     String   @default("alpaca")
 
   @@index([symbol, at])
+}
+
+// -------------------- Event calendar --------------------
+
+// Macro + market-structure events the agent should be aware of. Per-symbol
+// events (earnings, ex-div) live on the Stock row; this table is for
+// cross-cutting dates: FOMC meetings, CPI prints, market closures.
+// Seeded with known FOMC dates; Alpaca's free /v2/calendar syncs the market
+// closure rows nightly.
+model MarketEvent {
+  id          String   @id @default(cuid())
+  // 'fomc' | 'cpi' | 'market_closed' | 'market_early_close' | 'other'
+  kind        String
+  occursAt    DateTime
+  description String
+  createdAt   DateTime @default(now())
+
+  @@index([occursAt])
+  @@index([kind, occursAt])
 }
 
 // -------------------- Notifications & Audit --------------------

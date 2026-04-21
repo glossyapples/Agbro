@@ -206,3 +206,38 @@ export async function getBars(
   }
   return bars;
 }
+
+// ─── Market calendar ─────────────────────────────────────────────────────
+// Alpaca's /v2/calendar is free and authoritative for NYSE/NASDAQ trading
+// days. We use it to know when the market is closed or closing early (July
+// 3rd half-day, day after Thanksgiving, etc.) so the agent doesn't waste a
+// wake-up trying to trade into a closed session.
+
+export type MarketCalendarDay = {
+  date: string; // 'YYYY-MM-DD'
+  openTimeET: string; // 'HH:MM'
+  closeTimeET: string; // 'HH:MM'
+  sessionType: 'normal' | 'early_close' | 'closed';
+};
+
+// Typical US-equity hours. Anything shorter than this on a trading day is an
+// early close (half-day around major holidays).
+const NORMAL_CLOSE_ET = '16:00';
+
+export async function getMarketCalendar(
+  startDate: string,
+  endDate: string
+): Promise<MarketCalendarDay[]> {
+  const a = getAlpaca();
+  const raw = await (a as unknown as {
+    getCalendar: (opts: { start: string; end: string }) => Promise<
+      Array<{ date: string; open: string; close: string }>
+    >;
+  }).getCalendar({ start: startDate, end: endDate });
+  return raw.map((r) => ({
+    date: r.date,
+    openTimeET: r.open,
+    closeTimeET: r.close,
+    sessionType: r.close < NORMAL_CLOSE_ET ? 'early_close' : 'normal',
+  }));
+}

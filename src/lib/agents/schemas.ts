@@ -59,3 +59,11 @@ export const ScreenUniverseInput = z.object({
   thesisHint: z.string().max(500).optional(),
 });
 export type ScreenUniverseInput = z.infer<typeof ScreenUniverseInput>;
+
+// Event calendar tool. horizonDays defaults to 14 (two weeks of lookahead).
+// symbol is optional — omit for watchlist-wide + market events.
+export const GetEventCalendarInput = z.object({
+  symbol: z.string().min(1).max(12).optional(),
+  horizonDays: z.number().int().min(1).max(90).optional(),
+});
+export type GetEventCalendarInput = z.infer<typeof GetEventCalendarInput>;

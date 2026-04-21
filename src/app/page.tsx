@@ -5,7 +5,9 @@ import { formatUsd, formatPct } from '@/lib/money';
 import { Controls } from '@/components/Controls';
 import { RunAgentButton } from '@/components/RunAgentButton';
 import { PerformanceChart } from '@/components/PerformanceChart';
+import { UpcomingEventsCard } from '@/components/UpcomingEventsCard';
 import { getPortfolioHistory, getBars } from '@/lib/alpaca';
+import { getUpcomingEvents } from '@/lib/data/events';
 
 // Server-side fetch of the initial chart payload so the hero card paints
 // on first byte — no loading spinner on page load. Default range is 1M,
@@ -53,7 +55,7 @@ async function getOverview() {
   const user = await maybeCurrentUser();
   if (!user || !user.account) return null;
 
-  const [recentTrades, lastRun, activeStrategy, notifications, brainLatest, watchlistCount, candidateCount, chart] =
+  const [recentTrades, lastRun, activeStrategy, notifications, brainLatest, watchlistCount, candidateCount, chart, upcomingEvents] =
     await Promise.all([
       prisma.trade.findMany({
         where: { userId: user.id },
@@ -73,6 +75,7 @@ async function getOverview() {
       prisma.stock.count({ where: { onWatchlist: true } }),
       prisma.stock.count({ where: { candidateSource: 'screener' } }),
       getInitialChartPayload(),
+      getUpcomingEvents({ horizonDays: 14 }),
     ]);
 
   // Numeric target (invested principal × (1 + expectedAnnualPct / 100)) for
@@ -92,6 +95,7 @@ async function getOverview() {
     candidateCount,
     target,
     chart,
+    upcomingEvents,
   };
 }
 
@@ -118,6 +122,7 @@ export default async function OverviewPage() {
     watchlistCount,
     candidateCount,
     chart,
+    upcomingEvents,
   } = data;
 
   const status = account.isStopped ? 'Stopped' : account.isPaused ? 'Paused' : 'Live';
@@ -152,6 +157,8 @@ export default async function OverviewPage() {
           </div>
         </div>
       </section>
+
+      <UpcomingEventsCard events={upcomingEvents} />
 
       {watchlistCount === 0 && (
         <Link
