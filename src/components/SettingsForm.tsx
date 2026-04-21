@@ -15,28 +15,84 @@ export type SettingsInitial = {
   allowDayTrades: boolean;
 };
 
+// All numeric fields are stored as strings internally so the input stays
+// editable when the user clears the field (React number bindings
+// round "" → 0 and re-render "0", which eats every keystroke).
+type FormState = {
+  expectedAnnualPct: string;
+  riskTolerance: SettingsInitial['riskTolerance'];
+  maxPositionPct: string;
+  maxDailyTrades: string;
+  minCashReservePct: string;
+  tradingHoursStart: string;
+  tradingHoursEnd: string;
+  agentCadenceMinutes: string;
+  allowDayTrades: boolean;
+};
+
+function toForm(initial: SettingsInitial): FormState {
+  return {
+    expectedAnnualPct: String(initial.expectedAnnualPct),
+    riskTolerance: initial.riskTolerance,
+    maxPositionPct: String(initial.maxPositionPct),
+    maxDailyTrades: String(initial.maxDailyTrades),
+    minCashReservePct: String(initial.minCashReservePct),
+    tradingHoursStart: initial.tradingHoursStart,
+    tradingHoursEnd: initial.tradingHoursEnd,
+    agentCadenceMinutes: String(initial.agentCadenceMinutes),
+    allowDayTrades: initial.allowDayTrades,
+  };
+}
+
 export function SettingsForm({ initial }: { initial: SettingsInitial }) {
   const router = useRouter();
-  const [form, setForm] = useState(initial);
+  const [form, setForm] = useState<FormState>(() => toForm(initial));
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  function update<K extends keyof SettingsInitial>(k: K, v: SettingsInitial[K]) {
+  function update<K extends keyof FormState>(k: K, v: FormState[K]) {
     setForm((f) => ({ ...f, [k]: v }));
     setSaved(false);
+    setError(null);
   }
 
   async function save() {
     setSaving(true);
     setSaved(false);
+    setError(null);
     try {
-      await fetch('/api/account/settings', {
+      // Parse numerics at submit time. Empty or non-numeric values fall back
+      // to the initial value so we never post NaN / 0 accidentally.
+      const num = (s: string, fallback: number) => {
+        const n = Number(s);
+        return Number.isFinite(n) && s.trim() !== '' ? n : fallback;
+      };
+      const payload = {
+        expectedAnnualPct: num(form.expectedAnnualPct, initial.expectedAnnualPct),
+        riskTolerance: form.riskTolerance,
+        maxPositionPct: num(form.maxPositionPct, initial.maxPositionPct),
+        maxDailyTrades: Math.round(num(form.maxDailyTrades, initial.maxDailyTrades)),
+        minCashReservePct: num(form.minCashReservePct, initial.minCashReservePct),
+        tradingHoursStart: form.tradingHoursStart,
+        tradingHoursEnd: form.tradingHoursEnd,
+        agentCadenceMinutes: Math.round(num(form.agentCadenceMinutes, initial.agentCadenceMinutes)),
+        allowDayTrades: form.allowDayTrades,
+      };
+      const res = await fetch('/api/account/settings', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(form),
+        body: JSON.stringify(payload),
       });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        setError(typeof body.error === 'string' ? body.error : 'Save failed — check your inputs.');
+        return;
+      }
       setSaved(true);
       router.refresh();
+    } catch {
+      setError('Network error — try again.');
     } finally {
       setSaving(false);
     }
@@ -50,13 +106,14 @@ export function SettingsForm({ initial }: { initial: SettingsInitial }) {
         <label>Expected annual return (%)</label>
         <input
           type="number"
+          inputMode="decimal"
           value={form.expectedAnnualPct}
-          onChange={(e) => update('expectedAnnualPct', Number(e.target.value))}
+          onChange={(e) => update('expectedAnnualPct', e.target.value)}
           min={0}
           max={100}
         />
         <p className="mt-1 text-[11px] text-ink-400">
-          AgBro's survival goal. Miss this for too long and we re-evaluate the strategy.
+          AgBro&apos;s survival goal. Miss this for too long and we re-evaluate the strategy.
         </p>
       </div>
 
@@ -77,8 +134,9 @@ export function SettingsForm({ initial }: { initial: SettingsInitial }) {
           <label>Max position %</label>
           <input
             type="number"
+            inputMode="decimal"
             value={form.maxPositionPct}
-            onChange={(e) => update('maxPositionPct', Number(e.target.value))}
+            onChange={(e) => update('maxPositionPct', e.target.value)}
             min={1}
             max={100}
           />
@@ -87,8 +145,9 @@ export function SettingsForm({ initial }: { initial: SettingsInitial }) {
           <label>Min cash reserve %</label>
           <input
             type="number"
+            inputMode="decimal"
             value={form.minCashReservePct}
-            onChange={(e) => update('minCashReservePct', Number(e.target.value))}
+            onChange={(e) => update('minCashReservePct', e.target.value)}
             min={0}
             max={100}
           />
@@ -100,8 +159,9 @@ export function SettingsForm({ initial }: { initial: SettingsInitial }) {
           <label>Max trades / day</label>
           <input
             type="number"
+            inputMode="numeric"
             value={form.maxDailyTrades}
-            onChange={(e) => update('maxDailyTrades', Number(e.target.value))}
+            onChange={(e) => update('maxDailyTrades', e.target.value)}
             min={0}
             max={20}
           />
@@ -110,8 +170,9 @@ export function SettingsForm({ initial }: { initial: SettingsInitial }) {
           <label>Agent cadence (min)</label>
           <input
             type="number"
+            inputMode="numeric"
             value={form.agentCadenceMinutes}
-            onChange={(e) => update('agentCadenceMinutes', Number(e.target.value))}
+            onChange={(e) => update('agentCadenceMinutes', e.target.value)}
             min={5}
             max={1440}
           />
@@ -148,6 +209,7 @@ export function SettingsForm({ initial }: { initial: SettingsInitial }) {
       </label>
 
       <div className="flex items-center justify-end gap-2">
+        {error && <span className="text-xs text-red-400">{error}</span>}
         {saved && <span className="text-xs text-brand-400">Saved ✓</span>}
         <button onClick={save} disabled={saving} className="btn-primary disabled:opacity-50">
           {saving ? 'Saving…' : 'Save'}
