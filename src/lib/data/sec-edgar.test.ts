@@ -155,3 +155,68 @@ describe('extractFundamentals — resilience', () => {
     expect(snap.epsGrowthPct5y).toBeNull();
   });
 });
+
+// Regression test for the BRK.B bug: both Berkshire share classes file under
+// one CIK, and EDGAR reports per-share metrics in A-class basis. Requesting
+// BRK.B must divide per-share metrics by 1500 and multiply share count by
+// 1500 so downstream valuation math isn't nonsensical.
+describe('extractFundamentals — share-class override (BRK.B)', () => {
+  // Minimal Berkshire-shaped fixture: EPS of $3,000 and ~943k shares
+  // outstanding (A-class). BV per A-class share ≈ $700k. After B-class
+  // adjustment: EPS $2, shares ~1.414B, BV/share ~$467.
+  const berkshireFacts = {
+    cik: 1067983,
+    entityName: 'Berkshire Hathaway Inc.',
+    facts: {
+      'us-gaap': {
+        EarningsPerShareBasic: {
+          units: {
+            'USD/shares': [
+              { end: '2024-12-31', val: 3000, fy: 2024, form: '10-K' },
+            ],
+          },
+        },
+        NetIncomeLoss: {
+          units: { USD: [{ end: '2024-12-31', val: 90_000_000_000, fy: 2024, form: '10-K' }] },
+        },
+        StockholdersEquity: {
+          units: { USD: [{ end: '2024-12-31', val: 660_000_000_000, fy: 2024, form: '10-K' }] },
+        },
+        CommonStockSharesOutstanding: {
+          units: { shares: [{ end: '2024-12-31', val: 943_000, fy: 2024, form: '10-K' }] },
+        },
+      },
+    },
+  };
+
+  it('adjusts per-share metrics down by 1500 when ticker is BRK.B', () => {
+    const snap = extractFundamentals('BRK.B', '1067983', berkshireFacts as never);
+    // EPS: 3000 / 1500 = 2
+    expect(snap.epsTTM).toBeCloseTo(2, 3);
+    // Shares: 943k * 1500 = 1.4145B (now in B-equivalent count)
+    expect(snap.sharesOutstanding).toBe(943_000 * 1500);
+    // BV/share: 660B / 1.4145B ≈ $467
+    expect(snap.bookValuePerShare).toBeCloseTo(660_000_000_000 / (943_000 * 1500), 1);
+    // Company-level ROE is unchanged (90B / 660B ≈ 13.6%)
+    expect(snap.returnOnEquityPct).toBeCloseTo((90 / 660) * 100, 1);
+    // Shares-adjustment metadata must be present so auditors can see why
+    expect(snap.shareClassAdjustment).toEqual({
+      ratio: 1500,
+      note: expect.stringContaining('B-class'),
+    });
+  });
+
+  it('leaves per-share metrics unchanged for single-class tickers (AAPL)', () => {
+    // Using the same fixture but as AAPL: no override, values pass through.
+    const snap = extractFundamentals('AAPL', '320193', berkshireFacts as never);
+    expect(snap.epsTTM).toBe(3000);
+    expect(snap.sharesOutstanding).toBe(943_000);
+    expect(snap.shareClassAdjustment).toBeUndefined();
+  });
+
+  it('handles the Alpaca dash form (BRK-B) identically to dot form (BRK.B)', () => {
+    const snap = extractFundamentals('BRK-B', '1067983', berkshireFacts as never);
+    expect(snap.epsTTM).toBeCloseTo(2, 3);
+    expect(snap.shareClassAdjustment?.ratio).toBe(1500);
+  });
+});

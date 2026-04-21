@@ -53,6 +53,17 @@ export async function refreshFundamentalsForSymbol(symbol: string): Promise<Refr
       symbol: sym,
       asOf: snap.asOf,
       missingFields: snap.missingFields,
+      // Surface share-class adjustments so we can audit them in Railway logs
+      // — catches any future dual-class ticker we add to the watchlist
+      // without realising it needs an override.
+      ...(snap.shareClassAdjustment
+        ? {
+            shareClassAdjustment: {
+              ratio: snap.shareClassAdjustment.ratio,
+              note: snap.shareClassAdjustment.note,
+            },
+          }
+        : {}),
     });
     return { symbol: sym, status: 'updated', snapshot: snap };
   } catch (err) {

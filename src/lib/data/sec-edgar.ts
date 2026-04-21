@@ -74,6 +74,10 @@ export type FundamentalsSnapshot = {
   // Anything we couldn't extract, named so the caller can log and the UI
   // can surface "data quality: partial".
   missingFields: string[];
+  // When the ticker is a secondary share class (see SHARE_CLASS_OVERRIDES),
+  // the raw EDGAR numbers are adjusted to the secondary class's economic
+  // basis and this field records the factor used. Absent = no adjustment.
+  shareClassAdjustment?: { ratio: number; note: string };
 };
 
 // -------------------- Ticker → CIK --------------------
@@ -176,6 +180,36 @@ function annualSeries(
   return [];
 }
 
+// Share-class overrides. SEC EDGAR reports under ONE CIK per company — so
+// when a secondary-class ticker (e.g. BRK.B) shares a CIK with the primary
+// class (BRK.A), the per-share numbers in the filing are expressed in terms
+// of the primary class's share count. That gives nonsensical results for
+// the secondary class (e.g. storing BRK.B's EPS as $3,035 — actually BRK.A's
+// EPS in $3,035 territory).
+//
+// Adjustment, for a secondary-class ticker with ratio R (meaning 1 primary
+// share = R secondary shares, economically):
+//   - EPS, dividend-per-share → divide by R
+//   - sharesOutstanding → multiply by R (convert to secondary-equivalent count)
+//   - bookValuePerShare → auto-corrects (derived from equity / adjusted shares)
+//   - Company-level metrics (equity, debt, net income, revenue, ROE, gross
+//     margin, D/E) → unchanged, they're consolidated
+//
+// Only include tickers where the ratio is material enough that leaving it
+// unadjusted would cause downstream bad trades. GOOGL/GOOG (Alphabet A/C) is
+// ~1:1, so we leave it alone. BRK.B at 1:1500 is the canonical bad case.
+const SHARE_CLASS_OVERRIDES: Record<
+  string,
+  { ratio: number; note: string }
+> = {
+  'BRK.B': { ratio: 1500, note: 'B-class is 1/1500 economic interest of A-class' },
+  'BRK-B': { ratio: 1500, note: 'B-class is 1/1500 economic interest of A-class' },
+};
+
+function shareClassOverride(symbol: string): { ratio: number; note: string } | null {
+  return SHARE_CLASS_OVERRIDES[symbol.toUpperCase()] ?? null;
+}
+
 // CAGR from oldest to newest, rounded to 1 decimal. Returns null when we can't
 // compute (sign change, missing data, ≤1 data point, division by zero).
 function cagr(series: Array<{ val: number }>, years = 5): number | null {
@@ -213,11 +247,23 @@ export function extractFundamentals(
 
   const totalDebt = ltd ? ltd.val + (std?.val ?? 0) : null;
   const equityVal = equity?.val ?? null;
-  const sharesVal = shares?.val ?? null;
+  const rawSharesVal = shares?.val ?? null;
+
+  // Apply share-class override. EDGAR numbers come in primary-class basis;
+  // convert per-share metrics + share count to the queried class. Ratio=1
+  // (the default) is a no-op so single-class tickers are unaffected.
+  const override = shareClassOverride(symbol);
+  const ratio = override?.ratio ?? 1;
+  const adjEpsTTM = eps?.val != null ? eps.val / ratio : null;
+  const adjDividendPerShare = dps?.val != null ? dps.val / ratio : null;
+  const adjSharesOutstanding = rawSharesVal != null ? rawSharesVal * ratio : null;
 
   const bookValuePerShare =
-    equityVal != null && sharesVal != null && sharesVal > 0 ? equityVal / sharesVal : null;
+    equityVal != null && adjSharesOutstanding != null && adjSharesOutstanding > 0
+      ? equityVal / adjSharesOutstanding
+      : null;
 
+  // Company-level metrics are consolidated — unaffected by share class.
   const returnOnEquityPct =
     netIncome?.val != null && equityVal != null && equityVal > 0
       ? (netIncome.val / equityVal) * 100
@@ -231,6 +277,8 @@ export function extractFundamentals(
   const debtToEquity =
     totalDebt != null && equityVal != null && equityVal > 0 ? totalDebt / equityVal : null;
 
+  // EPS CAGR is a ratio of two EPS numbers — the class adjustment cancels,
+  // so compute on the raw series directly.
   const epsSeries = annualSeries(facts, TAGS.eps, 'USD/shares');
   const epsGrowthPct5y = cagr(epsSeries, 5);
 
@@ -244,10 +292,10 @@ export function extractFundamentals(
     cik,
     asOf,
     source: 'edgar',
-    epsTTM: eps?.val ?? null,
+    epsTTM: adjEpsTTM,
     bookValuePerShare,
-    dividendPerShare: dps?.val ?? null,
-    sharesOutstanding: sharesVal,
+    dividendPerShare: adjDividendPerShare,
+    sharesOutstanding: adjSharesOutstanding,
     totalDebt,
     totalEquity: equityVal,
     netIncome: netIncome?.val ?? null,
@@ -258,6 +306,7 @@ export function extractFundamentals(
     debtToEquity,
     epsGrowthPct5y,
     missingFields: missing,
+    ...(override ? { shareClassAdjustment: override } : {}),
   };
 }
 
