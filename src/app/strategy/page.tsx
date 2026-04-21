@@ -50,6 +50,10 @@ export default async function StrategyIndex() {
           Compare strategies →
         </Link>
       )}
+
+      <Link href="/watchlist" className="card text-center text-sm text-brand-400">
+        Manage watchlist →
+      </Link>
     </div>
   );
 }

@@ -9,23 +9,25 @@ async function getOverview() {
   const user = await maybeCurrentUser();
   if (!user || !user.account) return null;
 
-  const [recentTrades, lastRun, activeStrategy, notifications, brainLatest] = await Promise.all([
-    prisma.trade.findMany({
-      where: { userId: user.id },
-      orderBy: { submittedAt: 'desc' },
-      take: 5,
-    }),
-    prisma.agentRun.findFirst({
-      where: { userId: user.id },
-      orderBy: { startedAt: 'desc' },
-    }),
-    prisma.strategy.findFirst({ where: { userId: user.id, isActive: true } }),
-    prisma.notification.count({ where: { userId: user.id, readAt: null } }),
-    prisma.brainEntry.findFirst({
-      where: { userId: user.id },
-      orderBy: { createdAt: 'desc' },
-    }),
-  ]);
+  const [recentTrades, lastRun, activeStrategy, notifications, brainLatest, watchlistCount] =
+    await Promise.all([
+      prisma.trade.findMany({
+        where: { userId: user.id },
+        orderBy: { submittedAt: 'desc' },
+        take: 5,
+      }),
+      prisma.agentRun.findFirst({
+        where: { userId: user.id },
+        orderBy: { startedAt: 'desc' },
+      }),
+      prisma.strategy.findFirst({ where: { userId: user.id, isActive: true } }),
+      prisma.notification.count({ where: { userId: user.id, readAt: null } }),
+      prisma.brainEntry.findFirst({
+        where: { userId: user.id },
+        orderBy: { createdAt: 'desc' },
+      }),
+      prisma.stock.count({ where: { onWatchlist: true } }),
+    ]);
 
   const invested = Number(user.account.depositedCents) / 100;
   const target = invested * (1 + user.account.expectedAnnualPct / 100);
@@ -38,6 +40,7 @@ async function getOverview() {
     activeStrategy,
     unreadNotifications: notifications,
     brainLatest,
+    watchlistCount,
     invested,
     target,
   };
@@ -55,7 +58,17 @@ export default async function OverviewPage() {
       </div>
     );
   }
-  const { account, recentTrades, lastRun, activeStrategy, unreadNotifications, brainLatest, invested, target } = data;
+  const {
+    account,
+    recentTrades,
+    lastRun,
+    activeStrategy,
+    unreadNotifications,
+    brainLatest,
+    invested,
+    target,
+    watchlistCount,
+  } = data;
 
   const status = account.isStopped ? 'Stopped' : account.isPaused ? 'Paused' : 'Live';
   const statusPill =
@@ -88,6 +101,19 @@ export default async function OverviewPage() {
           Live portfolio value syncs from Alpaca on each agent run. Preserve-principal is goal #1.
         </p>
       </section>
+
+      {watchlistCount === 0 && (
+        <Link
+          href="/watchlist"
+          className="card border border-amber-500/40 bg-amber-500/10 text-sm text-amber-200"
+        >
+          <p className="font-semibold">Watchlist is empty</p>
+          <p className="mt-1 text-xs">
+            The agent has no research universe. Tap here to add tickers or load the 29
+            Buffett-style starter stocks in one click.
+          </p>
+        </Link>
+      )}
 
       <Controls
         isPaused={account.isPaused}

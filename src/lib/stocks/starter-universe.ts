@@ -1,0 +1,53 @@
+// Starter universe of 29 Buffett-style names + broad-market ETFs. Seeded from
+// the app ("Load starter universe" on /watchlist) or from the CLI
+// (`npm run db:seed`). The agent can curate, enrich, and extend this over
+// time via the update_stock_fundamentals tool.
+
+export type StarterStock = {
+  symbol: string;
+  name: string;
+  sector: string;
+  industry: string;
+  peRatio: number | null;
+  pbRatio: number | null;
+  dividendYield: number | null;
+  debtToEquity: number | null;
+  returnOnEquity: number | null;
+  grossMarginPct: number | null;
+  moatScore: number;
+  buffettScore: number;
+  notes: string;
+};
+
+export const STARTER_UNIVERSE: StarterStock[] = [
+  { symbol: 'BRK.B', name: 'Berkshire Hathaway', sector: 'Financial Services', industry: 'Diversified', peRatio: 22, pbRatio: 1.5, dividendYield: 0, debtToEquity: 0.2, returnOnEquity: 10, grossMarginPct: 40, moatScore: 95, buffettScore: 95, notes: 'The benchmark. Buffett himself.' },
+  { symbol: 'KO',    name: 'Coca-Cola', sector: 'Consumer Defensive', industry: 'Beverages', peRatio: 25, pbRatio: 10, dividendYield: 3.0, debtToEquity: 1.7, returnOnEquity: 40, grossMarginPct: 60, moatScore: 90, buffettScore: 85, notes: 'Iconic brand, global distribution.' },
+  { symbol: 'AAPL',  name: 'Apple', sector: 'Technology', industry: 'Consumer Electronics', peRatio: 30, pbRatio: 40, dividendYield: 0.5, debtToEquity: 1.5, returnOnEquity: 150, grossMarginPct: 45, moatScore: 88, buffettScore: 80, notes: 'Ecosystem moat; Buffett\'s largest public position.' },
+  { symbol: 'MSFT',  name: 'Microsoft', sector: 'Technology', industry: 'Software', peRatio: 35, pbRatio: 11, dividendYield: 0.7, debtToEquity: 0.3, returnOnEquity: 38, grossMarginPct: 70, moatScore: 90, buffettScore: 78, notes: 'Switching costs + cloud network effects.' },
+  { symbol: 'GOOGL', name: 'Alphabet', sector: 'Communication Services', industry: 'Internet Content', peRatio: 24, pbRatio: 6, dividendYield: 0.4, debtToEquity: 0.1, returnOnEquity: 28, grossMarginPct: 56, moatScore: 85, buffettScore: 75, notes: 'Dominant search; cash machine.' },
+  { symbol: 'V',     name: 'Visa', sector: 'Financial Services', industry: 'Credit Services', peRatio: 30, pbRatio: 14, dividendYield: 0.8, debtToEquity: 0.5, returnOnEquity: 45, grossMarginPct: 97, moatScore: 92, buffettScore: 82, notes: 'Toll road on global payments.' },
+  { symbol: 'MA',    name: 'Mastercard', sector: 'Financial Services', industry: 'Credit Services', peRatio: 33, pbRatio: 60, dividendYield: 0.6, debtToEquity: 2.4, returnOnEquity: 170, grossMarginPct: 100, moatScore: 92, buffettScore: 80, notes: 'Same moat as V, higher leverage.' },
+  { symbol: 'JNJ',   name: 'Johnson & Johnson', sector: 'Healthcare', industry: 'Drug Manufacturers', peRatio: 18, pbRatio: 5, dividendYield: 3.2, debtToEquity: 0.5, returnOnEquity: 23, grossMarginPct: 68, moatScore: 80, buffettScore: 82, notes: 'Dividend aristocrat, diversified healthcare.' },
+  { symbol: 'PG',    name: 'Procter & Gamble', sector: 'Consumer Defensive', industry: 'Household Products', peRatio: 25, pbRatio: 8, dividendYield: 2.4, debtToEquity: 0.7, returnOnEquity: 30, grossMarginPct: 51, moatScore: 82, buffettScore: 80, notes: 'Brand moat, consistent cash.' },
+  { symbol: 'WMT',   name: 'Walmart', sector: 'Consumer Defensive', industry: 'Discount Stores', peRatio: 28, pbRatio: 7, dividendYield: 1.2, debtToEquity: 0.8, returnOnEquity: 18, grossMarginPct: 24, moatScore: 78, buffettScore: 72, notes: 'Scale advantage; e-commerce catching up.' },
+  { symbol: 'COST',  name: 'Costco', sector: 'Consumer Defensive', industry: 'Discount Stores', peRatio: 50, pbRatio: 20, dividendYield: 0.5, debtToEquity: 0.5, returnOnEquity: 30, grossMarginPct: 12, moatScore: 85, buffettScore: 70, notes: 'Membership model, ruthless pricing.' },
+  { symbol: 'HD',    name: 'Home Depot', sector: 'Consumer Cyclical', industry: 'Home Improvement', peRatio: 24, pbRatio: -20, dividendYield: 2.3, debtToEquity: -8, returnOnEquity: 1100, grossMarginPct: 34, moatScore: 80, buffettScore: 72, notes: 'Duopoly with LOW; cyclical.' },
+  { symbol: 'MCD',   name: "McDonald's", sector: 'Consumer Cyclical', industry: 'Restaurants', peRatio: 24, pbRatio: -30, dividendYield: 2.4, debtToEquity: -5, returnOnEquity: -50, grossMarginPct: 57, moatScore: 85, buffettScore: 75, notes: 'Real-estate moat + global brand.' },
+  { symbol: 'PEP',   name: 'PepsiCo', sector: 'Consumer Defensive', industry: 'Beverages', peRatio: 23, pbRatio: 12, dividendYield: 3.4, debtToEquity: 2.5, returnOnEquity: 48, grossMarginPct: 54, moatScore: 85, buffettScore: 80, notes: 'Frito-Lay gives it a broader moat than KO.' },
+  { symbol: 'UNH',   name: 'UnitedHealth', sector: 'Healthcare', industry: 'Healthcare Plans', peRatio: 18, pbRatio: 5, dividendYield: 1.8, debtToEquity: 0.7, returnOnEquity: 24, grossMarginPct: 24, moatScore: 75, buffettScore: 70, notes: 'Scale + data; regulatory risk.' },
+  { symbol: 'XOM',   name: 'ExxonMobil', sector: 'Energy', industry: 'Oil & Gas', peRatio: 12, pbRatio: 2, dividendYield: 3.5, debtToEquity: 0.2, returnOnEquity: 20, grossMarginPct: 33, moatScore: 60, buffettScore: 65, notes: 'Scale, integrated; commodity exposure.' },
+  { symbol: 'CVX',   name: 'Chevron', sector: 'Energy', industry: 'Oil & Gas', peRatio: 13, pbRatio: 1.7, dividendYield: 4.1, debtToEquity: 0.2, returnOnEquity: 15, grossMarginPct: 35, moatScore: 58, buffettScore: 65, notes: 'Buffett favourite; dividend aristocrat.' },
+  { symbol: 'LMT',   name: 'Lockheed Martin', sector: 'Industrials', industry: 'Defense', peRatio: 18, pbRatio: 20, dividendYield: 2.9, debtToEquity: 3.1, returnOnEquity: 85, grossMarginPct: 13, moatScore: 75, buffettScore: 70, notes: 'Dept of Defense customer concentration.' },
+  { symbol: 'ADP',   name: 'Automatic Data Processing', sector: 'Industrials', industry: 'Staffing & Employment', peRatio: 28, pbRatio: 18, dividendYield: 2.3, debtToEquity: 0.7, returnOnEquity: 60, grossMarginPct: 45, moatScore: 78, buffettScore: 75, notes: 'Dividend aristocrat; sticky payroll moat.' },
+  { symbol: 'ABBV',  name: 'AbbVie', sector: 'Healthcare', industry: 'Drug Manufacturers', peRatio: 16, pbRatio: 40, dividendYield: 3.8, debtToEquity: 8, returnOnEquity: 70, grossMarginPct: 70, moatScore: 70, buffettScore: 75, notes: 'Humira cliff behind it; dividend growth.' },
+  { symbol: 'TXN',   name: 'Texas Instruments', sector: 'Technology', industry: 'Semiconductors', peRatio: 28, pbRatio: 11, dividendYield: 2.8, debtToEquity: 0.9, returnOnEquity: 40, grossMarginPct: 62, moatScore: 78, buffettScore: 75, notes: 'Analog chips moat, dividend grower.' },
+  { symbol: 'LOW',   name: "Lowe's", sector: 'Consumer Cyclical', industry: 'Home Improvement', peRatio: 20, pbRatio: -14, dividendYield: 1.8, debtToEquity: -4, returnOnEquity: -200, grossMarginPct: 33, moatScore: 77, buffettScore: 72, notes: 'Second player in HD/LOW duopoly.' },
+  { symbol: 'SPGI',  name: 'S&P Global', sector: 'Financial Services', industry: 'Financial Data', peRatio: 35, pbRatio: 5, dividendYield: 0.8, debtToEquity: 0.6, returnOnEquity: 12, grossMarginPct: 68, moatScore: 88, buffettScore: 78, notes: 'Ratings duopoly with MCO; regulated moat.' },
+  { symbol: 'MCO',   name: "Moody's", sector: 'Financial Services', industry: 'Financial Data', peRatio: 40, pbRatio: 28, dividendYield: 0.8, debtToEquity: 2.3, returnOnEquity: 70, grossMarginPct: 72, moatScore: 90, buffettScore: 80, notes: 'Buffett holding; ratings oligopoly.' },
+  { symbol: 'BLK',   name: 'BlackRock', sector: 'Financial Services', industry: 'Asset Management', peRatio: 22, pbRatio: 3.2, dividendYield: 2.3, debtToEquity: 0.7, returnOnEquity: 15, grossMarginPct: 49, moatScore: 82, buffettScore: 74, notes: 'Largest asset manager; iShares ETFs.' },
+  // Ballast ETFs.
+  { symbol: 'VOO',   name: 'Vanguard S&P 500 ETF', sector: 'ETF', industry: 'Index', peRatio: 22, pbRatio: 4, dividendYield: 1.3, debtToEquity: null, returnOnEquity: null, grossMarginPct: null, moatScore: 60, buffettScore: 70, notes: 'Buffett\'s recommended default. Low cost, diversified.' },
+  { symbol: 'SCHD',  name: 'Schwab U.S. Dividend Equity ETF', sector: 'ETF', industry: 'Index', peRatio: 16, pbRatio: 3, dividendYield: 3.5, debtToEquity: null, returnOnEquity: null, grossMarginPct: null, moatScore: 55, buffettScore: 75, notes: 'Quality dividend-focused index.' },
+  { symbol: 'VIG',   name: 'Vanguard Dividend Appreciation', sector: 'ETF', industry: 'Index', peRatio: 22, pbRatio: 5, dividendYield: 1.8, debtToEquity: null, returnOnEquity: null, grossMarginPct: null, moatScore: 55, buffettScore: 72, notes: 'Dividend growers.' },
+  { symbol: 'VTI',   name: 'Vanguard Total Stock Market', sector: 'ETF', industry: 'Index', peRatio: 21, pbRatio: 4, dividendYield: 1.4, debtToEquity: null, returnOnEquity: null, grossMarginPct: null, moatScore: 58, buffettScore: 68, notes: 'Whole US market in one ticker.' },
+];
