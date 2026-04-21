@@ -22,6 +22,7 @@ import { refreshFundamentalsForSymbol } from '@/lib/data/refresh-fundamentals';
 import { runScreen } from '@/lib/data/screener';
 import { getUpcomingEvents } from '@/lib/data/events';
 import { isInEarningsBlackout } from '@/lib/data/earnings';
+import { checkWashSaleBlock } from '@/lib/data/tax';
 import { evaluateExits } from './exits';
 
 export const TOOL_DEFS: Anthropic.Tool[] = [
@@ -247,7 +248,7 @@ export const TOOL_DEFS: Anthropic.Tool[] = [
   {
     name: 'evaluate_exits',
     description:
-      'Returns a per-open-position exit assessment: { symbol, signal: "hold"|"review"|"trim"|"sell", reason, thesis }. Signals come from the active strategy\'s exit rules (price target, time stop, thesis review, fundamentals deterioration, dividend safety). Earnings blackout converts any "sell" into "review" — you never auto-sell into an earnings release. CALL THIS FIRST every wake-up, before any new-buy research. Process every non-hold signal before considering new positions.',
+      'Returns a per-open-position exit assessment: { symbol, signal: "hold"|"review"|"trim"|"sell", reason, thesis, taxHarvestCandidate, unrealizedLossCents }. Signals come from the active strategy\'s exit rules (price target, time stop, thesis review, fundamentals deterioration, dividend safety). Earnings blackout converts any "sell" into "review" — you never auto-sell into an earnings release. taxHarvestCandidate=true means the position is at a loss, it\'s Q4, and the thesis is already under review — if your review concludes "sell," do it THIS calendar year to claim the loss. NEVER harvest a conviction position just for the write-off. CALL THIS FIRST every wake-up, before any new-buy research. Process every non-hold signal before considering new positions.',
     input_schema: { type: 'object', properties: {}, required: [] },
   },
   {
@@ -488,6 +489,22 @@ async function placeTradeTool(ctx: ToolContext, input: Record<string, unknown>) 
         `place_trade: blocked by earnings blackout — ${blackout.reason}. Wait until after the report. (Sells/trims would have been allowed.)`
       );
     }
+
+    // Wash-sale protection (IRS §1091). If we sold this symbol at a loss
+    // within the last 30 days, rebuying would disallow the loss. Block the
+    // buy to keep our own tax accounting clean. We don't prevent every
+    // possible wash-sale edge case (the IRS rule is symmetric; buying then
+    // selling another lot at a loss within 30 days is harder to pre-empt
+    // and is rare for a long-term value strategy).
+    const washSale = await checkWashSaleBlock(ctx.userId, symbol);
+    if (washSale.blocked) {
+      log.info('trade.blocked_by_wash_sale', {
+        userId: ctx.userId,
+        symbol,
+        recentSellTradeId: washSale.recentSell?.tradeId,
+      });
+      throw new Error(`place_trade: ${washSale.reason}`);
+    }
   }
 
   // Atomically: take a per-user write lock, re-read pause/stop + cap under the
@@ -600,6 +617,41 @@ async function placeTradeTool(ctx: ToolContext, input: Record<string, unknown>) 
       // Notification failure shouldn't fail the trade — the trade is real.
       log.error('trade.notification_failed', notifErr, { tradeId: trade.id });
     });
+
+  // Record realized P/L on sells so tax-loss-harvest and wash-sale logic
+  // has data to reason against. Estimated at submit time using latestPrice
+  // vs. the Position row's stored avg cost — the broker's actual fill may
+  // differ by a few cents but this is close enough for §1091 gain/loss
+  // classification. The IRS-canonical number comes from Alpaca's 1099-B.
+  if (p.side === 'sell') {
+    try {
+      const [position, price] = await Promise.all([
+        prisma.position.findUnique({
+          where: { userId_symbol: { userId: ctx.userId, symbol } },
+          select: { avgCostCents: true },
+        }),
+        getLatestPrice(symbol).catch(() => null),
+      ]);
+      if (position && price != null && price > 0) {
+        // Position.avgCostCents is per-share (matches Alpaca's avg_entry_price).
+        const avgCostPerShareCents = Number(position.avgCostCents);
+        const totalCostBasisCents = avgCostPerShareCents * p.qty;
+        const totalProceedsCents = price * p.qty * 100;
+        const pnlCents = BigInt(Math.round(totalProceedsCents - totalCostBasisCents));
+        await prisma.trade.update({
+          where: { id: trade.id },
+          data: {
+            fillPriceCents: BigInt(Math.round(price * 100)),
+            realizedPnlCents: pnlCents,
+            closedAt: new Date(),
+          },
+        });
+      }
+    } catch (pnlErr) {
+      // P/L recording is informational — don't fail a successful sell on it.
+      log.error('trade.pnl_record_failed', pnlErr, { tradeId: trade.id });
+    }
+  }
 
   // Stamp thesis metadata onto the Position row (buys only). We copy the
   // holding-period bias from the active strategy so the exit evaluator can

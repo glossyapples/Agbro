@@ -19,6 +19,7 @@
 import { prisma } from '@/lib/db';
 import { isInEarningsBlackout } from '@/lib/data/earnings';
 import { getPositions, getLatestPrice } from '@/lib/alpaca';
+import { isHarvestSeason, MIN_HARVEST_LOSS_USD, MIN_HARVEST_HELD_DAYS } from '@/lib/data/tax';
 import { log } from '@/lib/logger';
 
 export type ExitSignal = 'hold' | 'review' | 'trim' | 'sell';
@@ -32,6 +33,14 @@ export type ExitAssessment = {
   trimQty?: number;
   // Original thesis surfaced back to the agent for quick context.
   thesis?: string | null;
+  // Tax-loss-harvest flag. True when: (a) it's Q4, (b) the position is at
+  // a meaningful unrealised loss, (c) it's been held long enough to dodge
+  // a buy-side wash-sale, AND (d) the thesis is already flagged for review.
+  // Advisory only — the primary signal tells the agent what to do; this is
+  // context: "if you're going to sell, Dec 31 beats Jan 1 for taxes."
+  // NEVER harvest a conviction position just for the write-off.
+  taxHarvestCandidate?: boolean;
+  unrealizedLossCents?: bigint | null;
 };
 
 // Strategy rules shape. All fields optional with sensible defaults — a
@@ -211,6 +220,41 @@ export async function evaluateExits(userId: string): Promise<ExitAssessment[]> {
     // moatBreakExit is qualitative → fully relies on the thesis review timer
     // above. No deterministic moat-erosion signal we can compute cheaply.
 
+    // Tax-loss-harvest check (Q4-only). Advisory flag layered on top of the
+    // primary signal. Fires when we're already considering exiting (thesis
+    // review due) AND the position sits on a meaningful unrealised loss AND
+    // we've held long enough to avoid a buy-side wash-sale. The agent's job:
+    // if the thesis review concludes the position should be sold, sell it
+    // NOW (this tax year) instead of Jan 1 to capture the loss. If the
+    // thesis still holds, DO NOT harvest just for the write-off.
+    let taxHarvestCandidate = false;
+    let unrealizedLossCents: bigint | null = null;
+    if (
+      isHarvestSeason(new Date(now)) &&
+      dbPos &&
+      dbPos.openedAt &&
+      dbPos.thesisReviewDueAt &&
+      dbPos.thesisReviewDueAt.getTime() <= now
+    ) {
+      const heldDays = (now - dbPos.openedAt.getTime()) / 86_400_000;
+      if (heldDays >= MIN_HARVEST_HELD_DAYS) {
+        const avgCostPerShare = Number(dbPos.avgCostCents) / 100;
+        const currentPrice = await getLatestPrice(symbol).catch(() => null);
+        if (currentPrice != null && currentPrice > 0 && avgCostPerShare > 0) {
+          const unrealizedLossUsd = (avgCostPerShare - currentPrice) * qty;
+          if (unrealizedLossUsd >= MIN_HARVEST_LOSS_USD) {
+            taxHarvestCandidate = true;
+            unrealizedLossCents = BigInt(Math.round(unrealizedLossUsd * 100));
+            log.info('exits.harvest_candidate', {
+              symbol,
+              unrealizedLossUsd: Math.round(unrealizedLossUsd),
+              heldDays: Math.floor(heldDays),
+            });
+          }
+        }
+      }
+    }
+
     // Earnings-blackout suppression: never AUTO-SELL into a pending earnings
     // release. Convert sell → review so the agent has to decide.
     if (signals.some((s) => s.signal === 'sell')) {
@@ -228,17 +272,30 @@ export async function evaluateExits(userId: string): Promise<ExitAssessment[]> {
 
     // Pick the highest-priority signal to surface. Order: sell > trim > review.
     if (signals.length === 0) {
-      out.push({ symbol, signal: 'hold', reason: 'no exit triggers fired', thesis });
+      out.push({
+        symbol,
+        signal: 'hold',
+        reason: 'no exit triggers fired',
+        thesis,
+        taxHarvestCandidate,
+        unrealizedLossCents,
+      });
       continue;
     }
     signals.sort((a, b) => priority(b.signal) - priority(a.signal));
     const top = signals[0];
+    // Append a harvest hint to the reason so the agent sees it inline.
+    const reason = taxHarvestCandidate
+      ? `${top.reason} — ALSO harvest candidate: $${Math.abs(Number(unrealizedLossCents) / 100).toFixed(0)} unrealised loss, Q4 tax deadline. If the review concludes sell, sell this year.`
+      : top.reason;
     out.push({
       symbol,
       signal: top.signal,
-      reason: top.reason,
+      reason,
       trimQty: top.trimQty,
       thesis,
+      taxHarvestCandidate,
+      unrealizedLossCents,
     });
   }
 
