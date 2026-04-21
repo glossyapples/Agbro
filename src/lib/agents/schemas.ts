@@ -45,3 +45,17 @@ export const UpdateStockFundamentalsInput = z.object({
 export type PlaceTradeInput = z.infer<typeof PlaceTradeInput>;
 export type SizePositionInput = z.infer<typeof SizePositionInput>;
 export type UpdateStockFundamentalsInput = z.infer<typeof UpdateStockFundamentalsInput>;
+
+// Universe screener. The agent passes in criteria; the tool checks a 7-day
+// cooldown, queries Perplexity for matches excluding anything already in the
+// DB, enriches hits with EDGAR fundamentals, and stores them as Tier 2
+// candidates for the user to approve or reject. See src/lib/data/screener.ts
+// for the full contract + cadence rationale.
+export const ScreenUniverseInput = z.object({
+  minRoePct: z.number().finite().min(0).max(200).optional(),
+  maxPeRatio: z.number().finite().positive().max(200).optional(),
+  minDividendYieldPct: z.number().finite().min(0).max(50).optional(),
+  preferredSectors: z.array(z.string().max(64)).max(12).optional(),
+  thesisHint: z.string().max(500).optional(),
+});
+export type ScreenUniverseInput = z.infer<typeof ScreenUniverseInput>;

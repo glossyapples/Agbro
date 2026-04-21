@@ -292,6 +292,17 @@ model Stock {
   buffettScore   Int?     // 0-100 internal, Buffett-style fit
   notes          String?  @db.Text
   onWatchlist    Boolean  @default(false)
+  // Three-tier universe. Rows with onWatchlist=true are the user-approved
+  // hunting ground; rows with onWatchlist=false + candidateSource set are
+  // agent-discovered Tier 2 candidates pending user approval or rejection.
+  //   null            → the original 29-name seed universe
+  //   'screener'      → found by screen_universe, pending user promote/reject
+  //   'agent'         → added manually by the agent via update_stock_fundamentals
+  //   'rejected'      → user said no; screener won't re-surface
+  //   'watchlist'     → user promoted to main watchlist (onWatchlist also true)
+  candidateSource String?
+  candidateNotes  String?  @db.Text
+  discoveredAt    DateTime?
   lastAnalyzedAt DateTime?
   updatedAt      DateTime @updatedAt
   prices         PriceSnapshot[]

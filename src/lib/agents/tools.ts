@@ -17,8 +17,9 @@ import { googleSearch } from '@/lib/research/google';
 import { toCents } from '@/lib/money';
 import { startOfDayET } from '@/lib/time';
 import { log } from '@/lib/logger';
-import { PlaceTradeInput, SizePositionInput, UpdateStockFundamentalsInput } from './schemas';
+import { PlaceTradeInput, ScreenUniverseInput, SizePositionInput, UpdateStockFundamentalsInput } from './schemas';
 import { refreshFundamentalsForSymbol } from '@/lib/data/refresh-fundamentals';
+import { runScreen } from '@/lib/data/screener';
 
 export const TOOL_DEFS: Anthropic.Tool[] = [
   {
@@ -208,6 +209,39 @@ export const TOOL_DEFS: Anthropic.Tool[] = [
     },
   },
   {
+    name: 'screen_universe',
+    description:
+      "Hunt OUTSIDE the current watchlist for fresh value-investing candidates. " +
+      "Rate-limited server-side to once per 7 days — if you call it more often it returns " +
+      "status='cooldown_active' with no new work done. Use it when: " +
+      "(a) it's the first wake-up of a new week AND the watchlist has no MoS ≥ 20% opportunities, " +
+      "OR (b) the last screen is older than 14 days AND the agent is sitting on cash with nothing to do. " +
+      "The tool calls Perplexity for candidates matching criteria, excludes everything already in " +
+      "the DB (watchlist + prior candidates + rejected names), enriches hits with SEC EDGAR " +
+      "fundamentals, and stores up to 5 as Tier 2 candidates for the USER to approve or reject. " +
+      "You CANNOT promote candidates to the main watchlist yourself — that's user-gated. " +
+      "You CAN research and trade Tier 2 candidates after they're approved.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        minRoePct: { type: 'number', description: 'Minimum return on equity %. Default 15.' },
+        maxPeRatio: { type: 'number', description: 'Maximum trailing P/E. Default 22.' },
+        minDividendYieldPct: { type: 'number', description: 'Minimum dividend yield %. Default 0.' },
+        preferredSectors: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Sectors to favour. Empty = any sector.',
+        },
+        thesisHint: {
+          type: 'string',
+          description:
+            "Optional free-form hint steering the search — e.g. \"dividend aristocrats trading below 10y avg P/E\" or \"quality names that sold off on recent earnings misses\".",
+        },
+      },
+      required: [],
+    },
+  },
+  {
     name: 'place_trade',
     description:
       'Submit an order to Alpaca. Requires symbol, side, qty, bullCase, bearCase, thesis, confidence (0..1), intrinsicValuePerShare, marginOfSafetyPct. Server re-validates ALL safety rails before routing.',
@@ -317,6 +351,15 @@ export async function runTool(
       return updateStockFundamentalsTool(input);
     case 'refresh_fundamentals':
       return refreshFundamentalsForSymbol(String(input.symbol));
+    case 'screen_universe': {
+      const parsed = ScreenUniverseInput.safeParse(input);
+      if (!parsed.success) {
+        throw new Error(`screen_universe: invalid input — ${parsed.error.message}`);
+      }
+      // Agent path never bypasses the cooldown — only the user-triggered
+      // /api/candidates/screen endpoint can.
+      return runScreen(parsed.data);
+    }
     case 'finalize_run':
       return finalizeRunTool(ctx, input);
     default:

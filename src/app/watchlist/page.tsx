@@ -8,10 +8,13 @@ export const runtime = 'nodejs';
 export default async function WatchlistPage() {
   await requirePageUser('/watchlist');
 
-  const stocks = await prisma.stock.findMany({
-    where: { onWatchlist: true },
-    orderBy: [{ buffettScore: 'desc' }, { symbol: 'asc' }],
-  });
+  const [stocks, candidateCount] = await Promise.all([
+    prisma.stock.findMany({
+      where: { onWatchlist: true },
+      orderBy: [{ buffettScore: 'desc' }, { symbol: 'asc' }],
+    }),
+    prisma.stock.count({ where: { candidateSource: 'screener' } }),
+  ]);
 
   // Strip Prisma BigInt + Date types for the client boundary.
   const initial = stocks.map((s) => ({
@@ -40,6 +43,19 @@ export default async function WatchlistPage() {
           ← Strategy
         </Link>
       </header>
+
+      <Link
+        href="/candidates"
+        className={`card text-center text-sm ${
+          candidateCount > 0
+            ? 'border border-brand-500/40 bg-brand-500/5 text-brand-300'
+            : 'text-brand-400'
+        }`}
+      >
+        {candidateCount > 0
+          ? `${candidateCount} candidate${candidateCount === 1 ? '' : 's'} pending review →`
+          : 'Candidates (screener finds new names) →'}
+      </Link>
 
       <WatchlistManager initial={initial} />
     </div>

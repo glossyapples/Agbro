@@ -53,7 +53,7 @@ async function getOverview() {
   const user = await maybeCurrentUser();
   if (!user || !user.account) return null;
 
-  const [recentTrades, lastRun, activeStrategy, notifications, brainLatest, watchlistCount, chart] =
+  const [recentTrades, lastRun, activeStrategy, notifications, brainLatest, watchlistCount, candidateCount, chart] =
     await Promise.all([
       prisma.trade.findMany({
         where: { userId: user.id },
@@ -71,6 +71,7 @@ async function getOverview() {
         orderBy: { createdAt: 'desc' },
       }),
       prisma.stock.count({ where: { onWatchlist: true } }),
+      prisma.stock.count({ where: { candidateSource: 'screener' } }),
       getInitialChartPayload(),
     ]);
 
@@ -88,6 +89,7 @@ async function getOverview() {
     unreadNotifications: notifications,
     brainLatest,
     watchlistCount,
+    candidateCount,
     target,
     chart,
   };
@@ -114,6 +116,7 @@ export default async function OverviewPage() {
     brainLatest,
     target,
     watchlistCount,
+    candidateCount,
     chart,
   } = data;
 
@@ -159,6 +162,20 @@ export default async function OverviewPage() {
           <p className="mt-1 text-xs">
             The agent has no research universe. Tap here to add tickers or load the 29
             Buffett-style starter stocks in one click.
+          </p>
+        </Link>
+      )}
+
+      {candidateCount > 0 && (
+        <Link
+          href="/candidates"
+          className="card border border-brand-500/40 bg-brand-500/5 text-sm text-brand-300"
+        >
+          <p className="font-semibold">
+            {candidateCount} candidate{candidateCount === 1 ? '' : 's'} pending review
+          </p>
+          <p className="mt-1 text-xs text-ink-300">
+            The screener found new names outside your watchlist. Tap to approve or reject.
           </p>
         </Link>
       )}
