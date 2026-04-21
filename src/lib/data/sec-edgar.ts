@@ -15,9 +15,13 @@
 
 import { log } from '@/lib/logger';
 
+// SEC requires a descriptive User-Agent with a contact email per their fair-
+// use policy. MUST be pure ASCII — HTTP header values are ByteStrings, any
+// non-ASCII character (em-dash, fancy quotes, etc.) blows up the Headers
+// constructor before the request is made.
 const USER_AGENT =
   process.env.AGBRO_SEC_USER_AGENT ??
-  'AgBro/1.0 (agbro-trading@example.com) — value-investing agent';
+  'AgBro/1.0 (agbro-trading@example.com) value-investing agent';
 
 const TICKERS_URL = 'https://www.sec.gov/files/company_tickers.json';
 const FACTS_URL = (cik10: string) =>
