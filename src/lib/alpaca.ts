@@ -106,3 +106,103 @@ export async function isMarketOpen(): Promise<boolean> {
   const clock = await a.getClock();
   return Boolean(clock.is_open);
 }
+
+// ─── Performance charting ────────────────────────────────────────────────
+// Alpaca exposes the exact equity-over-time series it shows in its own UI
+// via /v2/account/portfolio/history. We read from there (instead of
+// snapshotting ourselves) because the broker is the source of truth for
+// unrealized P&L and intraday marks.
+
+export type PortfolioHistoryPoint = {
+  timestampMs: number;
+  equity: number;
+  profitLoss: number;
+  profitLossPct: number;
+};
+
+export type PortfolioHistoryRange = '1D' | '1W' | '1M' | '3M' | 'YTD' | '1Y' | 'ALL';
+
+// Alpaca period strings and bar timeframe for each UX range. YTD isn't a
+// native Alpaca period, so we compute the start date ourselves and request
+// a date-bounded history instead.
+const RANGE_PARAMS: Record<PortfolioHistoryRange, { period?: string; timeframe: string; ytd?: boolean }> = {
+  '1D':  { period: '1D',  timeframe: '5Min'  },
+  '1W':  { period: '1W',  timeframe: '1H'    },
+  '1M':  { period: '1M',  timeframe: '1H'    },
+  '3M':  { period: '3M',  timeframe: '1D'    },
+  'YTD': {                 timeframe: '1D', ytd: true },
+  '1Y':  { period: '1A',  timeframe: '1D'    },
+  'ALL': { period: 'all', timeframe: '1D'    },
+};
+
+export async function getPortfolioHistory(
+  range: PortfolioHistoryRange
+): Promise<PortfolioHistoryPoint[]> {
+  const a = getAlpaca();
+  const cfg = RANGE_PARAMS[range];
+  const params: Record<string, string | number | boolean> = {
+    timeframe: cfg.timeframe,
+    extended_hours: true,
+  };
+  if (cfg.period) params.period = cfg.period;
+  if (cfg.ytd) {
+    const now = new Date();
+    const jan1 = new Date(Date.UTC(now.getUTCFullYear(), 0, 1));
+    params.date_start = jan1.toISOString().slice(0, 10);
+  }
+  // Alpaca SDK's getPortfolioHistory accepts a generic options object.
+  const raw = (await (a as unknown as {
+    getPortfolioHistory: (opts: Record<string, unknown>) => Promise<{
+      timestamp: number[];
+      equity: (number | null)[];
+      profit_loss: (number | null)[];
+      profit_loss_pct: (number | null)[];
+      base_value?: number;
+    }>;
+  }).getPortfolioHistory(params));
+
+  const n = raw.timestamp.length;
+  const out: PortfolioHistoryPoint[] = [];
+  for (let i = 0; i < n; i++) {
+    const eq = raw.equity[i];
+    if (eq == null) continue; // Alpaca sends nulls for gaps (weekends, halted)
+    out.push({
+      timestampMs: raw.timestamp[i] * 1000, // Alpaca returns seconds
+      equity: eq,
+      profitLoss: raw.profit_loss[i] ?? 0,
+      profitLossPct: (raw.profit_loss_pct[i] ?? 0) * 100, // fraction → %
+    });
+  }
+  return out;
+}
+
+// Historical bar fetcher — used for the SPY benchmark overlay. Uses the
+// free Alpaca IEX feed; fine for a smoothed benchmark line.
+export type Bar = { timestampMs: number; close: number };
+
+export async function getBars(
+  symbol: string,
+  timeframe: string,
+  startMs: number,
+  endMs: number = Date.now()
+): Promise<Bar[]> {
+  const a = getAlpaca();
+  const bars: Bar[] = [];
+  // The SDK returns an async iterable of bars.
+  const iter = (a as unknown as {
+    getBarsV2: (sym: string, opts: Record<string, unknown>) => AsyncIterable<{
+      Timestamp: string;
+      ClosePrice: number;
+    }>;
+  }).getBarsV2(symbol, {
+    start: new Date(startMs).toISOString(),
+    end: new Date(endMs).toISOString(),
+    timeframe,
+    feed: 'iex',
+    limit: 10000,
+  });
+  for await (const b of iter) {
+    bars.push({ timestampMs: new Date(b.Timestamp).getTime(), close: b.ClosePrice });
+  }
+  return bars;
+}

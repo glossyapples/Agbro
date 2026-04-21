@@ -4,12 +4,56 @@ import { maybeCurrentUser } from '@/lib/auth';
 import { formatUsd, formatPct } from '@/lib/money';
 import { Controls } from '@/components/Controls';
 import { RunAgentButton } from '@/components/RunAgentButton';
+import { PerformanceChart } from '@/components/PerformanceChart';
+import { getPortfolioHistory, getBars } from '@/lib/alpaca';
+
+// Server-side fetch of the initial chart payload so the hero card paints
+// on first byte — no loading spinner on page load. Default range is 1M,
+// which gives a natural first-day view (mostly empty → fills as the agent
+// trades). Alpaca failures degrade to an empty payload; the component
+// handles that with a "waiting for data" state.
+async function getInitialChartPayload() {
+  try {
+    const portfolio = await getPortfolioHistory('1M').catch(() => []);
+    if (portfolio.length === 0) {
+      return { range: '1M' as const, summary: null, portfolio: [], spy: [] };
+    }
+    const basis = portfolio[0].equity;
+    const portfolioSeries = portfolio.map((p) => ({
+      t: p.timestampMs,
+      v: p.equity,
+      pct: basis > 0 ? ((p.equity - basis) / basis) * 100 : 0,
+    }));
+    const startMs = portfolio[0].timestampMs;
+    const endMs = portfolio[portfolio.length - 1].timestampMs;
+    const bars = await getBars('SPY', '1Hour', startMs, endMs).catch(() => []);
+    const spyBasis = bars[0]?.close ?? null;
+    const spySeries = bars.map((b) => ({
+      t: b.timestampMs,
+      pct: spyBasis && spyBasis > 0 ? ((b.close - spyBasis) / spyBasis) * 100 : 0,
+    }));
+    const last = portfolio[portfolio.length - 1];
+    return {
+      range: '1M' as const,
+      summary: {
+        currentEquity: last.equity,
+        rangePnl: last.equity - basis,
+        rangePnlPct: basis > 0 ? ((last.equity - basis) / basis) * 100 : 0,
+        spyPnlPct: spySeries[spySeries.length - 1]?.pct ?? null,
+      },
+      portfolio: portfolioSeries,
+      spy: spySeries,
+    };
+  } catch {
+    return { range: '1M' as const, summary: null, portfolio: [], spy: [] };
+  }
+}
 
 async function getOverview() {
   const user = await maybeCurrentUser();
   if (!user || !user.account) return null;
 
-  const [recentTrades, lastRun, activeStrategy, notifications, brainLatest, watchlistCount] =
+  const [recentTrades, lastRun, activeStrategy, notifications, brainLatest, watchlistCount, chart] =
     await Promise.all([
       prisma.trade.findMany({
         where: { userId: user.id },
@@ -27,8 +71,11 @@ async function getOverview() {
         orderBy: { createdAt: 'desc' },
       }),
       prisma.stock.count({ where: { onWatchlist: true } }),
+      getInitialChartPayload(),
     ]);
 
+  // Numeric target (invested principal × (1 + expectedAnnualPct / 100)) for
+  // the scalar row next to the chart.
   const invested = Number(user.account.depositedCents) / 100;
   const target = invested * (1 + user.account.expectedAnnualPct / 100);
 
@@ -41,8 +88,8 @@ async function getOverview() {
     unreadNotifications: notifications,
     brainLatest,
     watchlistCount,
-    invested,
     target,
+    chart,
   };
 }
 
@@ -65,9 +112,9 @@ export default async function OverviewPage() {
     activeStrategy,
     unreadNotifications,
     brainLatest,
-    invested,
     target,
     watchlistCount,
+    chart,
   } = data;
 
   const status = account.isStopped ? 'Stopped' : account.isPaused ? 'Paused' : 'Live';
@@ -84,22 +131,23 @@ export default async function OverviewPage() {
         <span className={statusPill}>{status}</span>
       </header>
 
+      <PerformanceChart initial={chart} />
+
       <section className="card">
-        <p className="stat-label">Invested principal</p>
-        <p className="stat-value">{formatUsd(account.depositedCents)}</p>
-        <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
+        <div className="grid grid-cols-3 gap-3 text-sm">
           <div>
-            <p className="stat-label">Target ({formatPct(account.expectedAnnualPct)} / yr)</p>
+            <p className="stat-label">Principal</p>
+            <p className="text-lg font-semibold text-ink-50">{formatUsd(account.depositedCents)}</p>
+          </div>
+          <div>
+            <p className="stat-label">Target ({formatPct(account.expectedAnnualPct)}/yr)</p>
             <p className="text-lg font-semibold text-brand-400">{formatUsd(BigInt(Math.round(target * 100)))}</p>
           </div>
           <div>
             <p className="stat-label">Risk</p>
-            <p className="text-lg font-semibold text-ink-100 capitalize">{account.riskTolerance}</p>
+            <p className="text-lg font-semibold capitalize text-ink-100">{account.riskTolerance}</p>
           </div>
         </div>
-        <p className="mt-3 text-xs text-ink-400">
-          Live portfolio value syncs from Alpaca on each agent run. Preserve-principal is goal #1.
-        </p>
       </section>
 
       {watchlistCount === 0 && (
