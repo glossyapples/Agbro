@@ -52,9 +52,11 @@ export type ScreenResult = {
   candidates: Array<{
     symbol: string;
     name: string | null;
+    description: string | null;
     thesis: string;
     fundamentalsFetched: boolean;
     missingFields: string[];
+    autoPromoted: boolean;
   }>;
   cooldownDays: number;
   error?: string;
@@ -94,19 +96,83 @@ const NOT_TICKERS = new Set([
   'MOAT', 'MOS',
 ]);
 
-function extractCandidateTickers(text: string, exclude: Set<string>): string[] {
-  const found = new Set<string>();
-  for (const m of text.matchAll(TICKER_RE)) {
-    const t = m[1].toUpperCase();
-    if (NOT_TICKERS.has(t)) continue;
-    if (exclude.has(t)) continue;
-    if (t.length < 2) continue; // single-letter tickers exist (F, T) but
-                                // are rare enough that this filter trades
-                                // a small recall cost for much higher
-                                // precision on noisy Perplexity responses
-    found.add(t);
+export type ParsedCandidate = {
+  symbol: string;
+  name: string | null;
+  description: string | null;
+  thesis: string;
+};
+
+// Line-based parser. The screener system prompt asks for
+//   TICKER | Company Name | What it does | Thesis
+// one per line, which this function parses natively. When the model reverts
+// to prose (old em-dash format or loose markdown), we fall back to capturing
+// just the ticker + whatever sentence mentions it. That keeps the screener
+// robust across Perplexity model drift.
+function parseCandidates(text: string, exclude: Set<string>): ParsedCandidate[] {
+  const seen = new Set<string>();
+  const out: ParsedCandidate[] = [];
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+
+  for (const raw of lines) {
+    const line = raw
+      .replace(/^[-*•>\s]+/, '')
+      .replace(/^\*\*+|\*\*+$/g, '')
+      .trim();
+    const m = line.match(/^([A-Z]{2,5}(?:[.\-][A-Z])?)\b/);
+    if (!m) continue;
+    const symbol = m[1].toUpperCase();
+    if (NOT_TICKERS.has(symbol)) continue;
+    if (exclude.has(symbol)) continue;
+    if (seen.has(symbol)) continue;
+
+    const rest = line
+      .slice(m[0].length)
+      .replace(/^\s*[:\-—|]+\s*/, '')
+      .trim();
+
+    let name: string | null = null;
+    let description: string | null = null;
+    let thesis = rest;
+
+    const pipeParts = rest.split(/\s*\|\s*/).map((s) => s.trim()).filter(Boolean);
+    if (pipeParts.length >= 3) {
+      name = pipeParts[0] || null;
+      description = pipeParts[1] || null;
+      thesis = pipeParts.slice(2).join(' | ');
+    } else if (pipeParts.length === 2) {
+      // Name + thesis, no description
+      name = pipeParts[0] || null;
+      thesis = pipeParts[1];
+    } else {
+      // No pipes — try em-dash / hyphen split for "Name — thesis" form
+      const dashSplit = rest.split(/\s+[—–]\s+/);
+      if (dashSplit.length >= 2) {
+        name = dashSplit[0] || null;
+        thesis = dashSplit.slice(1).join(' — ');
+      }
+    }
+
+    seen.add(symbol);
+    out.push({ symbol, name, description, thesis: thesis || rest || '' });
   }
-  return [...found];
+
+  // If line-based parsing found nothing (Perplexity returned a paragraph),
+  // fall back to the old regex-over-whole-text approach. Still better than
+  // returning zero candidates.
+  if (out.length === 0) {
+    for (const m of text.matchAll(TICKER_RE)) {
+      const symbol = m[1].toUpperCase();
+      if (NOT_TICKERS.has(symbol)) continue;
+      if (exclude.has(symbol)) continue;
+      if (seen.has(symbol)) continue;
+      if (symbol.length < 2) continue;
+      seen.add(symbol);
+      out.push({ symbol, name: null, description: null, thesis: '' });
+    }
+  }
+
+  return out;
 }
 
 // -------------------- Screen --------------------
@@ -115,7 +181,32 @@ export type ScreenOptions = {
   // Bypass the 7-day cooldown. Used by the user-triggered /candidates
   // manual refresh; NEVER passed from the agent path.
   bypassCooldown?: boolean;
+  // When true, candidates that clear the high-conviction bar are promoted
+  // to the watchlist automatically (Account.autoPromoteCandidates). Still
+  // written into the Stock table as screener rows first so they get the
+  // usual fundamentals + thesis; the flip to onWatchlist=true happens after
+  // fundamentals land. If false, every candidate waits for user review.
+  autoPromoteHighConviction?: boolean;
 };
+
+// High-conviction bar for auto-promote. All four must pass, and we must have
+// real EDGAR data (never auto-promote on fabricated seed numbers). Thresholds
+// are Buffett-style strict so the bar only trips on clearly durable names.
+//   - ROE ≥ criteria minRoePct + 5 (ex: 15 → 20)
+//   - Debt/Equity ≤ 1.0 (low leverage)
+//   - Gross margin ≥ 35% (pricing power / moat signal)
+//   - 5y EPS growth ≥ 5% (growing business, not melting ice cube)
+function passesHighConvictionBar(
+  snap: { returnOnEquityPct: number | null; debtToEquity: number | null; grossMarginPct: number | null; epsGrowthPct5y: number | null } | null,
+  minRoePct: number
+): boolean {
+  if (!snap) return false;
+  if (snap.returnOnEquityPct == null || snap.returnOnEquityPct < minRoePct + 5) return false;
+  if (snap.debtToEquity == null || snap.debtToEquity > 1.0) return false;
+  if (snap.grossMarginPct == null || snap.grossMarginPct < 35) return false;
+  if (snap.epsGrowthPct5y == null || snap.epsGrowthPct5y < 5) return false;
+  return true;
+}
 
 export async function runScreen(
   criteria: ScreenCriteria,
@@ -163,7 +254,7 @@ export async function runScreen(
   // Diagnostic trail: the whole point of adding these is so that when a
   // screen returns zero candidates we can tell *why* — did Perplexity return
   // prose with no tickers, did every ticker land in the exclude set, or
-  // did the regex miss the format?
+  // did the parser miss the format?
   const rawMatches = [...perplexity.summary.matchAll(TICKER_RE)].map((m) =>
     m[1].toUpperCase()
   );
@@ -177,17 +268,16 @@ export async function runScreen(
     excludeSize: exclude.size,
   });
 
-  const tickers = extractCandidateTickers(perplexity.summary, exclude).slice(
+  const parsed = parseCandidates(perplexity.summary, exclude).slice(
     0,
     MAX_CANDIDATES_PER_SCREEN
   );
   log.info('screener.candidates_after_filter', {
-    keptCount: tickers.length,
-    kept: tickers,
-    droppedByFilter: uniqueRaw.filter((t) => !tickers.includes(t)).slice(0, 40),
+    keptCount: parsed.length,
+    kept: parsed.map((p) => p.symbol),
   });
 
-  if (tickers.length === 0) {
+  if (parsed.length === 0) {
     return {
       status: 'no_candidates',
       daysSinceLastScreen: cooldown.daysSinceLastScreen,
@@ -199,22 +289,34 @@ export async function runScreen(
   // For each extracted ticker, enrich with EDGAR + persist as a Tier 2
   // candidate. Sequential to stay polite vs. SEC's rate limit.
   const results: ScreenResult['candidates'] = [];
-  for (const symbol of tickers) {
+  for (const p of parsed) {
+    const { symbol } = p;
     const snap = await fetchFundamentals(symbol).catch(() => null);
-    // Per-candidate thesis: grab the sentence(s) mentioning this ticker
-    // from the Perplexity response so the user has context at review time.
-    const thesis = extractThesisFor(symbol, perplexity.summary);
+    // Prefer the parsed thesis from the pipe-formatted line; fall back to
+    // extracting the sentence mentioning this ticker if the parser couldn't
+    // pull a thesis field (e.g. the model returned prose).
+    const thesis = p.thesis || extractThesisFor(symbol, perplexity.summary);
+    const description = p.description;
+    const displayName = p.name ?? snap?.symbol ?? symbol;
+
+    const highConviction =
+      !!options.autoPromoteHighConviction &&
+      snap != null &&
+      passesHighConvictionBar(snap, c.minRoePct);
 
     await prisma.stock.upsert({
       where: { symbol },
       create: {
         symbol,
-        name: symbol, // best-effort; EDGAR refresh below will overwrite if
-                      // we actually get company metadata back
-        onWatchlist: false,
-        candidateSource: 'screener',
+        // Use the model's company name if we parsed one, else the ticker —
+        // a later EDGAR refresh can overwrite with the canonical filing name.
+        name: displayName,
+        onWatchlist: highConviction,
+        candidateSource: highConviction ? 'watchlist' : 'screener',
         candidateNotes: thesis,
+        businessDescription: description,
         discoveredAt: new Date(),
+        autoPromotedAt: highConviction ? new Date() : null,
         lastAnalyzedAt: snap ? new Date() : null,
         ...(snap
           ? {
@@ -233,22 +335,26 @@ export async function runScreen(
       },
       update: {
         // Only touch candidate metadata; preserve anything user or prior
-        // runs have set.
+        // runs have set. Do NOT auto-promote existing rows — if a name is
+        // already in the DB, there's a reason (including a past user reject).
         candidateSource: 'screener',
         candidateNotes: thesis,
+        businessDescription: description,
         discoveredAt: new Date(),
       },
     });
 
     results.push({
       symbol,
-      name: snap?.symbol ?? symbol,
+      name: displayName,
+      description,
       thesis,
       fundamentalsFetched: snap != null,
       missingFields: snap?.missingFields ?? [],
+      autoPromoted: highConviction,
     });
 
-    log.info('screener.candidate_added', {
+    log.info(highConviction ? 'screener.candidate_auto_promoted' : 'screener.candidate_added', {
       symbol,
       fundamentalsFetched: snap != null,
     });
@@ -267,10 +373,11 @@ export async function runScreen(
 // Screener-specific system prompt. The default perplexitySearch prompt wants
 // a Bull/Bear narrative per ticker, which pushes the model toward prose and
 // sometimes omits symbols in a machine-readable form. Here we want the exact
-// opposite: a tight, line-per-ticker list so the regex extractor sees every
-// pick it should.
+// opposite: a tight pipe-separated line per ticker so the parser can recover
+// (a) the ticker, (b) the company name, (c) a plain-English "what it does"
+// description, and (d) the value thesis.
 const SCREENER_SYSTEM =
-  'You are a stock screener that returns NEW US common stock tickers matching a user\'s value-investing criteria. Your entire response MUST be a plain list where each line starts with an uppercase ticker symbol followed by a colon. Example: "COST: Costco Wholesale — rare retailer with a moat from membership flywheel." Do not add preambles, headings, or bullet points. Never wrap tickers in markdown. Respect any exclusion list the user supplies.';
+  'You are a stock screener that returns NEW US common stock tickers matching a user\'s value-investing criteria. Your ENTIRE response MUST be a plain list where EACH line has exactly this format: TICKER | Company Name | What the company does in one plain-English sentence (avoid finance jargon) | One-sentence value thesis (why it looks cheap today or why the moat is underappreciated). Example: "COST | Costco Wholesale | Operates membership-only warehouse stores selling groceries and bulk goods. | Membership flywheel compounds, yet the stock trades near its historical P/E mean." Do NOT add preambles, headings, bullet points, markdown, or bold. One candidate per line, no blank lines. Respect any exclusion list the user supplies.';
 
 function buildScreenPrompt(
   c: Required<ScreenCriteria>,
@@ -306,12 +413,16 @@ Screening criteria:
 - Ideally trading at a discount to intrinsic value (margin of safety ≥ 15%).
 ${hintLine}
 
-Return 3-5 candidates I haven't already heard of. For each candidate, give me:
-  Symbol (ticker) — Company Name — one-sentence thesis explaining WHY this
-  looks cheap right now or why the moat is underappreciated.
+Return 3-5 candidates I haven't already heard of. Format EACH candidate on
+its own line with exactly four pipe-separated fields:
 
-Format each line as:
-  TICKER: Company Name — thesis sentence.
+  TICKER | Company Name | What the company does (one plain-English sentence, no finance jargon) | Value-investing thesis (one sentence explaining why it looks cheap today or why the moat is underappreciated)
+
+Example:
+  COST | Costco Wholesale | Operates membership-only warehouse stores selling groceries and bulk goods. | Membership flywheel compounds, yet trades near historical P/E mean despite accelerating international growth.
+
+No preambles, no headings, no bullet points, no markdown, no blank lines
+between candidates. Just the list.
 
 Be ruthless about excluding my existing names above. Give me FRESH ideas.`;
 }

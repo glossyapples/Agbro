@@ -13,6 +13,7 @@ export type SettingsInitial = {
   tradingHoursEnd: string;
   agentCadenceMinutes: number;
   allowDayTrades: boolean;
+  autoPromoteCandidates: boolean;
 };
 
 // All numeric fields are stored as strings internally so the input stays
@@ -28,6 +29,7 @@ type FormState = {
   tradingHoursEnd: string;
   agentCadenceMinutes: string;
   allowDayTrades: boolean;
+  autoPromoteCandidates: boolean;
 };
 
 // Zod's flatten() output comes through as { fieldErrors, formErrors }. Pick
@@ -78,6 +80,7 @@ function toForm(initial: SettingsInitial): FormState {
     tradingHoursEnd: initial.tradingHoursEnd,
     agentCadenceMinutes: String(initial.agentCadenceMinutes),
     allowDayTrades: initial.allowDayTrades,
+    autoPromoteCandidates: initial.autoPromoteCandidates,
   };
 }
 
@@ -115,6 +118,7 @@ export function SettingsForm({ initial }: { initial: SettingsInitial }) {
         tradingHoursEnd: form.tradingHoursEnd,
         agentCadenceMinutes: Math.round(num(form.agentCadenceMinutes, initial.agentCadenceMinutes)),
         allowDayTrades: form.allowDayTrades,
+        autoPromoteCandidates: form.autoPromoteCandidates,
       };
       const res = await fetch('/api/account/settings', {
         method: 'POST',
@@ -250,6 +254,24 @@ export function SettingsForm({ initial }: { initial: SettingsInitial }) {
         />
         <span className="text-sm">Allow day trades (not recommended)</span>
       </label>
+
+      <div>
+        <label className="flex items-start gap-2">
+          <input
+            type="checkbox"
+            checked={form.autoPromoteCandidates}
+            onChange={(e) => update('autoPromoteCandidates', e.target.checked)}
+            className="mt-0.5 h-4 w-4 shrink-0 accent-brand-500"
+          />
+          <span className="text-sm">Auto-promote high-conviction candidates</span>
+        </label>
+        <p className="mt-1 text-[11px] text-ink-400">
+          When on, the weekly screen auto-adds candidates that clear a strict
+          Buffett bar (real EDGAR data · ROE 5+ pts above your minimum · debt-
+          to-equity ≤ 1.0 · gross margin ≥ 35% · 5y EPS growth ≥ 5%). Others
+          still wait for your review on the Candidates page. Default off.
+        </p>
+      </div>
 
       <div className="flex items-center justify-end gap-2">
         {error && <span className="text-xs text-red-400">{error}</span>}

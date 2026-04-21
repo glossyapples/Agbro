@@ -8,6 +8,7 @@ export type Candidate = {
   name: string;
   sector: string | null;
   candidateNotes: string | null;
+  businessDescription: string | null;
   discoveredAt: string | null;
   fundamentalsSource: string | null;
   fundamentalsUpdatedAt: string | null;
@@ -121,7 +122,19 @@ export function CandidateManager({
           will populate this.
         </section>
       ) : (
-        <ul className="flex flex-col gap-3">
+        <>
+          <section className="card border border-ink-700/60 bg-ink-800/40 text-[11px] text-ink-300">
+            <p className="font-semibold text-ink-100">How this works</p>
+            <p className="mt-1">
+              Candidates sit here until you <strong>Approve</strong> (adds to
+              watchlist — agent can trade) or <strong>Reject</strong> (screener
+              won&apos;t surface again). If you ignore them, they stay put —
+              the agent will <strong>not</strong> research or trade them until
+              you say yes. Turn on <em>auto-promote high-conviction</em> in
+              Settings to let the screener add clear Buffett-bar names for you.
+            </p>
+          </section>
+          <ul className="flex flex-col gap-3">
           {candidates.map((c) => (
             <li key={c.symbol} className="card">
               <div className="flex items-center justify-between">
@@ -149,8 +162,15 @@ export function CandidateManager({
                 </span>
               </div>
 
+              {c.businessDescription && (
+                <p className="mt-2 text-xs text-ink-100">{c.businessDescription}</p>
+              )}
+
               {c.candidateNotes && (
-                <p className="mt-2 text-xs text-ink-200">{c.candidateNotes}</p>
+                <p className="mt-2 text-xs text-ink-300 italic">
+                  <span className="not-italic text-ink-400">Thesis: </span>
+                  {c.candidateNotes}
+                </p>
               )}
 
               <p className="mt-2 text-[11px] text-ink-400">{fundamentalsLine(c)}</p>
@@ -176,6 +196,7 @@ export function CandidateManager({
             </li>
           ))}
         </ul>
+        </>
       )}
     </>
   );

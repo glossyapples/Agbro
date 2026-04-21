@@ -10,6 +10,7 @@ import { NextResponse } from 'next/server';
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import { apiError, requireUser } from '@/lib/api';
+import { prisma } from '@/lib/db';
 import { runScreen } from '@/lib/data/screener';
 
 export const runtime = 'nodejs';
@@ -36,8 +37,23 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
     }
 
-    const result = await runScreen(parsed.data ?? {}, { bypassCooldown: true });
+    // Read the user's auto-promote preference. Default off; the high-
+    // conviction bar inside runScreen only trips on EDGAR-confirmed Buffett
+    // names, so flipping this on doesn't open a firehose of auto-adds.
+    const account = await prisma.account.findUnique({
+      where: { userId: user.id },
+      select: { autoPromoteCandidates: true },
+    });
+
+    const result = await runScreen(parsed.data ?? {}, {
+      bypassCooldown: true,
+      autoPromoteHighConviction: account?.autoPromoteCandidates === true,
+    });
     revalidatePath('/candidates');
+    // Auto-promoted candidates land on the watchlist immediately, so those
+    // pages need to re-render too.
+    revalidatePath('/watchlist');
+    revalidatePath('/');
     return NextResponse.json(result);
   } catch (err) {
     return apiError(err, 500, 'manual screen failed', 'candidates.screen');

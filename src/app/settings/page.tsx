@@ -36,6 +36,7 @@ export default async function SettingsPage() {
           tradingHoursEnd: a.tradingHoursEnd,
           agentCadenceMinutes: a.agentCadenceMinutes,
           allowDayTrades: a.allowDayTrades,
+          autoPromoteCandidates: a.autoPromoteCandidates,
         }}
       />
 

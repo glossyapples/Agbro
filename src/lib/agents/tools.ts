@@ -357,8 +357,15 @@ export async function runTool(
         throw new Error(`screen_universe: invalid input — ${parsed.error.message}`);
       }
       // Agent path never bypasses the cooldown — only the user-triggered
-      // /api/candidates/screen endpoint can.
-      return runScreen(parsed.data);
+      // /api/candidates/screen endpoint can. Auto-promote is honoured here
+      // too so the weekly cron run can act without waiting for the human.
+      const account = await prisma.account.findUnique({
+        where: { userId: ctx.userId },
+        select: { autoPromoteCandidates: true },
+      });
+      return runScreen(parsed.data, {
+        autoPromoteHighConviction: account?.autoPromoteCandidates === true,
+      });
     }
     case 'finalize_run':
       return finalizeRunTool(ctx, input);

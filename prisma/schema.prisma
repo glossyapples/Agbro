@@ -94,6 +94,11 @@ model Account {
   tradingHoursEnd     String   @default("15:45")    // avoid the close
   agentCadenceMinutes Int      @default(60)         // how often an agent wakes up
   allowDayTrades      Boolean  @default(false)
+  // When on, the screener auto-promotes candidates that clear a strict
+  // Buffett-style bar (real EDGAR data + ROE well above threshold + low
+  // leverage + fat margins + growing EPS) directly to the watchlist.
+  // Off by default — conservative default keeps the human in the loop.
+  autoPromoteCandidates Boolean @default(false)
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
   deposits            Deposit[]
@@ -302,7 +307,16 @@ model Stock {
   //   'watchlist'     → user promoted to main watchlist (onWatchlist also true)
   candidateSource String?
   candidateNotes  String?  @db.Text
+  // One-sentence plain-English business description ("makes GPUs used in
+  // AI training and gaming"). Surfaced on the /candidates review card so a
+  // non-expert user knows what they're looking at without leaving the app.
+  businessDescription String? @db.Text
   discoveredAt    DateTime?
+  // Set when the screener auto-promoted this name to the watchlist on the
+  // user's behalf (gated by Account.autoPromoteCandidates). Null for
+  // user-approved or seed rows. Kept for audit + future "agent added these"
+  // UI on the watchlist.
+  autoPromotedAt  DateTime?
   lastAnalyzedAt DateTime?
   updatedAt      DateTime @updatedAt
   prices         PriceSnapshot[]

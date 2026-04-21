@@ -22,6 +22,7 @@ export default async function CandidatesPage() {
     name: s.name,
     sector: s.sector,
     candidateNotes: s.candidateNotes,
+    businessDescription: s.businessDescription,
     discoveredAt: s.discoveredAt ? s.discoveredAt.toISOString() : null,
     fundamentalsSource: s.fundamentalsSource,
     fundamentalsUpdatedAt: s.fundamentalsUpdatedAt
