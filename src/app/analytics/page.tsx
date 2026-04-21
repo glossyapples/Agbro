@@ -5,9 +5,16 @@ import { formatPct, formatUsd } from '@/lib/money';
 export default async function AnalyticsPage() {
   const user = await getCurrentUser();
   const [trades, runs, positions, watchlist] = await Promise.all([
-    prisma.trade.findMany({ orderBy: { submittedAt: 'desc' } }),
-    prisma.agentRun.findMany({ take: 30, orderBy: { startedAt: 'desc' } }),
-    prisma.position.findMany(),
+    prisma.trade.findMany({
+      where: { userId: user.id },
+      orderBy: { submittedAt: 'desc' },
+    }),
+    prisma.agentRun.findMany({
+      where: { userId: user.id },
+      take: 30,
+      orderBy: { startedAt: 'desc' },
+    }),
+    prisma.position.findMany({ where: { userId: user.id } }),
     prisma.stock.findMany({ where: { onWatchlist: true }, orderBy: { buffettScore: 'desc' } }),
   ]);
 

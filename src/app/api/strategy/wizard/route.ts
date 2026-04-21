@@ -6,6 +6,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { z } from 'zod';
 import { prisma } from '@/lib/db';
 import { apiError, requireUser } from '@/lib/api';
+import { checkLimit, rateLimited } from '@/lib/ratelimit';
 import { BRAIN_WRITEUP_MODEL } from '@/lib/agents/models';
 import { STRATEGY_WIZARD_SYSTEM } from '@/lib/agents/prompts';
 
@@ -20,6 +21,9 @@ const WizardBody = z.object({
 export async function POST(req: Request) {
   const user = await requireUser();
   if (user instanceof NextResponse) return user;
+
+  const gate = await checkLimit(user.id, 'strategy.wizard');
+  if (!gate.success) return rateLimited(gate);
 
   try {
     const parsed = WizardBody.safeParse(await req.json());

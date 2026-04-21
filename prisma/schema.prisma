@@ -14,14 +14,66 @@ datasource db {
 // -------------------- User & Account --------------------
 
 model User {
-  id            String   @id @default(cuid())
-  email         String   @unique
+  id            String    @id @default(cuid())
+  email         String    @unique
+  emailVerified DateTime?
   name          String?
-  createdAt     DateTime @default(now())
+  image         String?
+  createdAt     DateTime  @default(now())
+
   account       Account?
   strategies    Strategy[]
   notes         UserNote[]
   notifications Notification[]
+
+  // Auth.js relations
+  accounts      AuthAccount[]
+  sessions      Session[]
+
+  // Ownership (per-user isolation)
+  trades        Trade[]
+  agentRuns     AgentRun[]
+  brainEntries  BrainEntry[]
+  auditLogs     AuditLog[]
+  positions     Position[]
+}
+
+// Auth.js: OAuth provider links (used if/when OAuth added; magic-link flow alone doesn't populate this).
+// Mapped to table name "AuthAccount" to avoid collision with the trading Account domain model.
+model AuthAccount {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("AuthAccount")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
 }
 
 model Account {
@@ -87,6 +139,8 @@ model StrategyTurn {
 
 model Trade {
   id            String     @id @default(cuid())
+  userId        String
+  user          User       @relation(fields: [userId], references: [id], onDelete: Cascade)
   alpacaOrderId String?    @unique
   symbol        String
   side          String     // "buy" | "sell"
@@ -108,22 +162,30 @@ model Trade {
   closedAt      DateTime?
   realizedPnlCents BigInt?  // set when closed
   notifications Notification[]
+
+  @@index([userId, submittedAt])
 }
 
 model Position {
   id             String  @id @default(cuid())
-  symbol         String  @unique
+  userId         String
+  user           User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  symbol         String
   qty            Float
   avgCostCents   BigInt
   openedAt       DateTime @default(now())
   lastSyncedAt   DateTime @default(now())
   // Snapshot only; source of truth is Alpaca.
+
+  @@unique([userId, symbol])
 }
 
 // -------------------- Agent runs & decisions --------------------
 
 model AgentRun {
   id            String    @id @default(cuid())
+  userId        String
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   startedAt     DateTime  @default(now())
   endedAt       DateTime?
   trigger       String    // "schedule" | "manual" | "user_deposit" | "market_event"
@@ -136,6 +198,8 @@ model AgentRun {
   trades        Trade[]
   decisions     AgentDecision[]
   researchNotes ResearchNote[]
+
+  @@index([userId, startedAt])
 }
 
 // Granular reasoning steps / tool calls.
@@ -169,6 +233,8 @@ model ResearchNote {
 
 model BrainEntry {
   id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   kind      String   // "weekly_update" | "post_mortem" | "lesson" | "principle" | "market_memo"
   title     String
   body      String   @db.Text
@@ -176,6 +242,7 @@ model BrainEntry {
   relatedSymbols String[] @default([])
   createdAt DateTime @default(now())
 
+  @@index([userId, createdAt])
   @@index([kind])
 }
 
@@ -243,8 +310,12 @@ model Notification {
 
 model AuditLog {
   id        String   @id @default(cuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
   actor     String   // "agent" | "user" | "system"
   action    String
   payload   Json
   createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
 }

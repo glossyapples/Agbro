@@ -1,22 +1,30 @@
 import Link from 'next/link';
 import { prisma } from '@/lib/db';
+import { maybeCurrentUser } from '@/lib/auth';
 import { formatUsd, formatPct } from '@/lib/money';
 import { Controls } from '@/components/Controls';
 import { RunAgentButton } from '@/components/RunAgentButton';
 
 async function getOverview() {
-  const user = await prisma.user.findUnique({
-    where: { email: 'owner@agbro.local' },
-    include: { account: true },
-  });
+  const user = await maybeCurrentUser();
   if (!user || !user.account) return null;
 
   const [recentTrades, lastRun, activeStrategy, notifications, brainLatest] = await Promise.all([
-    prisma.trade.findMany({ orderBy: { submittedAt: 'desc' }, take: 5 }),
-    prisma.agentRun.findFirst({ orderBy: { startedAt: 'desc' } }),
+    prisma.trade.findMany({
+      where: { userId: user.id },
+      orderBy: { submittedAt: 'desc' },
+      take: 5,
+    }),
+    prisma.agentRun.findFirst({
+      where: { userId: user.id },
+      orderBy: { startedAt: 'desc' },
+    }),
     prisma.strategy.findFirst({ where: { userId: user.id, isActive: true } }),
     prisma.notification.count({ where: { userId: user.id, readAt: null } }),
-    prisma.brainEntry.findFirst({ orderBy: { createdAt: 'desc' } }),
+    prisma.brainEntry.findFirst({
+      where: { userId: user.id },
+      orderBy: { createdAt: 'desc' },
+    }),
   ]);
 
   const invested = Number(user.account.depositedCents) / 100;

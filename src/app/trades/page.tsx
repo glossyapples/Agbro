@@ -1,8 +1,11 @@
 import { prisma } from '@/lib/db';
+import { getCurrentUser } from '@/lib/auth';
 import { formatPct, formatUsd } from '@/lib/money';
 
 export default async function TradesPage() {
+  const user = await getCurrentUser();
   const trades = await prisma.trade.findMany({
+    where: { userId: user.id },
     orderBy: { submittedAt: 'desc' },
     take: 200,
   });

@@ -1,4 +1,5 @@
 // Weekly brain update — agent writes a recap & post-mortems into the brain.
+// Per-user fan-out: iterate active users; skip users with no activity.
 
 import { NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
@@ -10,36 +11,15 @@ import { apiError, assertCronSecret } from '@/lib/api';
 export const runtime = 'nodejs';
 export const maxDuration = 300;
 
+type Outcome =
+  | { userId: string; skipped: true; reason: string }
+  | { userId: string; ok: true; brainEntryId: string };
+
 export async function POST(req: Request) {
   const unauthorized = assertCronSecret(req);
   if (unauthorized) return unauthorized;
 
   try {
-    const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-    const [trades, runs, closed, prevEntries] = await Promise.all([
-      prisma.trade.findMany({
-        where: { submittedAt: { gte: since } },
-        orderBy: { submittedAt: 'desc' },
-        take: 500,
-      }),
-      prisma.agentRun.findMany({
-        where: { startedAt: { gte: since } },
-        orderBy: { startedAt: 'desc' },
-        take: 50,
-      }),
-      prisma.trade.findMany({
-        where: { closedAt: { gte: since } },
-        orderBy: { closedAt: 'desc' },
-        take: 200,
-      }),
-      prisma.brainEntry.findMany({ orderBy: { createdAt: 'desc' }, take: 10 }),
-    ]);
-
-    // Skip week if nothing happened — avoid spam entries + wasted API spend.
-    if (trades.length === 0 && closed.length === 0 && runs.length === 0) {
-      return NextResponse.json({ ok: true, skipped: true, reason: 'no_activity' });
-    }
-
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {
       console.error('cron.weekly: ANTHROPIC_API_KEY missing');
@@ -47,18 +27,75 @@ export async function POST(req: Request) {
     }
     const anthropic = new Anthropic({ apiKey });
 
-    const prompt = `Write the AgBro Weekly Update.
+    const users = await prisma.user.findMany({
+      where: { account: { isStopped: false } },
+      select: { id: true },
+    });
+
+    const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const outcomes: Outcome[] = [];
+
+    for (const user of users) {
+      const [trades, runs, closed, prevEntries] = await Promise.all([
+        prisma.trade.findMany({
+          where: { userId: user.id, submittedAt: { gte: since } },
+          orderBy: { submittedAt: 'desc' },
+          take: 500,
+        }),
+        prisma.agentRun.findMany({
+          where: { userId: user.id, startedAt: { gte: since } },
+          orderBy: { startedAt: 'desc' },
+          take: 50,
+        }),
+        prisma.trade.findMany({
+          where: { userId: user.id, closedAt: { gte: since } },
+          orderBy: { closedAt: 'desc' },
+          take: 200,
+        }),
+        prisma.brainEntry.findMany({
+          where: { userId: user.id },
+          orderBy: { createdAt: 'desc' },
+          take: 10,
+        }),
+      ]);
+
+      if (trades.length === 0 && closed.length === 0 && runs.length === 0) {
+        outcomes.push({ userId: user.id, skipped: true, reason: 'no_activity' });
+        continue;
+      }
+
+      const prompt = `Write the AgBro Weekly Update.
 
 Trades this week (JSON):
-${JSON.stringify(trades.map(t => ({ sym: t.symbol, side: t.side, qty: t.qty, status: t.status, conf: t.confidence, mos: t.marginOfSafetyPct, thesis: t.thesis.slice(0,300) })), null, 2)}
+${JSON.stringify(
+  trades.map((t) => ({
+    sym: t.symbol,
+    side: t.side,
+    qty: t.qty,
+    status: t.status,
+    conf: t.confidence,
+    mos: t.marginOfSafetyPct,
+    thesis: t.thesis.slice(0, 300),
+  })),
+  null,
+  2
+)}
 
 Closed positions this week:
-${JSON.stringify(closed.map(t => ({ sym: t.symbol, pnlCents: t.realizedPnlCents?.toString(), thesis: t.thesis.slice(0,200) })), null, 2)}
+${JSON.stringify(
+  closed.map((t) => ({
+    sym: t.symbol,
+    pnlCents: t.realizedPnlCents?.toString(),
+    thesis: t.thesis.slice(0, 200),
+  })),
+  null,
+  2
+)}
 
 Runs this week: ${runs.length}
 
 Previous brain entries (most recent first, truncated):
-${prevEntries.map(e => `- [${e.kind}] ${e.title}: ${e.body.slice(0,200)}`).join('\n')}
+${prevEntries.map((e) => `- [${e.kind}] ${e.title}: ${e.body.slice(0, 200)}`).join('\n')}
 
 Write ONE weekly update (200-400 words) with sections:
   SCOREBOARD · WHAT WE LEARNED · OPEN QUESTIONS · NEXT WEEK
@@ -66,41 +103,46 @@ Write ONE weekly update (200-400 words) with sections:
 Then, if any positions were closed, write a brief POST-MORTEM paragraph per closed trade.
 Return plain markdown. No preamble.`;
 
-    const resp = await anthropic.messages.create({
-      model: BRAIN_WRITEUP_MODEL,
-      max_tokens: 2048,
-      system: BRAIN_WRITER_SYSTEM,
-      messages: [{ role: 'user', content: prompt }],
-    });
+      try {
+        const resp = await anthropic.messages.create({
+          model: BRAIN_WRITEUP_MODEL,
+          max_tokens: 2048,
+          system: BRAIN_WRITER_SYSTEM,
+          messages: [{ role: 'user', content: prompt }],
+        });
 
-    const text = resp.content
-      .filter((b): b is Anthropic.TextBlock => b.type === 'text')
-      .map((b) => b.text)
-      .join('\n');
+        const text = resp.content
+          .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+          .map((b) => b.text)
+          .join('\n');
 
-    const entry = await prisma.brainEntry.create({
-      data: {
-        kind: 'weekly_update',
-        title: `Weekly update — ${new Date().toISOString().slice(0, 10)}`,
-        body: text,
-        tags: ['weekly'],
-      },
-    });
+        const entry = await prisma.brainEntry.create({
+          data: {
+            userId: user.id,
+            kind: 'weekly_update',
+            title: `Weekly update — ${new Date().toISOString().slice(0, 10)}`,
+            body: text,
+            tags: ['weekly'],
+          },
+        });
 
-    // Notify user.
-    const user = await prisma.user.findFirst();
-    if (user) {
-      await prisma.notification.create({
-        data: {
-          userId: user.id,
-          kind: 'weekly_update',
-          title: 'Weekly brain update ready',
-          body: text.split('\n').slice(0, 3).join(' ').slice(0, 280),
-        },
-      });
+        await prisma.notification.create({
+          data: {
+            userId: user.id,
+            kind: 'weekly_update',
+            title: 'Weekly brain update ready',
+            body: text.split('\n').slice(0, 3).join(' ').slice(0, 280),
+          },
+        });
+
+        outcomes.push({ userId: user.id, ok: true, brainEntryId: entry.id });
+      } catch (err) {
+        console.error('cron.weekly per-user failure', { userId: user.id }, err);
+        outcomes.push({ userId: user.id, skipped: true, reason: 'errored' });
+      }
     }
 
-    return NextResponse.json({ ok: true, brainEntryId: entry.id });
+    return NextResponse.json({ ok: true, outcomes });
   } catch (err) {
     return apiError(err, 500, 'weekly cron failed', 'cron.weekly');
   }

@@ -33,7 +33,7 @@ export async function GET(req: Request) {
       ? kindParam
       : undefined;
     const entries = await prisma.brainEntry.findMany({
-      where: kind ? { kind } : undefined,
+      where: { userId: user.id, ...(kind ? { kind } : {}) },
       orderBy: { createdAt: 'desc' },
       take: 100,
     });
@@ -54,7 +54,14 @@ export async function POST(req: Request) {
     }
     const { kind, title, body, tags, relatedSymbols } = parsed.data;
     const entry = await prisma.brainEntry.create({
-      data: { kind, title, body, tags: tags ?? [], relatedSymbols: relatedSymbols ?? [] },
+      data: {
+        userId: user.id,
+        kind,
+        title,
+        body,
+        tags: tags ?? [],
+        relatedSymbols: relatedSymbols ?? [],
+      },
     });
     return NextResponse.json(entry);
   } catch (err) {

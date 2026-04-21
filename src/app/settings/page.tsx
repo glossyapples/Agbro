@@ -3,6 +3,7 @@ import { getCurrentUser } from '@/lib/auth';
 import { formatPct, formatUsd } from '@/lib/money';
 import { SettingsForm } from '@/components/SettingsForm';
 import { DepositForm } from '@/components/DepositForm';
+import { SignOutButton } from '@/components/SignOutButton';
 
 export default async function SettingsPage() {
   const user = await getCurrentUser();
@@ -45,6 +46,14 @@ export default async function SettingsPage() {
       <Link href="/analytics" className="card text-center text-sm text-brand-400">
         Analytics / progress →
       </Link>
+
+      <section className="card flex items-center justify-between">
+        <div>
+          <h2 className="text-sm font-semibold">Session</h2>
+          <p className="mt-1 text-xs text-ink-400">Signed in as {user.email}</p>
+        </div>
+        <SignOutButton />
+      </section>
     </div>
   );
 }

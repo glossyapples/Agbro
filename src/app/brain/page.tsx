@@ -1,4 +1,5 @@
 import { prisma } from '@/lib/db';
+import { getCurrentUser } from '@/lib/auth';
 
 const KIND_LABELS: Record<string, string> = {
   principle: 'Principle',
@@ -10,7 +11,9 @@ const KIND_LABELS: Record<string, string> = {
 };
 
 export default async function BrainPage() {
+  const user = await getCurrentUser();
   const entries = await prisma.brainEntry.findMany({
+    where: { userId: user.id },
     orderBy: { createdAt: 'desc' },
     take: 100,
   });

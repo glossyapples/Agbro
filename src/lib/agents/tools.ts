@@ -246,7 +246,7 @@ export async function runTool(
       const limit = typeof input.limit === 'number' ? input.limit : 20;
       const kinds = Array.isArray(input.kinds) ? (input.kinds as string[]) : undefined;
       return prisma.brainEntry.findMany({
-        where: kinds ? { kind: { in: kinds } } : undefined,
+        where: { userId: ctx.userId, ...(kinds ? { kind: { in: kinds } } : {}) },
         orderBy: { createdAt: 'desc' },
         take: limit,
       });
@@ -344,7 +344,7 @@ async function placeTradeTool(ctx: ToolContext, input: Record<string, unknown>) 
   // Enforce daily trade cap server-side, anchored to midnight ET (not host local time).
   const since = startOfDayET();
   const todaysTrades = await prisma.trade.count({
-    where: { submittedAt: { gte: since } },
+    where: { userId: ctx.userId, submittedAt: { gte: since } },
   });
   if (todaysTrades >= account.maxDailyTrades) {
     throw new Error(`daily trade cap reached (${account.maxDailyTrades})`);
@@ -366,6 +366,7 @@ async function placeTradeTool(ctx: ToolContext, input: Record<string, unknown>) 
 
   const trade = await prisma.trade.create({
     data: {
+      userId: ctx.userId,
       alpacaOrderId: order.id,
       symbol,
       side: p.side,
@@ -407,6 +408,7 @@ async function finalizeRunTool(ctx: ToolContext, input: Record<string, unknown>)
   });
   await prisma.brainEntry.create({
     data: {
+      userId: ctx.userId,
       kind: 'agent_run_summary',
       title: `Agent run ${ctx.agentRunId.slice(0, 8)} — ${decision}`,
       body: summary,

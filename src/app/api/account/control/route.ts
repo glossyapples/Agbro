@@ -36,7 +36,7 @@ export async function POST(req: Request) {
 
     await prisma.account.update({ where: { userId: user.id }, data: patch });
     await prisma.auditLog.create({
-      data: { actor: 'user', action: `account.${action}`, payload: patch },
+      data: { userId: user.id, actor: 'user', action: `account.${action}`, payload: patch },
     });
     await prisma.notification.create({
       data: {

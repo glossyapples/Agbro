@@ -47,6 +47,7 @@ export async function runAgent(args: RunAgentArgs): Promise<RunAgentResult> {
   const client = new Anthropic({ apiKey });
   const run = await prisma.agentRun.create({
     data: {
+      userId: args.userId,
       trigger: args.trigger,
       model: TRADE_DECISION_MODEL,
       status: 'running',
@@ -178,6 +179,7 @@ export async function runAgent(args: RunAgentArgs): Promise<RunAgentResult> {
 async function skipRun(userId: string, trigger: string, reason: string): Promise<RunAgentResult> {
   const run = await prisma.agentRun.create({
     data: {
+      userId,
       trigger,
       model: TRADE_DECISION_MODEL,
       status: 'skipped',

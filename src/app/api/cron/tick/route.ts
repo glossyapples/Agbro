@@ -1,20 +1,21 @@
 // Called by Railway cron. Requires header x-agbro-cron-secret matching env.
-// Only wakes the agent if:
+// For every active user, wakes their agent if:
 //   - account not paused/stopped
-//   - current time is within user's trading hours (ET)
+//   - weekday
+//   - current time is within the user's trading hours (ET)
 //   - cadence since last run has elapsed
+//
+// Runs sequentially per user. If the population grows, swap to a queue.
 
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { runAgent } from '@/lib/agents/orchestrator';
-import { getCurrentUser } from '@/lib/auth';
 import { apiError, assertCronSecret } from '@/lib/api';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300;
 
 function withinTradingHours(now: Date, start: string, end: string): boolean {
-  // Compare in US/Eastern.
   const fmt = new Intl.DateTimeFormat('en-US', {
     timeZone: 'America/New_York',
     hour: '2-digit',
@@ -28,19 +29,16 @@ function withinTradingHours(now: Date, start: string, end: string): boolean {
   return current >= start && current <= end;
 }
 
+type Outcome =
+  | { userId: string; skipped: true; reason: string }
+  | { userId: string; ran: true; agentRunId: string; decision: string | null; status: string };
+
 export async function POST(req: Request) {
   const unauthorized = assertCronSecret(req);
   if (unauthorized) return unauthorized;
 
   try {
-    const user = await getCurrentUser();
-    const account = user.account!;
-    if (account.isPaused || account.isStopped) {
-      return NextResponse.json({ skipped: true, reason: 'paused_or_stopped' });
-    }
-
     const now = new Date();
-    // Skip weekends — US market is closed.
     const dow = new Intl.DateTimeFormat('en-US', {
       timeZone: 'America/New_York',
       weekday: 'short',
@@ -49,30 +47,54 @@ export async function POST(req: Request) {
       return NextResponse.json({ skipped: true, reason: 'weekend' });
     }
 
-    if (!withinTradingHours(now, account.tradingHoursStart, account.tradingHoursEnd)) {
-      return NextResponse.json({ skipped: true, reason: 'outside_trading_hours' });
-    }
+    const accounts = await prisma.account.findMany({
+      where: { isStopped: false, isPaused: false },
+      include: { user: true },
+    });
 
-    const lastRun = await prisma.agentRun.findFirst({ orderBy: { startedAt: 'desc' } });
-    if (lastRun) {
-      const mins = (now.getTime() - lastRun.startedAt.getTime()) / 60_000;
-      if (mins < account.agentCadenceMinutes) {
-        return NextResponse.json({
-          skipped: true,
-          reason: 'cadence_not_elapsed',
-          minutesSinceLast: Math.round(mins),
+    const outcomes: Outcome[] = [];
+    for (const account of accounts) {
+      if (!withinTradingHours(now, account.tradingHoursStart, account.tradingHoursEnd)) {
+        outcomes.push({ userId: account.userId, skipped: true, reason: 'outside_trading_hours' });
+        continue;
+      }
+      const lastRun = await prisma.agentRun.findFirst({
+        where: { userId: account.userId },
+        orderBy: { startedAt: 'desc' },
+      });
+      if (lastRun) {
+        const mins = (now.getTime() - lastRun.startedAt.getTime()) / 60_000;
+        if (mins < account.agentCadenceMinutes) {
+          outcomes.push({
+            userId: account.userId,
+            skipped: true,
+            reason: `cadence_not_elapsed:${Math.round(mins)}m`,
+          });
+          continue;
+        }
+      }
+
+      try {
+        const result = await runAgent({ userId: account.userId, trigger: 'schedule' });
+        outcomes.push({
+          userId: account.userId,
+          ran: true,
+          agentRunId: result.agentRunId,
+          decision: result.decision,
+          status: result.status,
         });
+      } catch (err) {
+        console.error('cron.tick agent failed', { userId: account.userId }, err);
+        outcomes.push({ userId: account.userId, skipped: true, reason: 'errored' });
       }
     }
 
-    const result = await runAgent({ userId: user.id, trigger: 'schedule' });
-    return NextResponse.json(result);
+    return NextResponse.json({ ran: outcomes.length, outcomes });
   } catch (err) {
     return apiError(err, 500, 'cron tick failed', 'cron.tick');
   }
 }
 
 export async function GET(req: Request) {
-  // Convenience alias for cron runners that only support GET.
   return POST(req);
 }

@@ -127,18 +127,25 @@ async function main() {
     });
   }
 
-  await prisma.brainEntry.create({
-    data: {
-      kind: 'principle',
-      title: 'Day 0 — The Charter',
-      body:
-        'AgBro exists to preserve principal first, and grow it second. ' +
-        'No options. No shorting. No margin. Minimal day trading. ' +
-        'Every trade must pass the internal analyzer AND carry a written Bull/Bear case. ' +
-        'Margin of safety is non-negotiable. We learn in public: every closed position gets a post-mortem.',
-      tags: ['charter', 'principles'],
-    },
+  // Only seed Day 0 once per user to keep re-running the seed idempotent.
+  const hasCharter = await prisma.brainEntry.findFirst({
+    where: { userId: user.id, kind: 'principle', title: 'Day 0 — The Charter' },
   });
+  if (!hasCharter) {
+    await prisma.brainEntry.create({
+      data: {
+        userId: user.id,
+        kind: 'principle',
+        title: 'Day 0 — The Charter',
+        body:
+          'AgBro exists to preserve principal first, and grow it second. ' +
+          'No options. No shorting. No margin. Minimal day trading. ' +
+          'Every trade must pass the internal analyzer AND carry a written Bull/Bear case. ' +
+          'Margin of safety is non-negotiable. We learn in public: every closed position gets a post-mortem.',
+        tags: ['charter', 'principles'],
+      },
+    });
+  }
 
   console.log(`Seeded ${STOCKS.length} stocks, 1 user, 1 account, 1 strategy, 1 brain entry.`);
 }

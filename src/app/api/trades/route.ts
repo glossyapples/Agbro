@@ -10,6 +10,7 @@ export async function GET() {
 
   try {
     const trades = await prisma.trade.findMany({
+      where: { userId: user.id },
       orderBy: { submittedAt: 'desc' },
       take: 200,
     });
