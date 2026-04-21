@@ -13,8 +13,20 @@ export function RunAgentButton() {
     setMessage(null);
     try {
       const res = await fetch('/api/agents/run', { method: 'POST' });
-      const data = await res.json();
-      setMessage(data.status ? `Run ${data.status}` : 'Triggered');
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const reason =
+          typeof data.error === 'string'
+            ? data.error
+            : typeof data === 'object' && data
+              ? JSON.stringify(data)
+              : 'unknown error';
+        setMessage(`HTTP ${res.status}: ${reason}`);
+        return;
+      }
+      setMessage(
+        data.status ? `Run ${data.status}${data.decision ? ` → ${data.decision}` : ''}` : 'Triggered'
+      );
       router.refresh();
     } catch (e) {
       setMessage((e as Error).message);

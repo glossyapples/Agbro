@@ -43,7 +43,11 @@ export function assertCronSecret(req: Request): NextResponse | null {
 export async function requireUser() {
   try {
     return await getCurrentUser();
-  } catch {
+  } catch (err) {
+    // Useful signal when debugging "why is my API returning 401": distinguishes
+    // 'unauthenticated' (no session cookie) from 'session stale' (cookie
+    // points at a deleted user). Logs at debug so normal prod noise stays low.
+    log.debug('requireUser.rejected', { reason: (err as Error).message });
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   }
 }
