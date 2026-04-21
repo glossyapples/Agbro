@@ -22,7 +22,7 @@ import { refreshFundamentalsForSymbol } from '@/lib/data/refresh-fundamentals';
 import { runScreen } from '@/lib/data/screener';
 import { getUpcomingEvents } from '@/lib/data/events';
 import { isInEarningsBlackout } from '@/lib/data/earnings';
-import { evaluateExits, syncPositionsFromAlpaca } from './exits';
+import { evaluateExits } from './exits';
 
 export const TOOL_DEFS: Anthropic.Tool[] = [
   {
@@ -397,9 +397,9 @@ export async function runTool(
       return { events: await getUpcomingEvents(parsed.data) };
     }
     case 'evaluate_exits': {
-      // Sync positions from Alpaca first so we don't miss a name the broker
-      // has that our DB doesn't. Keeps the thesis-metadata table aligned.
-      await syncPositionsFromAlpaca(ctx.userId);
+      // The orchestrator's syncPositions already reconciled our DB against
+      // the broker at the start of this wake-up, so evaluateExits reads
+      // from aligned state. No extra Alpaca call needed here.
       return { assessments: await evaluateExits(ctx.userId) };
     }
     case 'finalize_run':
@@ -608,14 +608,10 @@ async function placeTradeTool(ctx: ToolContext, input: Record<string, unknown>) 
   // price-target strategies (Graham) and harmless for everyone else.
   if (p.side === 'buy') {
     try {
-      const [active, rules] = await Promise.all([
-        prisma.strategy.findFirst({
-          where: { userId: ctx.userId, isActive: true },
-          select: { id: true, rules: true },
-        }),
-        Promise.resolve(null),
-      ]);
-      void rules; // keeping Promise.all shape for clarity
+      const active = await prisma.strategy.findFirst({
+        where: { userId: ctx.userId, isActive: true },
+        select: { id: true, rules: true },
+      });
       const r = (active?.rules ?? {}) as { holdingPeriodBias?: string; thesisReviewDays?: number | null };
       const reviewDays = r.thesisReviewDays ?? 180;
       const reviewDue =
@@ -638,7 +634,7 @@ async function placeTradeTool(ctx: ToolContext, input: Record<string, unknown>) 
           userId: ctx.userId,
           symbol,
           qty: p.qty,
-          avgCostCents: BigInt(0), // real value populated by syncPositionsFromAlpaca on next wake-up
+          avgCostCents: BigInt(0), // placeholder; orchestrator syncPositions overwrites with broker avg entry on next wake-up
           thesis: p.thesis.slice(0, 4_000),
           targetPriceCents:
             p.intrinsicValuePerShare && p.intrinsicValuePerShare > 0

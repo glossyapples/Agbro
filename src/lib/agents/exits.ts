@@ -17,7 +17,6 @@
 // signal and decide explicitly whether to wait or override.
 
 import { prisma } from '@/lib/db';
-import type { Prisma } from '@prisma/client';
 import { isInEarningsBlackout } from '@/lib/data/earnings';
 import { getPositions, getLatestPrice } from '@/lib/alpaca';
 import { log } from '@/lib/logger';
@@ -61,7 +60,10 @@ export type ExitRules = {
 };
 
 export async function evaluateExits(userId: string): Promise<ExitAssessment[]> {
-  // Load everything in parallel.
+  // Load everything in parallel. The orchestrator's syncPositions has already
+  // reconciled the DB against the broker before this runs, so dbPositions is
+  // aligned — we only need brokerPositions here for live market_value (used
+  // by the portfolio-weight trim check, which Alpaca calculates for us).
   const [strategy, brokerPositions, dbPositions, account] = await Promise.all([
     prisma.strategy.findFirst({ where: { userId, isActive: true } }),
     getPositions().catch(() => [] as Array<{ symbol: string; qty: string; avg_entry_price: string }>),
@@ -71,6 +73,28 @@ export async function evaluateExits(userId: string): Promise<ExitAssessment[]> {
 
   const rules: ExitRules = (strategy?.rules as ExitRules | null) ?? {};
   const maxPositionPct = account?.maxPositionPct ?? 15;
+
+  // Thesis backfill. The existing orchestrator's syncPositions creates
+  // Position rows without a thesis when it first sees a pre-AgBro Alpaca
+  // position, and legacy rows from before the thesis column also come back
+  // null. Any null-thesis row gets seeded here so the evaluator can flag
+  // them for review on this same pass — the whole point of the backfill is
+  // to surface "we own this, but we haven't documented why" to the LLM.
+  const needsSeed = dbPositions.filter((p) => !p.thesis);
+  if (needsSeed.length > 0) {
+    const nowDate = new Date();
+    await prisma.position.updateMany({
+      where: { userId, symbol: { in: needsSeed.map((p) => p.symbol) } },
+      data: {
+        thesis: 'pre-AgBro position — thesis review needed',
+        thesisReviewDueAt: nowDate,
+      },
+    });
+    for (const p of needsSeed) {
+      p.thesis = 'pre-AgBro position — thesis review needed';
+      p.thesisReviewDueAt = nowDate;
+    }
+  }
 
   // If this strategy is rebalance-only (Boglehead), skip thesis-based exits
   // entirely. The rebalance logic lives elsewhere.
@@ -149,16 +173,14 @@ export async function evaluateExits(userId: string): Promise<ExitAssessment[]> {
     }
 
     // Moat / fundamentals / dividend signals require reading the Stock row.
-    if (rules.moatBreakExit || rules.fundamentalsDegradationExit || rules.dividendSafetyExit) {
+    if (rules.fundamentalsDegradationExit || rules.dividendSafetyExit) {
       const stock = await prisma.stock.findUnique({ where: { symbol } });
       if (stock) {
         if (rules.fundamentalsDegradationExit) {
-          // Simple deterministic check: ROE or gross margin collapsed vs.
-          // what the agent wrote on this position at buy time. Without
-          // snapshotting baseline fundamentals, we rely on the agent's own
-          // judgement — surface as 'review' so the LLM looks.
-          // (Full deterministic check requires historical PriceSnapshot-
-          // style fundamentals history; deferred.)
+          // Simple deterministic check: ROE went negative. A fuller check
+          // would compare current ROE / gross margin / D/E to baseline at
+          // buy time, but we don't snapshot baselines today — the agent's
+          // own judgement fills the gap via the thesis review timer.
           if (stock.returnOnEquity != null && stock.returnOnEquity < 0) {
             signals.push({
               signal: 'review',
@@ -167,21 +189,27 @@ export async function evaluateExits(userId: string): Promise<ExitAssessment[]> {
           }
         }
         if (rules.dividendSafetyExit) {
-          // Dividend data freshness check: if the stock was paying and now
-          // shows zero, flag as sell-worthy.
-          if (stock.dividendYield != null && stock.dividendYield === 0 && stock.dividendPerShare === 0) {
+          // Dividend safety is the core thesis for dividend strategies. We
+          // flag 'review' rather than auto-selling because we can't tell
+          // deterministically whether a zero yield means "cut" vs "stale
+          // data" vs "never paid." The LLM re-fetches fundamentals and
+          // decides. A cut confirmed by fresh data should then → sell.
+          if (
+            stock.dividendYield != null &&
+            stock.dividendYield === 0 &&
+            stock.dividendPerShare != null &&
+            stock.dividendPerShare === 0
+          ) {
             signals.push({
-              signal: 'sell',
-              reason: `dividend appears to have been cut or suspended (yield = 0)`,
+              signal: 'review',
+              reason: `dividend appears to be zero — verify whether it was cut, suspended, or the data is stale`,
             });
           }
         }
-        // Moat-break is qualitative → always 'review' when present.
-        if (rules.moatBreakExit && dbPos?.thesisReviewDueAt && dbPos.thesisReviewDueAt.getTime() <= now) {
-          // Already covered by the review timer above; nothing new to add.
-        }
       }
     }
+    // moatBreakExit is qualitative → fully relies on the thesis review timer
+    // above. No deterministic moat-erosion signal we can compute cheaply.
 
     // Earnings-blackout suppression: never AUTO-SELL into a pending earnings
     // release. Convert sell → review so the agent has to decide.
@@ -224,35 +252,3 @@ function priority(s: ExitSignal): number {
   return 0;
 }
 
-// Backfill / sync. Pulls current Alpaca positions and makes sure every one
-// has a Position row — existing ones are left alone, new ones are created
-// with thesis = null (the agent will fill this in on first review). Called
-// on every wake-up so the DB stays aligned with Alpaca even if external
-// deposits / transfers happen between wakeups.
-export async function syncPositionsFromAlpaca(userId: string): Promise<void> {
-  type BrokerPosition = { symbol: string; qty: string; avg_entry_price: string };
-  const brokerPositions = (await getPositions().catch(() => [])) as BrokerPosition[];
-  const now = new Date();
-  for (const p of brokerPositions) {
-    const symbol = p.symbol;
-    const qty = Number(p.qty);
-    const avgCostCents = BigInt(Math.round(Number(p.avg_entry_price) * 100));
-    const data: Prisma.PositionUpdateInput = { qty, avgCostCents, lastSyncedAt: now };
-    const createData: Prisma.PositionCreateInput = {
-      user: { connect: { id: userId } },
-      symbol,
-      qty,
-      avgCostCents,
-      lastSyncedAt: now,
-      // First time we see this position, flag it for thesis review on the
-      // next wake-up so the agent documents what it's holding and why.
-      thesis: 'pre-AgBro position — thesis review needed',
-      thesisReviewDueAt: now,
-    };
-    await prisma.position.upsert({
-      where: { userId_symbol: { userId, symbol } },
-      update: data,
-      create: createData,
-    });
-  }
-}
