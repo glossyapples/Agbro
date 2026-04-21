@@ -10,7 +10,10 @@ const HHMM = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'expected HH:MM (24h)
 
 const Patch = z
   .object({
-    expectedAnnualPct: z.number().min(0).max(100).optional(),
+    // Uncapped on purpose — this is an aspirational target the agent sees and
+    // uses to calibrate aggressiveness. The safety rails that actually bound
+    // risk (maxPositionPct, minCashReservePct, maxDailyTrades) stay strict.
+    expectedAnnualPct: z.number().nonnegative().finite().optional(),
     riskTolerance: z.enum(['conservative', 'moderate', 'aggressive']).optional(),
     maxPositionPct: z.number().min(1).max(100).optional(),
     maxDailyTrades: z.number().int().min(0).max(20).optional(),

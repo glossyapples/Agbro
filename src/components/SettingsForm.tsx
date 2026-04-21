@@ -52,6 +52,21 @@ function formatApiError(raw: unknown): string {
   return 'Save failed — check your inputs.';
 }
 
+// Flag unrealistic APR targets without blocking them. For reference, Buffett's
+// career avg is ~20%, S&P 500 long-run avg is ~10%. 30%+ is "I know what I'm
+// doing and I accept that chasing this likely means taking losses".
+function unrealisticAprWarning(raw: string): string | null {
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return null;
+  if (n > 100)
+    return `${n}%/yr means more than doubling every year — no strategy sustains that. The agent will take aggressive risk trying.`;
+  if (n > 50)
+    return `${n}%/yr is deep into hedge-fund-blowup territory. Expect the agent to size up and accept larger drawdowns.`;
+  if (n > 30)
+    return `${n}%/yr beats Buffett's career average. Aggressive but not absurd — the agent will lean into higher-conviction trades.`;
+  return null;
+}
+
 function toForm(initial: SettingsInitial): FormState {
   return {
     expectedAnnualPct: String(initial.expectedAnnualPct),
@@ -132,11 +147,17 @@ export function SettingsForm({ initial }: { initial: SettingsInitial }) {
           value={form.expectedAnnualPct}
           onChange={(e) => update('expectedAnnualPct', e.target.value)}
           min={0}
-          max={100}
         />
         <p className="mt-1 text-[11px] text-ink-400">
-          AgBro&apos;s survival goal. 0–100%. Miss this for too long and we re-evaluate the strategy.
+          AgBro&apos;s survival goal. The agent will push harder when this is
+          high and stay conservative when it&apos;s low. Safety rails below
+          still apply no matter what.
         </p>
+        {unrealisticAprWarning(form.expectedAnnualPct) && (
+          <p className="mt-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-300">
+            ⚠ {unrealisticAprWarning(form.expectedAnnualPct)}
+          </p>
+        )}
       </div>
 
       <div>
