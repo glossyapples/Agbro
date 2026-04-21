@@ -33,9 +33,10 @@ export function middleware(req: NextRequest) {
   return NextResponse.redirect(url);
 }
 
-// Exclude: Auth.js routes, cron routes (secret-gated), Next.js internals, static assets.
+// Exclude: Auth.js routes, cron routes (secret-gated), health (public liveness),
+// Next.js internals, static assets.
 export const config = {
   matcher: [
-    '/((?!api/auth|api/cron|_next/static|_next/image|favicon.ico|manifest.webmanifest|.*\\.(?:png|jpg|jpeg|svg|webp|ico)$).*)',
+    '/((?!api/auth|api/cron|api/health|_next/static|_next/image|favicon.ico|manifest.webmanifest|.*\\.(?:png|jpg|jpeg|svg|webp|ico)$).*)',
   ],
 };

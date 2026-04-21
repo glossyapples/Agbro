@@ -1,8 +1,10 @@
 // The wake-up loop. On every tick (or manual trigger), we:
-//   1. Create an AgentRun row
-//   2. Spin up a Claude Opus 4.7 session with the trade-decision tools
-//   3. Let it run until it calls `finalize_run`
-//   4. Persist every tool use as an AgentDecision
+//   1. Sync local positions from Alpaca (keeps the UI honest)
+//   2. Create an AgentRun row
+//   3. Spin up a Claude Opus 4.7 session with the trade-decision tools
+//   4. Let it run until it calls `finalize_run`
+//   5. Persist every tool use as an AgentDecision
+//   6. Sum Anthropic token usage → cost USD on the AgentRun row
 //
 // Trade decisions are HARDCODED to Opus 4.7. See models.ts.
 
@@ -12,6 +14,10 @@ import { prisma } from '@/lib/db';
 import { TRADE_DECISION_MODEL, assertTradeModel } from './models';
 import { AGBRO_PRINCIPLES } from './prompts';
 import { TOOL_DEFS, runTool } from './tools';
+import { child } from '@/lib/logger';
+import { estimateCostUsd, type TokenUsage } from '@/lib/pricing';
+import { getPositions } from '@/lib/alpaca';
+import { toCents } from '@/lib/money';
 
 const MAX_TURNS = 16;
 const MAX_TOOL_OUTPUT_BYTES = 60_000;
@@ -27,6 +33,7 @@ export type RunAgentResult = {
   decision: string | null;
   summary: string | null;
   status: string;
+  costUsd?: number;
 };
 
 export async function runAgent(args: RunAgentArgs): Promise<RunAgentResult> {
@@ -54,6 +61,16 @@ export async function runAgent(args: RunAgentArgs): Promise<RunAgentResult> {
     },
   });
 
+  const log = child({ agentRunId: run.id, userId: args.userId });
+  log.info('agent.run.start', { trigger: args.trigger, model: TRADE_DECISION_MODEL });
+
+  // Best-effort: sync local positions from the broker before the agent runs
+  // so `get_positions` reflects reality. Failures here don't block the run —
+  // the agent's own `get_positions` tool hits Alpaca directly anyway.
+  await syncPositions(args.userId).catch((err) => {
+    log.warn('agent.position_sync_failed', undefined, err);
+  });
+
   const ctx = { agentRunId: run.id, userId: args.userId };
   const messages: Anthropic.MessageParam[] = [
     {
@@ -63,6 +80,8 @@ export async function runAgent(args: RunAgentArgs): Promise<RunAgentResult> {
         `End with finalize_run when you're done. Remember your two goals: preserve principal, then grow it.`,
     },
   ];
+
+  const totalUsage: TokenUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
 
   try {
     for (let turn = 0; turn < MAX_TURNS; turn++) {
@@ -74,13 +93,23 @@ export async function runAgent(args: RunAgentArgs): Promise<RunAgentResult> {
         messages,
       });
 
+      // Accumulate token usage across every turn so AgentRun.costUsd reflects
+      // the full run, not just the final turn. The cache fields are present
+      // on the wire but not typed in @anthropic-ai/sdk@0.30.1; index-access
+      // keeps us forward-compatible when the SDK adds them.
+      const u = resp.usage as unknown as Record<string, number | undefined> | undefined;
+      if (u) {
+        totalUsage.inputTokens += u.input_tokens ?? 0;
+        totalUsage.outputTokens += u.output_tokens ?? 0;
+        totalUsage.cacheReadTokens = (totalUsage.cacheReadTokens ?? 0) + (u.cache_read_input_tokens ?? 0);
+        totalUsage.cacheWriteTokens = (totalUsage.cacheWriteTokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
+      }
+
       messages.push({ role: 'assistant', content: resp.content });
 
       const toolUses = resp.content.filter(
         (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use'
       );
-
-      // Record any text blocks as decisions (rationale traces).
       const textBlocks = resp.content.filter(
         (b): b is Anthropic.TextBlock => b.type === 'text'
       );
@@ -91,7 +120,6 @@ export async function runAgent(args: RunAgentArgs): Promise<RunAgentResult> {
       }
 
       if (toolUses.length === 0 || resp.stop_reason === 'end_turn') {
-        // Agent stopped without finalising — capture and exit.
         await prisma.agentRun.update({
           where: { id: run.id },
           data: {
@@ -116,6 +144,7 @@ export async function runAgent(args: RunAgentArgs): Promise<RunAgentResult> {
         } catch (err) {
           isError = true;
           result = { error: (err as Error).message };
+          log.warn('agent.tool_error', { tool: use.name }, err);
         }
         const serialized = JSON.stringify(result, bigintReplacer);
         const truncated = serialized.length > MAX_TOOL_OUTPUT_BYTES;
@@ -123,9 +152,7 @@ export async function runAgent(args: RunAgentArgs): Promise<RunAgentResult> {
           ? serialized.slice(0, MAX_TOOL_OUTPUT_BYTES - TRUNCATION_MARKER.length) + TRUNCATION_MARKER
           : serialized;
         if (truncated) {
-          console.warn(
-            `agent.tool_output_truncated name=${use.name} runId=${run.id} bytes=${serialized.length}`
-          );
+          log.warn('agent.tool_output_truncated', { tool: use.name, bytes: serialized.length });
         }
         const decisionPayload = {
           name: use.name,
@@ -156,23 +183,40 @@ export async function runAgent(args: RunAgentArgs): Promise<RunAgentResult> {
       if (finalized) break;
     }
   } catch (err) {
+    const costUsd = estimateCostUsd(TRADE_DECISION_MODEL, totalUsage);
     await prisma.agentRun.update({
       where: { id: run.id },
       data: {
         status: 'errored',
         endedAt: new Date(),
         errorMessage: (err as Error).message,
+        costUsd,
       },
     });
+    log.error('agent.run.errored', err, { costUsd, usage: totalUsage });
     throw err;
   }
 
+  const costUsd = estimateCostUsd(TRADE_DECISION_MODEL, totalUsage);
+  await prisma.agentRun.update({
+    where: { id: run.id },
+    data: { costUsd },
+  });
+
   const final = await prisma.agentRun.findUnique({ where: { id: run.id } });
+  log.info('agent.run.end', {
+    status: final?.status,
+    decision: final?.decision,
+    costUsd,
+    inputTokens: totalUsage.inputTokens,
+    outputTokens: totalUsage.outputTokens,
+  });
   return {
     agentRunId: run.id,
     decision: final?.decision ?? null,
     summary: final?.summary ?? null,
     status: final?.status ?? 'unknown',
+    costUsd,
   };
 }
 
@@ -188,6 +232,46 @@ async function skipRun(userId: string, trigger: string, reason: string): Promise
     },
   });
   return { agentRunId: run.id, decision: null, summary: run.summary, status: 'skipped' };
+}
+
+// Pull Alpaca positions and upsert the local Position table so the UI and
+// downstream analytics reflect broker truth. Positions no longer held at the
+// broker are deleted from the local table.
+async function syncPositions(userId: string): Promise<void> {
+  const raw = await getPositions();
+  if (!Array.isArray(raw)) return;
+  type RawPosition = { symbol?: string; qty?: string | number; avg_entry_price?: string | number };
+  const broker = (raw as RawPosition[])
+    .map((p) => ({
+      symbol: String(p.symbol ?? '').toUpperCase(),
+      qty: Number(p.qty ?? 0),
+      avgCostCents: toCents(Number(p.avg_entry_price ?? 0)),
+    }))
+    .filter((p) => p.symbol && Number.isFinite(p.qty));
+
+  const brokerSymbols = Array.from(new Set(broker.map((p) => p.symbol)));
+
+  await prisma.$transaction([
+    // Upsert everything the broker is reporting.
+    ...broker.map((p) =>
+      prisma.position.upsert({
+        where: { userId_symbol: { userId, symbol: p.symbol } },
+        update: { qty: p.qty, avgCostCents: p.avgCostCents, lastSyncedAt: new Date() },
+        create: {
+          userId,
+          symbol: p.symbol,
+          qty: p.qty,
+          avgCostCents: p.avgCostCents,
+        },
+      })
+    ),
+    // Remove local rows the broker no longer reports (closed positions).
+    // When brokerSymbols is empty, `notIn: []` would match everything — safe,
+    // since it means the broker has zero positions for this user.
+    prisma.position.deleteMany({
+      where: { userId, symbol: { notIn: brokerSymbols } },
+    }),
+  ]);
 }
 
 function bigintReplacer(_key: string, value: unknown) {

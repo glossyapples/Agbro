@@ -45,13 +45,11 @@ export default async function StrategyIndex() {
         ))}
       </ul>
 
-      <div className="card">
-        <h2 className="text-sm font-semibold">Compare strategies</h2>
-        <p className="mt-1 text-xs text-ink-400">
-          Select two versions to see rule-by-rule differences (coming soon). For now, past strategies are
-          preserved above — all learnings flow into the Brain.
-        </p>
-      </div>
+      {strategies.length >= 2 && (
+        <Link href="/strategy/compare" className="card text-center text-sm text-brand-400">
+          Compare strategies →
+        </Link>
+      )}
     </div>
   );
 }

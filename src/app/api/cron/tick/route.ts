@@ -12,6 +12,7 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { runAgent } from '@/lib/agents/orchestrator';
 import { apiError, assertCronSecret } from '@/lib/api';
+import { log } from '@/lib/logger';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300;
@@ -108,7 +109,7 @@ export async function POST(req: Request) {
           status: result.status,
         });
       } catch (err) {
-        console.error('cron.tick agent failed', { userId: account.userId }, err);
+        log.error('cron.tick.agent_failed', err, { userId: account.userId });
         outcomes.push({
           userId: account.userId,
           failed: true,

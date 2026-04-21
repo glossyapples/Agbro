@@ -9,6 +9,7 @@ import { apiError, requireUser } from '@/lib/api';
 import { checkLimit, rateLimited } from '@/lib/ratelimit';
 import { BRAIN_WRITEUP_MODEL } from '@/lib/agents/models';
 import { STRATEGY_WIZARD_SYSTEM } from '@/lib/agents/prompts';
+import { log } from '@/lib/logger';
 
 export const runtime = 'nodejs';
 export const maxDuration = 120;
@@ -44,7 +45,7 @@ export async function POST(req: Request) {
 
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {
-      console.error('strategy.wizard: ANTHROPIC_API_KEY missing');
+      log.error('strategy.wizard.missing_api_key', new Error('ANTHROPIC_API_KEY missing'));
       return NextResponse.json({ error: 'server misconfigured' }, { status: 500 });
     }
     const anthropic = new Anthropic({ apiKey });

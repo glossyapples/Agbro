@@ -7,6 +7,8 @@ import { prisma } from '@/lib/db';
 import { BRAIN_WRITEUP_MODEL } from '@/lib/agents/models';
 import { BRAIN_WRITER_SYSTEM } from '@/lib/agents/prompts';
 import { apiError, assertCronSecret } from '@/lib/api';
+import { log } from '@/lib/logger';
+import { estimateCostUsd } from '@/lib/pricing';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300;
@@ -23,7 +25,7 @@ export async function POST(req: Request) {
   try {
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {
-      console.error('cron.weekly: ANTHROPIC_API_KEY missing');
+      log.error('cron.weekly.missing_api_key', new Error('ANTHROPIC_API_KEY missing'));
       return NextResponse.json({ error: 'server misconfigured' }, { status: 500 });
     }
     const anthropic = new Anthropic({ apiKey });
@@ -112,6 +114,17 @@ Return plain markdown. No preamble.`;
           messages: [{ role: 'user', content: prompt }],
         });
 
+        const u = resp.usage as unknown as Record<string, number | undefined> | undefined;
+        const costUsd = u
+          ? estimateCostUsd(BRAIN_WRITEUP_MODEL, {
+              inputTokens: u.input_tokens ?? 0,
+              outputTokens: u.output_tokens ?? 0,
+              cacheReadTokens: u.cache_read_input_tokens ?? 0,
+              cacheWriteTokens: u.cache_creation_input_tokens ?? 0,
+            })
+          : 0;
+        log.info('cron.weekly.user_ok', { userId: user.id, costUsd, model: BRAIN_WRITEUP_MODEL });
+
         const text = resp.content
           .filter((b): b is Anthropic.TextBlock => b.type === 'text')
           .map((b) => b.text)
@@ -138,7 +151,7 @@ Return plain markdown. No preamble.`;
 
         outcomes.push({ userId: user.id, ok: true, brainEntryId: entry.id });
       } catch (err) {
-        console.error('cron.weekly per-user failure', { userId: user.id }, err);
+        log.error('cron.weekly.user_failed', err, { userId: user.id });
         outcomes.push({
           userId: user.id,
           failed: true,

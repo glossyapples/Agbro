@@ -16,6 +16,7 @@ import { perplexitySearch } from '@/lib/research/perplexity';
 import { googleSearch } from '@/lib/research/google';
 import { toCents } from '@/lib/money';
 import { startOfDayET } from '@/lib/time';
+import { log } from '@/lib/logger';
 import { PlaceTradeInput, SizePositionInput, UpdateStockFundamentalsInput } from './schemas';
 
 export const TOOL_DEFS: Anthropic.Tool[] = [
@@ -411,7 +412,7 @@ async function placeTradeTool(ctx: ToolContext, input: Record<string, unknown>) 
         },
       })
       .catch((dbErr) => {
-        console.error('placeTradeTool: failed to mark pending row rejected', { tradeId: pending.id }, dbErr);
+        log.error('trade.reject_mark_failed', dbErr, { tradeId: pending.id });
       });
     throw brokerErr;
   }
@@ -426,10 +427,10 @@ async function placeTradeTool(ctx: ToolContext, input: Record<string, unknown>) 
       data: { alpacaOrderId: order.id, status: 'submitted' },
     });
   } catch (dbErr) {
-    console.error('placeTradeTool: db update failed after broker accept', {
+    log.error('trade.db_update_failed_after_broker_accept', dbErr, {
       tradeId: pending.id,
       alpacaOrderId: order.id,
-    }, dbErr);
+    });
     await cancelOrder(order.id);
     throw dbErr;
   }
@@ -446,7 +447,7 @@ async function placeTradeTool(ctx: ToolContext, input: Record<string, unknown>) 
     })
     .catch((notifErr) => {
       // Notification failure shouldn't fail the trade — the trade is real.
-      console.error('placeTradeTool: notification create failed', { tradeId: trade.id }, notifErr);
+      log.error('trade.notification_failed', notifErr, { tradeId: trade.id });
     });
 
   return { tradeId: trade.id, alpacaOrderId: order.id, status: 'submitted' };

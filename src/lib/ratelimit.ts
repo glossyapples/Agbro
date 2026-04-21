@@ -32,9 +32,10 @@ const redis =
 if (!redis && process.env.NODE_ENV === 'production') {
   // Loud warning on boot: the in-memory fallback is per-instance and can be
   // trivially bypassed by any deployment running more than one container.
+  // Using console.warn directly to avoid a circular import with logger.ts.
   console.warn(
-    'ratelimit: UPSTASH_REDIS_REST_URL/TOKEN not set — falling back to in-memory limiter. ' +
-      'This is NOT safe for multi-instance production deployments.'
+    '{"level":"warn","event":"ratelimit.fallback_in_memory",' +
+      '"message":"UPSTASH_REDIS_REST_URL/TOKEN not set; multi-instance deployments can bypass limits"}'
   );
 }
 

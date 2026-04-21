@@ -3,6 +3,7 @@
 import { NextResponse } from 'next/server';
 import { timingSafeEqual as nodeTimingSafeEqual } from 'node:crypto';
 import { getCurrentUser } from '@/lib/auth';
+import { log } from '@/lib/logger';
 
 // Log the real error server-side, return a generic message to the client.
 // Always call this instead of leaking `(err as Error).message` in responses.
@@ -12,8 +13,7 @@ export function apiError(
   publicMessage = 'internal server error',
   context?: string
 ): NextResponse {
-  const tag = context ? `[${context}]` : '';
-  console.error('api_error', tag, err);
+  log.error(context ?? 'api_error', err, { status });
   return NextResponse.json({ error: publicMessage }, { status });
 }
 

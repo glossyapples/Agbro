@@ -7,6 +7,7 @@ import type { NextAuthConfig } from 'next-auth';
 import { PrismaAdapter } from '@auth/prisma-adapter';
 import Resend from 'next-auth/providers/resend';
 import { prisma } from '@/lib/db';
+import { log } from '@/lib/logger';
 
 const ALLOWED_EMAILS = (process.env.AGBRO_ALLOWED_EMAILS ?? '')
   .split(',')
@@ -24,7 +25,7 @@ export const authConfig: NextAuthConfig = {
       async sendVerificationRequest({ identifier, url, provider }) {
         // Dev fallback: no key → print the magic link to server logs so we can copy it.
         if (!process.env.RESEND_API_KEY) {
-          console.log(`[auth] magic link for ${identifier}: ${url}`);
+          log.info('auth.magic_link.dev_fallback', { email: identifier, url });
           return;
         }
         const res = await fetch('https://api.resend.com/emails', {

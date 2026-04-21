@@ -52,11 +52,14 @@ describe('apiError', () => {
     expect(JSON.stringify(body)).not.toContain('secret123');
   });
 
-  it('logs the original error server-side with the context tag', () => {
+  it('logs the original error server-side with the context tag as the event name', () => {
     apiError(new Error('upstream timeout'), 500, 'failed', 'cron.weekly');
     expect(errSpy).toHaveBeenCalled();
     const joined = errSpy.mock.calls.flat().map(String).join(' ');
-    expect(joined).toContain('[cron.weekly]');
+    // Logger emits `event: "cron.weekly"` (JSON) or pretty-printed line
+    // containing the event name — either way, the tag is present.
+    expect(joined).toContain('cron.weekly');
+    expect(joined).toContain('upstream timeout');
   });
 
   it('honors the provided status code', async () => {

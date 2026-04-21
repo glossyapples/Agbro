@@ -67,36 +67,76 @@ equities + ETFs only. Value investing bias (Buffett / Graham / Munger).
 ```bash
 cp .env.example .env            # fill in keys
 npm install
-npx prisma migrate dev --name init
-npm run db:seed
+npx prisma db push              # create schema against your local DB
+npm run db:seed                 # optional: seed the 29-stock watchlist
 npm run dev
 open http://localhost:3000
 ```
+
+First sign-in:
+
+1. Go to `/login`, enter an email.
+2. Because `RESEND_API_KEY` is empty in dev, the magic link is **logged to
+   your terminal** as `auth.magic_link.dev_fallback`. Copy the `url` field
+   from that line and open it.
+3. The sign-in hook auto-creates your trading Account, a default Strategy,
+   and a Day-0 brain entry. You land on `/`.
 
 Manually trigger a wake-up:
 
 ```bash
 npm run agent:run
-# or
-curl -X POST http://localhost:3000/api/agents/run
+# or, once signed in:
+curl -X POST http://localhost:3000/api/agents/run -b cookies.txt
 ```
 
 ## Deploying to Railway
 
-1. Create a new Railway project from this repo.
-2. Add a **PostgreSQL** plugin. Railway injects `DATABASE_URL`.
-3. Set environment variables (see `.env.example`). At minimum:
+1. **Create a new Railway project** from this repo.
+2. **Add the PostgreSQL plugin.** Railway injects `DATABASE_URL`.
+3. **Set environment variables** in the service (see `.env.example` for the
+   full list). Minimum to boot:
    - `ANTHROPIC_API_KEY`
    - `ALPACA_KEY_ID`, `ALPACA_SECRET_KEY`, `ALPACA_PAPER=true`
-   - `AGBRO_CRON_SECRET` (any random string)
-   - `PERPLEXITY_API_KEY`, `GOOGLE_CSE_KEY`, `GOOGLE_CSE_CX` (optional but
-     strongly recommended)
-4. Railway auto-detects `package.json`; `build` runs migrations + `next build`.
-5. Add two Railway **cron** services (or use an external cron):
-   - `*/30 9-16 * * 1-5` → `POST /api/cron/tick`  (wakes the agent on cadence)
-   - `0 17 * * 5` → `POST /api/cron/weekly`       (Friday 5pm weekly brain)
-   Each request must include the header `x-agbro-cron-secret: $AGBRO_CRON_SECRET`.
-6. Open the Railway URL on your phone → Add to Home Screen. Done.
+   - `AGBRO_CRON_SECRET` — any random string (use `openssl rand -hex 32`)
+   - `AUTH_SECRET` — any random string (use `openssl rand -base64 32`)
+   - `AUTH_URL` — your Railway public URL, e.g. `https://agbro.up.railway.app`
+   - `RESEND_API_KEY` + `AGBRO_MAIL_FROM` — needed so magic links actually get
+     emailed. Without these you can't sign in on the deployed instance.
+   - `AGBRO_ALLOWED_EMAILS` — comma-separated allowlist (recommended for a
+     single-person deploy). Leave empty to allow any email to sign in.
+   - `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN` — strongly
+     recommended; without these the rate limiter falls back to in-memory,
+     which is bypassable by any restart or second instance.
+   - `PERPLEXITY_API_KEY`, `GOOGLE_CSE_KEY`, `GOOGLE_CSE_CX` — optional;
+     research tools gracefully no-op without them.
+4. **First boot.** Railway auto-detects `package.json`. The `build` script
+   runs `prisma migrate deploy` and `next build`. If the DB has no migrations
+   yet, a one-time `npx prisma db push` from a Railway shell will bootstrap
+   the schema; subsequent changes use `prisma migrate`.
+5. **Schedule cron.** Add two Railway cron services (or hit the routes from
+   any external scheduler):
+   - `*/30 13-21 * * 1-5` → `POST /api/cron/tick` — wakes the agent on
+     cadence. Times are in **UTC**; `13-21` covers roughly 9am-5pm ET.
+   - `0 22 * * 5` → `POST /api/cron/weekly` — Friday ~5pm ET weekly brain.
+   Each request **must** include `x-agbro-cron-secret: $AGBRO_CRON_SECRET`.
+6. **Health check.** Point your uptime monitor at `GET /api/health` (public,
+   returns 200 with `{ok:true, db:{ok, latencyMs}}` when healthy, 503 otherwise).
+7. **Sign in.** Visit your URL, `/login`, enter your email. Auth.js emails a
+   magic link via Resend. The sign-in hook bootstraps your account on first
+   use — no manual seed required in prod.
+8. **Add to Home Screen** on your phone. Done.
+
+### Going live (real money)
+
+Phased rollout is the only responsible path:
+- Keep `ALPACA_PAPER=true` for the first **several weeks** of real deployment.
+- Watch `AgentRun.costUsd`, the Brain's weekly post-mortems, and the Analytics
+  page. If week-over-week the agent isn't making sensible calls, stay paper.
+- When flipping live, also deposit the **smallest meaningful** amount first
+  (see Disclaimer). `ALPACA_PAPER=false` is the only switch; **nothing else
+  changes**, which is the point — there must be no code path that behaves
+  differently between paper and live.
 
 ## File map
 
@@ -106,30 +146,42 @@ prisma/
   seed.ts                    # starter user, strategy, 29-stock watchlist
 src/lib/
   analyzer/index.ts          # Graham / DCF / DDM / moat / Buffett score / sizer
-  alpaca.ts                  # broker wrapper, paper by default
+  alpaca.ts                  # broker wrapper, paper by default, cancelOrder
   agents/
     models.ts                # enforces claude-opus-4-7 for trades
-    orchestrator.ts          # wake-up loop: tool-use agent
+    orchestrator.ts          # wake-up loop: tool-use agent + position sync + cost
     prompts.ts               # charter + wizard + brain-writer system prompts
+    schemas.ts               # Zod schemas for agent tool inputs
     tools.ts                 # the tools exposed to the agent
   research/
     perplexity.ts
     google.ts
+  auth/config.ts             # Auth.js v5 config (magic-link + first-sign-in hooks)
+  api.ts                     # requireUser / apiError / timing-safe cron secret
+  logger.ts                  # structured JSON logger
+  pricing.ts                 # Anthropic token → USD estimator
+  ratelimit.ts               # Upstash + in-memory fallback
+  strategy-diff.ts           # rule-by-rule diff of two Strategy.rules blobs
+  time.ts                    # ET-midnight helper (daily trade cap)
   db.ts, money.ts, auth.ts
 src/app/
   page.tsx                   # overview + live Stop/Pause/Continue
+  login/page.tsx             # magic-link sign-in
   trades/page.tsx            # trade log w/ Bull + Bear per trade
-  strategy/                  # list + wizard chat
+  strategy/                  # list + wizard chat + compare view
   brain/page.tsx             # principles, weekly updates, post-mortems
   analytics/page.tsx         # scoreboard
-  settings/page.tsx          # limits, cadence, hours, deposits
+  settings/page.tsx          # limits, cadence, hours, deposits, sign out
   disclaimer/page.tsx        # full risk disclosure
   api/
-    agents/run              # wake the agent on demand
+    auth/[...nextauth]      # Auth.js handler
+    agents/run              # wake the agent on demand (rate-limited)
     account/                # control (pause/stop/continue), deposit, settings
     strategy/, brain/, trades/, analyzer/
-    cron/tick               # scheduled wake-up
-    cron/weekly             # weekly brain writeup
+    cron/tick               # scheduled wake-up (per-user fan-out, 90s budget)
+    cron/weekly             # weekly brain writeup (per-user)
+    health                  # liveness + DB check (public)
+src/middleware.ts            # redirects unauth pages → /login, 401 JSON for /api
 scripts/
   run-agent.ts              # CLI wake
   weekly-brain.ts           # CLI weekly brain trigger

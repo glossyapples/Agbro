@@ -2,6 +2,7 @@
 // ALPACA_PAPER === "false" AND the account is not paused/stopped.
 
 import Alpaca from '@alpacahq/alpaca-trade-api';
+import { log } from '@/lib/logger';
 
 let _client: Alpaca | null = null;
 
@@ -95,7 +96,7 @@ export async function cancelOrder(orderId: string): Promise<boolean> {
     await a.cancelOrder(orderId);
     return true;
   } catch (err) {
-    console.error('alpaca.cancelOrder failed', { orderId }, err);
+    log.error('alpaca.cancel_order_failed', err, { orderId });
     return false;
   }
 }
