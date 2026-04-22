@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useTransition } from 'react';
+import { useEffect, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { CandidateWizardPanel, type WizardVerdict } from './CandidateWizardPanel';
 
@@ -55,6 +55,19 @@ export function CandidateManager({
   // (new candidates invalidate old opinions) or explicitly clears via the
   // panel's Clear button.
   const [verdictsBySymbol, setVerdictsBySymbol] = useState<Record<string, WizardVerdict>>({});
+
+  // Sync local state with the server-rendered initial whenever it changes
+  // (after router.refresh() post-screen or post-approve/reject). Without
+  // this, useState(initial) only captures the first render — you'd have
+  // to navigate away and back to see new candidates from a fresh screen.
+  // useState is for optimistic updates (removing a card on approve/reject);
+  // this effect reconciles it with the authoritative server state.
+  useEffect(() => {
+    setCandidates(initial);
+  }, [initial]);
+  useEffect(() => {
+    setCooldown(initialCooldown);
+  }, [initialCooldown]);
 
   async function act(symbol: string, action: 'promote' | 'reject') {
     setError(null);
