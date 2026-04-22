@@ -49,9 +49,13 @@ export function CryptoPerformanceChart({ initial }: { initial: Payload }) {
     }
   }, []);
 
+  // Re-fetch when the selected range diverges from the currently-displayed
+  // data's range. Comparing against `data.range` (local state) not
+  // `initial.range` (a prop that never changes after mount) means clicking
+  // back to the initial range after exploring others also triggers a fetch.
   useEffect(() => {
-    if (range !== initial.range) fetchRange(range);
-  }, [range, initial.range, fetchRange]);
+    if (range !== data.range) fetchRange(range);
+  }, [range, data.range, fetchRange]);
 
   const { path, btcPath, viewBox, minPct, maxPct } = useMemo(() => {
     const b = data.book;

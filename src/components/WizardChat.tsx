@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 type Turn = { id: string; role: 'user' | 'agent'; content: string };
 
@@ -14,6 +14,14 @@ export function WizardChat({
   const [turns, setTurns] = useState<Turn[]>(initialTurns);
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
+
+  // Reconcile local state with server-rendered turns whenever the parent
+  // re-renders with a new list. useState(initialTurns) only captures the
+  // first render, so without this, turns added by the server during a
+  // concurrent session (or a lost client-side response) would never appear.
+  useEffect(() => {
+    setTurns(initialTurns);
+  }, [initialTurns]);
 
   async function send() {
     if (!draft.trim() || busy) return;
