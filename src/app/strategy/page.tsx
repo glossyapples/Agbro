@@ -17,6 +17,9 @@ export default async function StrategyIndex() {
           <h1 className="text-2xl font-semibold">Strategy</h1>
           <p className="text-xs text-ink-400">Current + historical strategies. Compare, edit, collaborate.</p>
         </div>
+        <Link href="/backtest" className="text-xs text-brand-400">
+          Backtest →
+        </Link>
       </header>
 
       <ul className="flex flex-col gap-3">

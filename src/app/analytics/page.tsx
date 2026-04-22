@@ -115,9 +115,14 @@ export default async function AnalyticsPage() {
 
   return (
     <div className="flex flex-col gap-4 p-4">
-      <header className="pt-2">
-        <h1 className="text-2xl font-semibold">Analytics</h1>
-        <p className="text-xs text-ink-400">Scoreboard. The brain watches these closely.</p>
+      <header className="flex items-start justify-between gap-3 pt-2">
+        <div>
+          <h1 className="text-2xl font-semibold">Analytics</h1>
+          <p className="text-xs text-ink-400">Scoreboard. The brain watches these closely.</p>
+        </div>
+        <a href="/backtest" className="text-xs text-brand-400">
+          Backtest →
+        </a>
       </header>
 
       <section className="card">
