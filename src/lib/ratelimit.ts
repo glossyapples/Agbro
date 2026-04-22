@@ -13,12 +13,22 @@ import { Redis } from '@upstash/redis';
 
 type Duration = `${number} ${'s' | 'm' | 'h'}`;
 
-export type Bucket = 'agents.run' | 'analyzer' | 'strategy.wizard' | 'auth' | 'default';
+export type Bucket =
+  | 'agents.run'
+  | 'analyzer'
+  | 'strategy.wizard'
+  | 'candidates.wizard'
+  | 'auth'
+  | 'default';
 
 const LIMITS: Record<Bucket, { limit: number; window: Duration }> = {
   'agents.run': { limit: 10, window: '1 h' },
   analyzer: { limit: 60, window: '1 m' },
   'strategy.wizard': { limit: 20, window: '1 m' },
+  // Candidate wizard — each call is ~$0.30-0.60 in Opus tokens. 6 per
+  // hour is more than enough for the user-triggered "help me pick"
+  // workflow and caps spend at ~$50/month if someone abuses it.
+  'candidates.wizard': { limit: 6, window: '1 h' },
   auth: { limit: 5, window: '1 m' },
   default: { limit: 120, window: '1 m' },
 };

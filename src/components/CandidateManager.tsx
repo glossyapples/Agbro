@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
+import { CandidateWizardPanel, type WizardVerdict } from './CandidateWizardPanel';
 
 export type Candidate = {
   symbol: string;
@@ -49,6 +50,11 @@ export function CandidateManager({
   const [busy, startBusy] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [screenMsg, setScreenMsg] = useState<string | null>(null);
+  // Keyed by symbol → the wizard's verdict for that candidate, so each
+  // card can inline a "wizard says" badge. Cleared when the user re-screens
+  // (new candidates invalidate old opinions) or explicitly clears via the
+  // panel's Clear button.
+  const [verdictsBySymbol, setVerdictsBySymbol] = useState<Record<string, WizardVerdict>>({});
 
   async function act(symbol: string, action: 'promote' | 'reject') {
     setError(null);
@@ -131,9 +137,19 @@ export function CandidateManager({
               won&apos;t surface again). If you ignore them, they stay put —
               the agent will <strong>not</strong> research or trade them until
               you say yes. Turn on <em>auto-promote high-conviction</em> in
-              Settings to let the screener add clear Buffett-bar names for you.
+              Settings to let the screener add clear Buffett-bar names for you,
+              or use the <em>Wizard</em> below for a second opinion before
+              committing.
             </p>
           </section>
+          <CandidateWizardPanel
+            candidateCount={candidates.length}
+            onVerdictsChange={(verdicts) => {
+              const map: Record<string, WizardVerdict> = {};
+              for (const v of verdicts) map[v.symbol] = v;
+              setVerdictsBySymbol(map);
+            }}
+          />
           <ul className="flex flex-col gap-3">
           {candidates.map((c) => (
             <li key={c.symbol} className="card">
@@ -153,13 +169,29 @@ export function CandidateManager({
                       )}d ago`}
                   </p>
                 </div>
-                <span
-                  className={
-                    c.fundamentalsSource === 'edgar' ? 'pill-good text-[10px]' : 'pill-warn text-[10px]'
-                  }
-                >
-                  {c.fundamentalsSource === 'edgar' ? 'EDGAR' : 'no data'}
-                </span>
+                <div className="flex items-center gap-1">
+                  {verdictsBySymbol[c.symbol] && (
+                    <span
+                      className={`text-[10px] ${
+                        verdictsBySymbol[c.symbol].recommendation === 'approve'
+                          ? 'pill-good'
+                          : verdictsBySymbol[c.symbol].recommendation === 'reject'
+                            ? 'pill-bad'
+                            : 'pill-warn'
+                      }`}
+                      title={`Wizard: ${verdictsBySymbol[c.symbol].recommendation} · confidence ${(verdictsBySymbol[c.symbol].confidence * 100).toFixed(0)}%`}
+                    >
+                      Wizard #{verdictsBySymbol[c.symbol].rank}
+                    </span>
+                  )}
+                  <span
+                    className={
+                      c.fundamentalsSource === 'edgar' ? 'pill-good text-[10px]' : 'pill-warn text-[10px]'
+                    }
+                  >
+                    {c.fundamentalsSource === 'edgar' ? 'EDGAR' : 'no data'}
+                  </span>
+                </div>
               </div>
 
               {c.businessDescription && (
