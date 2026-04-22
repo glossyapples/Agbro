@@ -18,6 +18,7 @@ import { toCents } from '@/lib/money';
 import { startOfDayET } from '@/lib/time';
 import { log } from '@/lib/logger';
 import {
+  AcknowledgeThesisReviewInput,
   GetEventCalendarInput,
   GetOptionChainInput,
   PlaceOptionTradeInput,
@@ -261,6 +262,19 @@ export const TOOL_DEFS: Anthropic.Tool[] = [
     },
   },
   {
+    name: 'acknowledge_thesis_review',
+    description:
+      'Call this AFTER reviewing a position whose evaluate_exits signal was "review" and deciding the thesis still holds. Bumps the review timer forward so the same position isn\'t flagged on the next wake-up. Without this acknowledgement, the evaluator will re-surface the same stale review signal on every tick, burning tokens and log noise. Provide a short reviewNote summarising what was re-confirmed (the deeper analysis belongs in record_research_note).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        symbol: { type: 'string' },
+        reviewNote: { type: 'string', description: 'One-liner reconfirming the thesis.' },
+      },
+      required: ['symbol', 'reviewNote'],
+    },
+  },
+  {
     name: 'evaluate_exits',
     description:
       'Returns a per-open-position exit assessment: { symbol, signal: "hold"|"review"|"trim"|"sell", reason, thesis, taxHarvestCandidate, unrealizedLossCents }. Signals come from the active strategy\'s exit rules (price target, time stop, thesis review, fundamentals deterioration, dividend safety). Earnings blackout converts any "sell" into "review" — you never auto-sell into an earnings release. taxHarvestCandidate=true means the position is at a loss, it\'s Q4, and the thesis is already under review — if your review concludes "sell," do it THIS calendar year to claim the loss. NEVER harvest a conviction position just for the write-off. CALL THIS FIRST every wake-up, before any new-buy research. Process every non-hold signal before considering new positions.',
@@ -448,6 +462,13 @@ export async function runTool(
       // the broker at the start of this wake-up, so evaluateExits reads
       // from aligned state. No extra Alpaca call needed here.
       return { assessments: await evaluateExits(ctx.userId) };
+    }
+    case 'acknowledge_thesis_review': {
+      const parsed = AcknowledgeThesisReviewInput.safeParse(input);
+      if (!parsed.success) {
+        throw new Error(`acknowledge_thesis_review: invalid input — ${parsed.error.message}`);
+      }
+      return acknowledgeThesisReviewTool(ctx, parsed.data);
     }
     case 'get_option_chain': {
       const parsed = GetOptionChainInput.safeParse(input);
@@ -813,6 +834,44 @@ async function finalizeRunTool(ctx: ToolContext, input: Record<string, unknown>)
     },
   });
   return { finalized: true };
+}
+
+// ─── Thesis review acknowledgement ───────────────────────────────────────
+
+async function acknowledgeThesisReviewTool(
+  ctx: ToolContext,
+  input: AcknowledgeThesisReviewInput
+) {
+  const symbol = input.symbol.toUpperCase();
+  // Strategy's reviewDays governs how far forward to bump. Fall back to
+  // 180d if the strategy doesn't define one or none is active.
+  const active = await prisma.strategy.findFirst({
+    where: { userId: ctx.userId, isActive: true },
+    select: { rules: true },
+  });
+  const r = (active?.rules ?? {}) as { thesisReviewDays?: number | null };
+  const reviewDays = r.thesisReviewDays ?? 180;
+  const nextReview = new Date(Date.now() + reviewDays * 86_400_000);
+
+  const updated = await prisma.position.updateMany({
+    where: { userId: ctx.userId, symbol },
+    data: {
+      thesisReviewDueAt: nextReview,
+      lastReviewedAt: new Date(),
+    },
+  });
+  if (updated.count === 0) {
+    throw new Error(
+      `acknowledge_thesis_review: no open position for ${symbol}. Nothing to acknowledge.`
+    );
+  }
+  log.info('thesis_review.acknowledged', {
+    userId: ctx.userId,
+    symbol,
+    nextReviewDueAt: nextReview.toISOString(),
+    reviewNote: input.reviewNote.slice(0, 200),
+  });
+  return { symbol, nextReviewDueAt: nextReview.toISOString(), reviewDays };
 }
 
 // ─── Options handlers ────────────────────────────────────────────────────

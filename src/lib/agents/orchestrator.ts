@@ -23,6 +23,7 @@ import { child } from '@/lib/logger';
 import { estimateCostUsd, type TokenUsage } from '@/lib/pricing';
 import { getPositions } from '@/lib/alpaca';
 import { toCents } from '@/lib/money';
+import { refreshEarningsDate } from '@/lib/data/earnings';
 
 const MAX_TURNS = 16;
 const MAX_TOOL_OUTPUT_BYTES = 60_000;
@@ -113,6 +114,26 @@ export async function runAgent(args: RunAgentArgs): Promise<RunAgentResult> {
     log.warn('agent.position_sync_failed', undefined, err);
   });
 
+  // Refresh earnings dates for every stock position the user currently
+  // holds. The earnings-blackout rule gates new buys on nextEarningsAt, but
+  // that field goes stale for long-held positions (a 6-month-held stock
+  // has gone through 2 earnings cycles). refreshEarningsDate is itself
+  // rate-limited to 30d per symbol, so this is a no-op most of the time.
+  // Failures are per-symbol and never block the run.
+  try {
+    const held = await prisma.position.findMany({
+      where: { userId: args.userId, assetClass: 'stock' },
+      select: { symbol: true },
+    });
+    for (const p of held) {
+      await refreshEarningsDate(p.symbol).catch((err) => {
+        log.warn('agent.earnings_refresh_failed', { symbol: p.symbol }, err);
+      });
+    }
+  } catch (err) {
+    log.warn('agent.earnings_refresh_phase_failed', undefined, err);
+  }
+
   const ctx = { agentRunId: run.id, userId: args.userId };
   const messages: Anthropic.MessageParam[] = [
     {
@@ -181,12 +202,18 @@ export async function runAgent(args: RunAgentArgs): Promise<RunAgentResult> {
       for (const use of toolUses) {
         let result: unknown;
         let isError = false;
+        // One log line per tool invocation so a month of runs can be
+        // surveyed for "which tools did the agent actually use?" without
+        // parsing the full transcript. Cheap at the scale we run (dozens
+        // of tool calls per run, a few runs per day).
+        const toolStart = Date.now();
+        log.info('agent.tool_called', { tool: use.name });
         try {
           result = await runTool(use.name, use.input as Record<string, unknown>, ctx);
         } catch (err) {
           isError = true;
           result = { error: (err as Error).message };
-          log.warn('agent.tool_error', { tool: use.name }, err);
+          log.warn('agent.tool_error', { tool: use.name, durationMs: Date.now() - toolStart }, err);
         }
         const serialized = JSON.stringify(result, bigintReplacer);
         const truncated = serialized.length > MAX_TOOL_OUTPUT_BYTES;

@@ -90,3 +90,19 @@ export const PlaceOptionTradeInput = z.object({
   thesis: z.string().min(1).max(2_000),
 });
 export type PlaceOptionTradeInput = z.infer<typeof PlaceOptionTradeInput>;
+
+// Acknowledge a thesis review. The agent calls this after evaluate_exits
+// flags a position with signal='review', the agent re-reads the thesis +
+// fresh research, and concludes the thesis still holds. This bumps
+// Position.thesisReviewDueAt forward so the same position isn't re-flagged
+// on the next wake-up. Without this, the evaluator re-surfaces the same
+// stale 'review' signal every tick, burning tokens and log noise.
+//
+// reviewNote: short summary of what was re-confirmed, persisted to
+// Position.lastReviewedAt + optional note field. Kept tight so the brain
+// entry remains readable; a longer rationale belongs in record_research_note.
+export const AcknowledgeThesisReviewInput = z.object({
+  symbol: z.string().min(1).max(12),
+  reviewNote: z.string().min(1).max(500),
+});
+export type AcknowledgeThesisReviewInput = z.infer<typeof AcknowledgeThesisReviewInput>;

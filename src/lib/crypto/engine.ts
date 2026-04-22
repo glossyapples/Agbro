@@ -207,6 +207,22 @@ async function tryDca(
       where: { userId },
       data: { lastDcaAt: new Date() },
     });
+
+    // Cash-contention signal. Crypto and stocks share Alpaca's cash pool,
+    // so a DCA that burns cash reduces what the stock agent can deploy.
+    // Emit this so a month of logs can reveal whether crypto is starving
+    // stock trades. Refetch the broker account AFTER submissions to get
+    // post-DCA cash.
+    const postBroker = await getBrokerAccount().catch(() => null);
+    const spent = trades.reduce((s, t) => s + t.notionalUsd, 0);
+    log.info('crypto.dca_cash_reserved', {
+      userId,
+      spentUsd: spent.toFixed(2),
+      stockCashRemainingUsd: postBroker ? (Number(postBroker.cashCents) / 100).toFixed(2) : null,
+      portfolioValueUsd: postBroker
+        ? (Number(postBroker.portfolioValueCents) / 100).toFixed(2)
+        : null,
+    });
   }
   return {
     ran: trades.length > 0,
