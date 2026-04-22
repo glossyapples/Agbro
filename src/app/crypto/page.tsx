@@ -2,8 +2,10 @@ import Link from 'next/link';
 import { prisma } from '@/lib/db';
 import { requirePageUser } from '@/lib/auth';
 import { getCryptoPositions, getCryptoBars } from '@/lib/alpaca-crypto';
+import { getBrokerAccount } from '@/lib/alpaca';
 import { CryptoConfigForm } from '@/components/CryptoConfigForm';
 import { CryptoPerformanceChart } from '@/components/CryptoPerformanceChart';
+import { CryptoAllocationCard } from '@/components/CryptoAllocationCard';
 import { formatUsd } from '@/lib/money';
 
 export const runtime = 'nodejs';
@@ -52,23 +54,24 @@ async function loadInitialChart(userId: string) {
 }
 
 async function loadDashboard(userId: string) {
-  const [config, account, positionsRaw, chart] = await Promise.all([
+  const [config, account, positionsRaw, chart, broker] = await Promise.all([
     prisma.cryptoConfig.findUnique({ where: { userId } }),
     prisma.account.findUnique({ where: { userId } }),
     getCryptoPositions().catch(() => []),
     loadInitialChart(userId),
+    getBrokerAccount().catch(() => null),
   ]);
   const recentTrades = await prisma.trade.findMany({
     where: { userId, assetClass: 'crypto' },
     orderBy: { submittedAt: 'desc' },
     take: 10,
   });
-  return { config, account, positionsRaw, recentTrades, chart };
+  return { config, account, positionsRaw, recentTrades, chart, broker };
 }
 
 export default async function CryptoPage() {
   const user = await requirePageUser('/crypto');
-  const { config, account, positionsRaw, recentTrades, chart } = await loadDashboard(user.id);
+  const { config, account, positionsRaw, recentTrades, chart, broker } = await loadDashboard(user.id);
 
   const cryptoEnabled = account?.cryptoEnabled === true;
   const totalValueCents = positionsRaw.reduce(
@@ -120,6 +123,12 @@ export default async function CryptoPage() {
       )}
 
       <CryptoPerformanceChart initial={chart} />
+
+      <CryptoAllocationCard
+        cryptoBookUsd={totalValueCents / 100}
+        portfolioValueUsd={broker ? Number(broker.portfolioValueCents) / 100 : 0}
+        capPct={account?.maxCryptoAllocationPct ?? 10}
+      />
 
       <section className="card">
         <div className="flex items-center justify-between">

@@ -325,7 +325,7 @@ export function SettingsForm({ initial }: { initial: SettingsInitial }) {
       </div>
 
       <div>
-        <label>Max crypto allocation (% of total portfolio)</label>
+        <label>Crypto portfolio cap (% of total portfolio)</label>
         <input
           type="number"
           inputMode="decimal"
@@ -335,11 +335,14 @@ export function SettingsForm({ initial }: { initial: SettingsInitial }) {
           max={100}
         />
         <p className="mt-1 text-[11px] text-ink-400">
-          Hard cap on total crypto exposure versus your whole portfolio
-          (stocks + options + crypto). DCA buys scale down or skip when
-          this is reached; rebalance buys scale down to fit. Sells always
-          proceed regardless. Default 10% — keeps crypto as a small
-          asymmetric satellite for a Buffett-style core.
+          This is a <em>ceiling</em>, not a target. Total crypto exposure
+          (all coin market values combined) can never exceed this % of
+          your whole portfolio (stocks + options + crypto). When hit, DCA
+          scales down or skips; rebalance buys scale to fit; sells always
+          proceed. Default 10% keeps crypto as a small asymmetric
+          satellite. The <em>how much to buy each week</em> setting lives
+          on the <a href="/crypto" className="text-brand-400">Crypto page</a>{' '}
+          and is a different concept — it&apos;s a flow, not a ceiling.
         </p>
       </div>
 

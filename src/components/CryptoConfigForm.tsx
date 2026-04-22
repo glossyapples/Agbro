@@ -119,11 +119,15 @@ export function CryptoConfigForm({ initial }: { initial: CryptoConfigInitial }) 
       </div>
 
       <div>
-        <h2 className="text-sm font-semibold">DCA schedule</h2>
+        <h2 className="text-sm font-semibold">DCA schedule — how much you BUY each period</h2>
         <p className="mt-1 text-[11px] text-ink-400">
           Every <em>{dcaCadence}</em> day(s) the engine will spend{' '}
-          <em>${Number(dcaAmount) || 0}</em>, split across your targets.
-          Set amount to $0 to hold without adding more.
+          <em>${Number(dcaAmount) || 0}</em>, split across your targets
+          above. This is the <em>accumulation flow</em> — distinct from the
+          portfolio cap (set in Settings) which is the <em>maximum</em>{' '}
+          crypto can grow to as a share of your whole portfolio. When the
+          book nears the cap, DCA automatically scales down or pauses. Set
+          amount to $0 to hold without adding more.
         </p>
       </div>
       <div className="grid grid-cols-2 gap-3">
