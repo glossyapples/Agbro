@@ -120,15 +120,22 @@ async function tryDca(
   }
 
   // Buying power check — Alpaca paper shares one cash pool across equities
-  // and crypto, so submitting into a dry account just produces rejections.
+  // and crypto. Also subtract the AgBro wallet reservation so DCA respects
+  // whatever the user has explicitly parked.
   const broker = await getBrokerAccount().catch(() => null);
-  const cashUsd = broker ? Number(broker.cashCents) / 100 : 0;
+  const alpacaCashCents = broker ? broker.cashCents : BigInt(0);
+  const walletBalanceCents = account.walletBalanceCents;
+  const spendableCents =
+    alpacaCashCents - walletBalanceCents > BigInt(0)
+      ? alpacaCashCents - walletBalanceCents
+      : BigInt(0);
+  const cashUsd = Number(spendableCents) / 100;
   const requestedDcaUsd = Number(config.dcaAmountCents) / 100;
   if (cashUsd < requestedDcaUsd) {
     return {
       ran: false,
       trades: [],
-      skippedReason: `not enough cash ($${cashUsd.toFixed(0)}) for DCA ($${requestedDcaUsd.toFixed(0)})`,
+      skippedReason: `not enough spendable cash ($${cashUsd.toFixed(0)}; $${(Number(walletBalanceCents) / 100).toFixed(0)} parked in wallet) for DCA ($${requestedDcaUsd.toFixed(0)})`,
     };
   }
 

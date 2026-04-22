@@ -32,6 +32,7 @@ import { runScreen } from '@/lib/data/screener';
 import { getUpcomingEvents } from '@/lib/data/events';
 import { isInEarningsBlackout } from '@/lib/data/earnings';
 import { checkWashSaleBlock } from '@/lib/data/tax';
+import { computeSpendable } from '@/lib/wallet';
 import { evaluateExits } from './exits';
 import {
   getOptionContracts,
@@ -504,8 +505,24 @@ async function getAccountState(ctx: ToolContext) {
     safeAlpaca(() => getBrokerAccount()),
     prisma.account.findUnique({ where: { userId: ctx.userId } }),
   ]);
+  // Wallet reservation: if the user parked cash in the AgBro wallet,
+  // the agent should see reduced buying power. Surface both the raw
+  // Alpaca numbers AND the spendable breakdown so the agent's reasoning
+  // can distinguish "account has $100k" from "I can deploy $50k".
+  const wallet =
+    broker && !('error' in broker) && account
+      ? computeSpendable({
+          alpacaCashCents: broker.cashCents,
+          walletBalanceCents: account.walletBalanceCents,
+        })
+      : null;
   return {
     broker,
+    wallet: wallet && {
+      alpacaCashCents: wallet.alpacaCashCents.toString(),
+      walletBalanceCents: wallet.walletBalanceCents.toString(),
+      spendableCents: wallet.spendableCents.toString(),
+    },
     policy: account && {
       isPaused: account.isPaused,
       isStopped: account.isStopped,
@@ -529,9 +546,16 @@ async function sizePositionTool(ctx: ToolContext, input: Record<string, unknown>
   const account = await prisma.account.findUnique({ where: { userId: ctx.userId } });
   if (!account) throw new Error('account not found');
   const broker = await getBrokerAccount();
+  const { spendableCents } = computeSpendable({
+    alpacaCashCents: broker.cashCents,
+    walletBalanceCents: account.walletBalanceCents,
+  });
   const cents = positionSizeCents({
     portfolioValueCents: broker.portfolioValueCents,
-    cashCents: broker.cashCents,
+    // Position sizer treats "cashCents" as what we can actually deploy.
+    // Using spendable (Alpaca cash minus wallet reservation) keeps sizing
+    // honest with respect to the user's wallet freeze.
+    cashCents: spendableCents,
     buffettScore: parsed.data.buffettScore,
     confidence: parsed.data.confidence,
     maxPositionPct: account.maxPositionPct,
@@ -585,6 +609,51 @@ async function placeTradeTool(ctx: ToolContext, input: Record<string, unknown>) 
         recentSellTradeId: washSale.recentSell?.tradeId,
       });
       throw new Error(`place_trade: ${washSale.reason}`);
+    }
+
+    // Wallet-reservation check. If the user has parked cash in the
+    // AgBro wallet, subtract it from effective buying power BEFORE
+    // routing to the broker. Pre-flight catch is cleaner than letting
+    // Alpaca reject — we emit a clear error the agent can act on.
+    try {
+      const [acct, broker] = await Promise.all([
+        prisma.account.findUnique({
+          where: { userId: ctx.userId },
+          select: { walletBalanceCents: true },
+        }),
+        getBrokerAccount(),
+      ]);
+      if (acct) {
+        const spendable = computeSpendable({
+          alpacaCashCents: broker.cashCents,
+          walletBalanceCents: acct.walletBalanceCents,
+        });
+        // Estimate order cost: use the last price if we have it. No price
+        // means we can't pre-check — let Alpaca be the arbiter.
+        const price = await getLatestPrice(symbol).catch(() => null);
+        if (price != null && price > 0) {
+          const estimatedCostCents = BigInt(Math.round(price * p.qty * 100));
+          if (estimatedCostCents > spendable.spendableCents) {
+            log.info('trade.blocked_by_wallet', {
+              userId: ctx.userId,
+              symbol,
+              estimatedCostCents: estimatedCostCents.toString(),
+              spendableCents: spendable.spendableCents.toString(),
+              walletBalanceCents: spendable.walletBalanceCents.toString(),
+            });
+            throw new Error(
+              `place_trade: insufficient spendable cash. Order needs ~$${(Number(estimatedCostCents) / 100).toFixed(0)} but only $${(Number(spendable.spendableCents) / 100).toFixed(0)} is available ($${(Number(spendable.walletBalanceCents) / 100).toFixed(0)} is parked in the wallet). Transfer from wallet to active cash if you want this trade to go through.`
+            );
+          }
+        }
+      }
+    } catch (walletErr) {
+      // Only re-throw the wallet-specific block. Anything else (Alpaca
+      // hiccup, DB glitch) falls through to the broker call which will
+      // be authoritative.
+      if (walletErr instanceof Error && walletErr.message.startsWith('place_trade: insufficient')) {
+        throw walletErr;
+      }
     }
   }
 

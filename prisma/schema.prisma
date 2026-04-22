@@ -122,6 +122,13 @@ model Account {
   // still execute since they REDUCE the exposure. Default 10% keeps crypto
   // as an asymmetric satellite for a Buffett-style core.
   maxCryptoAllocationPct Float @default(10.0)
+  // AgBro-side "wallet" balance: cash the user has explicitly parked out
+  // of the agent's reach. Alpaca still holds the underlying cash, but
+  // place_trade + crypto DCA subtract this from effective buying power
+  // before deciding what to deploy. Lets the user load $100k into Alpaca
+  // but keep $50k "frozen" — the agent sees $50k. Transfers between
+  // active and wallet are pure AgBro accounting, not real Alpaca moves.
+  walletBalanceCents    BigInt   @default(0)
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
   deposits            Deposit[]

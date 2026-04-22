@@ -17,11 +17,18 @@ export default async function SettingsPage() {
       </header>
 
       <section className="card">
-        <h2 className="text-sm font-semibold">Principal</h2>
-        <p className="mt-1 text-sm text-ink-200">
-          Deposited: <strong>{formatUsd(a.depositedCents)}</strong> · Target gain{' '}
-          <strong>{formatPct(a.expectedAnnualPct)}</strong> / yr
-        </p>
+        <div className="flex items-start justify-between">
+          <div>
+            <h2 className="text-sm font-semibold">Principal</h2>
+            <p className="mt-1 text-sm text-ink-200">
+              Deposited: <strong>{formatUsd(a.depositedCents)}</strong> · Target gain{' '}
+              <strong>{formatPct(a.expectedAnnualPct)}</strong> / yr
+            </p>
+          </div>
+          <Link href="/wallet" className="text-xs text-brand-400">
+            Wallet →
+          </Link>
+        </div>
         <DepositForm />
       </section>
 

@@ -2,6 +2,7 @@ import { prisma } from '@/lib/db';
 import { requirePageUser } from '@/lib/auth';
 import { formatPct, formatUsd } from '@/lib/money';
 import { getDividends } from '@/lib/alpaca';
+import { ManualSellButton } from '@/components/ManualSellButton';
 
 // First-of-month at ~midnight ET. Close enough for a "this month" filter —
 // a trade that fills in the first 5 hours of a new month UTC would still
@@ -196,7 +197,10 @@ export default async function AnalyticsPage() {
             {positions.map((p) => (
               <li key={p.id} className="flex items-center justify-between py-2">
                 <span>{p.symbol} · {p.qty}</span>
-                <span className="text-xs text-ink-400">avg {formatUsd(p.avgCostCents)}</span>
+                <div className="flex items-center gap-3">
+                  <span className="text-xs text-ink-400">avg {formatUsd(p.avgCostCents)}</span>
+                  <ManualSellButton symbol={p.symbol} heldQty={p.qty} />
+                </div>
               </li>
             ))}
           </ul>

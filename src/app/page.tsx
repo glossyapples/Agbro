@@ -142,7 +142,8 @@ export default async function OverviewPage() {
       <PerformanceChart initial={chart} />
 
       <section className="card">
-        <div className="grid grid-cols-3 gap-3 text-sm">
+        <div className="flex items-center justify-between">
+          <div className="grid flex-1 grid-cols-3 gap-3 text-sm">
           <div>
             <p className="stat-label">Principal</p>
             <p className="text-lg font-semibold text-ink-50">{formatUsd(account.depositedCents)}</p>
@@ -155,6 +156,10 @@ export default async function OverviewPage() {
             <p className="stat-label">Risk</p>
             <p className="text-lg font-semibold capitalize text-ink-100">{account.riskTolerance}</p>
           </div>
+          </div>
+          <Link href="/wallet" className="ml-3 text-xs text-brand-400">
+            Wallet →
+          </Link>
         </div>
       </section>
 
