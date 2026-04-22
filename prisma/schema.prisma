@@ -366,7 +366,9 @@ model BrainEntry {
   createdAt DateTime @default(now())
   // Tracked so the /brain page can show "last synced X ago" for starter
   // entries. Prisma auto-bumps on any field change via @updatedAt.
-  updatedAt DateTime @updatedAt
+  // @default(now()) backfills existing rows on first migration so the
+  // NOT NULL constraint is satisfied without needing --force-reset.
+  updatedAt DateTime @default(now()) @updatedAt
 
   @@index([userId, createdAt])
   @@index([kind])
