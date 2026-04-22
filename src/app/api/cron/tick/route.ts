@@ -11,6 +11,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { runAgent, AgentRunInflightError } from '@/lib/agents/orchestrator';
+import { runCryptoCycleAllUsers } from '@/lib/crypto/engine';
 import { apiError, assertCronSecret } from '@/lib/api';
 import { log } from '@/lib/logger';
 
@@ -59,13 +60,27 @@ export async function POST(req: Request) {
   if (unauthorized) return unauthorized;
 
   try {
+    // Crypto runs 24/7 — fire it on every tick regardless of weekend /
+    // market hours. The engine self-rate-limits via CryptoConfig.dcaCadenceDays,
+    // so calling it hourly is a no-op when nothing is due. Piggybacking on
+    // the existing stock cron means the user doesn't need to configure a
+    // second Railway cron for crypto.
+    const cryptoResults = await runCryptoCycleAllUsers().catch((err) => {
+      log.error('cron.tick.crypto_cycle_failed', err);
+      return [] as Awaited<ReturnType<typeof runCryptoCycleAllUsers>>;
+    });
+
     const now = new Date();
     const dow = new Intl.DateTimeFormat('en-US', {
       timeZone: 'America/New_York',
       weekday: 'short',
     }).format(now);
     if (dow === 'Sat' || dow === 'Sun') {
-      return NextResponse.json({ skipped: true, reason: 'weekend' });
+      return NextResponse.json({
+        skipped: true,
+        reason: 'weekend (stock agent only — crypto ran)',
+        crypto: cryptoResults,
+      });
     }
 
     const accounts = await prisma.account.findMany({
@@ -134,7 +149,7 @@ export async function POST(req: Request) {
     const skipped = outcomes.filter((o) => 'skipped' in o).length;
 
     return NextResponse.json(
-      { total: outcomes.length, ran, skipped, failed, outcomes },
+      { total: outcomes.length, ran, skipped, failed, outcomes, crypto: cryptoResults },
       { status: failed > 0 ? 207 : 200 }
     );
   } catch (err) {

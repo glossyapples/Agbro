@@ -31,6 +31,8 @@ export function CryptoConfigForm({ initial }: { initial: CryptoConfigInitial }) 
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [running, setRunning] = useState(false);
+  const [runMsg, setRunMsg] = useState<string | null>(null);
 
   const allocSum = Object.entries(alloc)
     .filter(([sym]) => allowed[sym])
@@ -166,6 +168,46 @@ export function CryptoConfigForm({ initial }: { initial: CryptoConfigInitial }) 
             {saving ? 'Saving…' : 'Save'}
           </button>
         </div>
+      </div>
+
+      <div className="flex items-start justify-between gap-3 border-t border-ink-700/60 pt-3">
+        <div>
+          <p className="text-sm font-medium text-ink-100">Run DCA now</p>
+          <p className="mt-0.5 text-[11px] text-ink-400">
+            Triggers the DCA engine immediately for your account. Same
+            rate-limit as the cron — if the cadence hasn&apos;t elapsed yet
+            it returns a skip reason instead of acting.
+          </p>
+          {runMsg && <p className="mt-1 text-[11px] text-ink-300">{runMsg}</p>}
+        </div>
+        <button
+          onClick={async () => {
+            setRunMsg(null);
+            setRunning(true);
+            try {
+              const res = await fetch('/api/crypto/run', { method: 'POST' });
+              const data = await res.json();
+              if (!res.ok) {
+                setRunMsg(typeof data.error === 'string' ? data.error : 'run failed');
+              } else if (data.ranDca) {
+                setRunMsg(
+                  `DCA placed: ${data.dcaTrades.length} order(s). Refresh to see them below.`
+                );
+                router.refresh();
+              } else {
+                setRunMsg(`Skipped — ${data.skippedReason ?? 'not due yet'}.`);
+              }
+            } catch {
+              setRunMsg('Network error — try again.');
+            } finally {
+              setRunning(false);
+            }
+          }}
+          disabled={running}
+          className="btn-ghost disabled:opacity-50"
+        >
+          {running ? 'Running…' : 'Run DCA now'}
+        </button>
       </div>
     </section>
   );
