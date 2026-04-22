@@ -19,12 +19,15 @@ export const runtime = 'nodejs';
 export const maxDuration = 30;
 
 const Query = z.object({
-  range: z.enum(['1W', '1M', '3M', 'YTD', '1Y', 'ALL']).default('1M'),
+  range: z.enum(['1D', '1W', '1M', '3M', 'YTD', '1Y', 'ALL']).default('1M'),
 });
 
 function rangeStart(range: string, now: Date): Date {
   const d = new Date(now);
   switch (range) {
+    case '1D':
+      d.setDate(d.getDate() - 1);
+      break;
     case '1W':
       d.setDate(d.getDate() - 7);
       break;
@@ -82,8 +85,8 @@ export async function GET(req: Request) {
     if (bookSeries.length >= 2) {
       const startMs = bookSeries[0].t;
       const endMs = bookSeries[bookSeries.length - 1].t;
-      // Daily bars on anything ≥ 1M; hourly on 1W for smoother early curves.
-      const tf = range === '1W' ? '1Hour' : '1Day';
+      // Hourly bars on 1D / 1W for smoother intraday curves; daily beyond.
+      const tf = range === '1D' || range === '1W' ? '1Hour' : '1Day';
       const bars = await getCryptoBars('BTC/USD', tf, startMs, endMs).catch((err) => {
         log.warn('crypto.performance_btc_bars_failed', { range }, err);
         return [];

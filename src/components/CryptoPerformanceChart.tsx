@@ -10,8 +10,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { formatUsd } from '@/lib/money';
 
-type Range = '1W' | '1M' | '3M' | 'YTD' | '1Y' | 'ALL';
-const RANGES: Range[] = ['1W', '1M', '3M', 'YTD', '1Y', 'ALL'];
+type Range = '1D' | '1W' | '1M' | '3M' | 'YTD' | '1Y' | 'ALL';
+const RANGES: Range[] = ['1D', '1W', '1M', '3M', 'YTD', '1Y', 'ALL'];
 
 type Summary = {
   currentBookValue: number;

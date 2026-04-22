@@ -26,7 +26,11 @@ const SECURITY_HEADERS = [
 
 const nextConfig = {
   reactStrictMode: true,
-  output: 'standalone',
+  // Previously set output: 'standalone' for smaller Docker images, but
+  // Railway runs `next start` from package.json which is incompatible
+  // with standalone output (that path needs `node .next/standalone/
+  // server.js`). Dropping to the default server build so `next start
+  // -p $PORT` works out of the box on Railway.
   experimental: {
     serverComponentsExternalPackages: ['@prisma/client', '@alpacahq/alpaca-trade-api'],
   },

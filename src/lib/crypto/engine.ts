@@ -540,18 +540,26 @@ export async function runCryptoCycleAllUsers(): Promise<CycleResult[]> {
   return out;
 }
 
-// Record a daily snapshot of the user's crypto book value. Rate-limited to
-// once per 23h so hourly cron ticks don't over-write. The 23h (vs. 24h)
-// slack prevents drift from exact tick timing.
-export async function maybeSnapshotCryptoBook(userId: string): Promise<void> {
-  const last = await prisma.cryptoBookSnapshot.findFirst({
-    where: { userId },
-    orderBy: { takenAt: 'desc' },
-    select: { takenAt: true },
-  });
-  if (last) {
-    const hoursSince = (Date.now() - last.takenAt.getTime()) / 3_600_000;
-    if (hoursSince < 23) return;
+// Record a snapshot of the user's crypto book value. Rate-limited to ~55
+// minutes by default so an hourly cron tick reliably adds a new point
+// without duplicating (no 24h drift problem). Pass `force: true` to
+// bypass the rate limit — used by the manual /api/crypto/run path so
+// the chart updates immediately after a user-triggered DCA instead of
+// waiting for the next cron tick.
+export async function maybeSnapshotCryptoBook(
+  userId: string,
+  opts: { force?: boolean } = {}
+): Promise<void> {
+  if (!opts.force) {
+    const last = await prisma.cryptoBookSnapshot.findFirst({
+      where: { userId },
+      orderBy: { takenAt: 'desc' },
+      select: { takenAt: true },
+    });
+    if (last) {
+      const minutesSince = (Date.now() - last.takenAt.getTime()) / 60_000;
+      if (minutesSince < 55) return;
+    }
   }
   const positions = await getCryptoPositions().catch(() => [] as CryptoPosition[]);
   const bookValueCents = BigInt(
