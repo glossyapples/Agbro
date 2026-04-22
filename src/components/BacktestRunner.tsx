@@ -6,7 +6,7 @@
 // renders the equity curve + metrics table for whichever run is
 // selected.
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   STRATEGY_KEYS,
@@ -47,6 +47,25 @@ export function BacktestRunner({ initialRuns }: { initialRuns: Run[] }) {
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Belt-and-suspenders against double-submit: React's disabled attribute
+  // stops onClick from firing, but a rapid keystroke or framework hiccup
+  // could theoretically slip through. inFlight is a ref so it updates
+  // synchronously (not batched like state) and guards the function body.
+  const inFlight = useRef(false);
+  // Elapsed seconds for the progress indicator — a running counter
+  // reassures the user that something is actually happening.
+  const [elapsedSec, setElapsedSec] = useState(0);
+  useEffect(() => {
+    if (!busy) {
+      setElapsedSec(0);
+      return;
+    }
+    const start = Date.now();
+    const interval = setInterval(() => {
+      setElapsedSec(Math.floor((Date.now() - start) / 1000));
+    }, 500);
+    return () => clearInterval(interval);
+  }, [busy]);
 
   const [strategyKey, setStrategyKey] = useState<StrategyKey>('buffett_core');
   const [startDate, setStartDate] = useState('2020-01-01');
@@ -59,34 +78,68 @@ export function BacktestRunner({ initialRuns }: { initialRuns: Run[] }) {
   const selected = selectedId ? runs.find((r) => r.id === selectedId) ?? null : null;
 
   async function run() {
+    if (inFlight.current) return; // synchronous guard against duplicate submits
+    inFlight.current = true;
     setBusy(true);
     setError(null);
+    const label = `${STRATEGY_LABELS[strategyKey]} ${startDate}→${endDate}`;
+    // Optimistic pending row so the user sees the run appear in the list
+    // the moment they click. Replaced by the real row on completion via
+    // router.refresh().
+    const pendingId = `pending-${Date.now()}`;
+    const optimistic: Run = {
+      id: pendingId,
+      strategyKey,
+      label,
+      universe: universe
+        .split(',')
+        .map((s) => s.trim().toUpperCase())
+        .filter(Boolean),
+      benchmarkSymbol: 'SPY',
+      startDate: `${startDate}T00:00:00Z`,
+      endDate: `${endDate}T23:59:59Z`,
+      startingCashCents: String(Math.round((Number(cash) || 100000) * 100)),
+      status: 'running',
+      totalReturnPct: null,
+      benchmarkReturnPct: null,
+      cagrPct: null,
+      sharpeAnnual: null,
+      maxDrawdownPct: null,
+      worstMonthPct: null,
+      tradeCount: null,
+      endingEquityCents: null,
+      equitySeries: null,
+      runAt: new Date().toISOString(),
+      errorMessage: null,
+    };
+    setRuns((r) => [optimistic, ...r]);
+    setSelectedId(pendingId);
     try {
       const res = await fetch('/api/backtest/run', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           strategyKey,
-          universe: universe
-            .split(',')
-            .map((s) => s.trim().toUpperCase())
-            .filter(Boolean),
+          universe: optimistic.universe,
           startDate,
           endDate,
           startingCashUsd: Number(cash) || 100000,
-          label: `${STRATEGY_LABELS[strategyKey]} ${startDate}→${endDate}`,
+          label,
         }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        setError(typeof body.error === 'string' ? body.error : 'backtest failed');
+        setError(extractError(body));
+        setRuns((r) => r.filter((x) => x.id !== pendingId));
         return;
       }
       router.refresh();
-    } catch {
-      setError('Network error — try again.');
+    } catch (e) {
+      setError(`Network error — ${(e as Error).message.slice(0, 120)}`);
+      setRuns((r) => r.filter((x) => x.id !== pendingId));
     } finally {
       setBusy(false);
+      inFlight.current = false;
     }
   }
 
@@ -152,13 +205,38 @@ export function BacktestRunner({ initialRuns }: { initialRuns: Run[] }) {
 
         <div className="flex items-center justify-between">
           <p className="text-[11px] text-ink-400">
-            Tier 1 backtest: deterministic rules only (no LLM reasoning). See /backtest
-            for full scope notes.
+            Tier 1 backtest: deterministic rules only (no LLM reasoning).
           </p>
-          <button onClick={run} disabled={busy} className="btn-primary disabled:opacity-50">
-            {busy ? 'Running…' : 'Run backtest'}
+          <button
+            onClick={run}
+            disabled={busy}
+            className={`btn-primary ${busy ? 'cursor-not-allowed opacity-50' : ''}`}
+          >
+            {busy ? (
+              <span className="flex items-center gap-1.5">
+                <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-ink-900/50 border-t-ink-900" />
+                Running…
+              </span>
+            ) : (
+              'Run backtest'
+            )}
           </button>
         </div>
+
+        {busy && (
+          <div className="rounded-md border border-brand-500/40 bg-brand-500/5 p-3 text-xs">
+            <p className="flex items-center gap-2 font-semibold text-brand-300">
+              <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-brand-400" />
+              Backtest running · {elapsedSec}s elapsed
+            </p>
+            <p className="mt-1 text-ink-300">
+              Fetching Alpaca historical bars → walking the simulator day-by-day →
+              computing metrics. Typically 10–30s for a 1-year window, up to a
+              minute for 5+ years. You can navigate away — the run is saved server-
+              side as soon as it finishes.
+            </p>
+          </div>
+        )}
 
         {error && <p className="text-xs text-red-400">{error}</p>}
       </section>
@@ -339,4 +417,29 @@ function Stat({
 function fmtPct(v: number | null | undefined): string {
   if (v == null) return '—';
   return `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`;
+}
+
+// Zod's error.flatten() returns { fieldErrors, formErrors } — my earlier
+// handler only read string errors and silently dropped the detail, so
+// users saw "backtest failed" with no indication WHY. Pull the most
+// specific useful message whatever shape came back.
+function extractError(body: unknown): string {
+  if (body && typeof body === 'object' && 'error' in body) {
+    const err = (body as { error: unknown }).error;
+    if (typeof err === 'string') return err;
+    if (err && typeof err === 'object') {
+      const maybe = err as {
+        fieldErrors?: Record<string, string[] | undefined>;
+        formErrors?: string[];
+      };
+      if (maybe.fieldErrors) {
+        for (const [field, msgs] of Object.entries(maybe.fieldErrors)) {
+          const first = msgs?.[0];
+          if (first) return `${field}: ${first}`;
+        }
+      }
+      if (maybe.formErrors?.[0]) return maybe.formErrors[0];
+    }
+  }
+  return 'backtest failed — check the server log';
 }
