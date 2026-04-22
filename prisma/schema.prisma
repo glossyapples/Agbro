@@ -38,6 +38,7 @@ model User {
   positions     Position[]
   optionPositions OptionPosition[]
   cryptoConfig  CryptoConfig?
+  backtestRuns  BacktestRun[]
 }
 
 // Auth.js: OAuth provider links (used if/when OAuth added; magic-link flow alone doesn't populate this).
@@ -523,6 +524,54 @@ model MarketEvent {
 
   @@index([occursAt])
   @@index([kind, occursAt])
+}
+
+// -------------------- Backtesting --------------------
+
+// A single backtest invocation. Captures the config that was run +
+// the full results so the user can browse historical runs on /backtest
+// and compare strategies side-by-side. Ephemeral-ish — we don't delete
+// old runs automatically but nothing critical depends on them.
+model BacktestRun {
+  id                String   @id @default(cuid())
+  userId            String
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // Which rule set was simulated: 'buffett_core' | 'deep_value_graham' |
+  // 'quality_compounders' | 'dividend_growth' | 'boglehead_index'.
+  // Maps to the same preset keys used for the live strategies.
+  strategyKey       String
+  label             String?
+  assetClass        String   @default("stock")
+  universe          String[] @default([])
+  benchmarkSymbol   String   @default("SPY")
+  startDate         DateTime
+  endDate           DateTime
+  startingCashCents BigInt
+
+  // Results. Null while status != 'completed'.
+  endingEquityCents BigInt?
+  benchmarkEndingCents BigInt?
+  totalReturnPct    Float?
+  benchmarkReturnPct Float?
+  cagrPct           Float?
+  sharpeAnnual      Float?
+  maxDrawdownPct    Float?
+  worstMonthPct     Float?
+  tradeCount        Int?
+  // Full equity series so the UI can render a chart.
+  // Shape: [{t: epochMs, equity: number, benchmark: number}]
+  equitySeries      Json?
+  // Event log: every trade, rebalance, regime transition, etc.
+  // Shape: [{date: 'YYYY-MM-DD', event: string, details: Record<string, unknown>}]
+  eventLog          Json?
+
+  status            String   @default("pending") // pending | running | completed | errored
+  errorMessage      String?  @db.Text
+  runAt             DateTime @default(now())
+  completedAt       DateTime?
+
+  @@index([userId, runAt])
+  @@index([strategyKey])
 }
 
 // -------------------- Market regime tripwire --------------------
