@@ -142,24 +142,34 @@ export default async function OverviewPage() {
       <PerformanceChart initial={chart} />
 
       <section className="card">
-        <div className="flex items-center justify-between">
-          <div className="grid flex-1 grid-cols-3 gap-3 text-sm">
-          <div>
-            <p className="stat-label">Principal</p>
-            <p className="text-lg font-semibold text-ink-50">{formatUsd(account.depositedCents)}</p>
-          </div>
-          <div>
-            <p className="stat-label">Target ({formatPct(account.expectedAnnualPct)}/yr)</p>
-            <p className="text-lg font-semibold text-brand-400">{formatUsd(BigInt(Math.round(target * 100)))}</p>
-          </div>
-          <div>
-            <p className="stat-label">Risk</p>
-            <p className="text-lg font-semibold capitalize text-ink-100">{account.riskTolerance}</p>
-          </div>
-          </div>
-          <Link href="/wallet" className="ml-3 text-xs text-brand-400">
+        <div className="mb-3 flex items-center justify-between">
+          <p className="stat-label">Account</p>
+          <Link href="/wallet" className="text-xs text-brand-400">
             Wallet →
           </Link>
+        </div>
+        <div className="grid grid-cols-3 gap-3 text-sm">
+          <div className="min-w-0">
+            <p className="stat-label">Principal</p>
+            <p className="mt-0.5 truncate text-base font-semibold tabular-nums text-ink-50">
+              {formatUsd(account.depositedCents)}
+            </p>
+          </div>
+          <div className="min-w-0">
+            <p className="stat-label">Target</p>
+            <p className="mt-0.5 truncate text-base font-semibold tabular-nums text-brand-400">
+              {formatUsd(BigInt(Math.round(target * 100)))}
+            </p>
+            <p className="text-[10px] text-ink-400">
+              {formatPct(account.expectedAnnualPct)}/yr
+            </p>
+          </div>
+          <div className="min-w-0">
+            <p className="stat-label">Risk</p>
+            <p className="mt-0.5 truncate text-base font-semibold capitalize text-ink-100">
+              {account.riskTolerance}
+            </p>
+          </div>
         </div>
       </section>
 
