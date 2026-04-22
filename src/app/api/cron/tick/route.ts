@@ -34,6 +34,20 @@ function withinTradingHours(now: Date, start: string, end: string): boolean {
   return current >= start && current <= end;
 }
 
+// "Do these two timestamps fall on the same ET calendar day?" Used to
+// decide whether a new market-open wake should bypass the cadence gate.
+// Both inputs are JS Date — we convert to ET's year-month-day string and
+// compare.
+function isSameEtDay(a: Date, b: Date): boolean {
+  const fmt = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  return fmt.format(a) === fmt.format(b);
+}
+
 type Outcome =
   | { userId: string; skipped: true; reason: string }
   | { userId: string; ran: true; agentRunId: string; decision: string | null; status: string }
@@ -98,7 +112,17 @@ export async function POST(req: Request) {
         where: { userId: account.userId },
         orderBy: { startedAt: 'desc' },
       });
-      if (lastRun) {
+
+      // Market-open guarantee: if there's been NO agent run so far today
+      // (ET calendar day), bypass the cadence gate and wake on this tick.
+      // Matches user expectation that the agent runs at least once per
+      // trading day near the open, regardless of the chosen cadence or
+      // whether last night's final run was "recent enough" to still be
+      // within the cadence window.
+      const lastRunWasToday =
+        lastRun != null && isSameEtDay(lastRun.startedAt, now);
+
+      if (lastRun && lastRunWasToday) {
         const mins = (now.getTime() - lastRun.startedAt.getTime()) / 60_000;
         if (mins < account.agentCadenceMinutes) {
           outcomes.push({
@@ -108,6 +132,11 @@ export async function POST(req: Request) {
           });
           continue;
         }
+      } else if (lastRun) {
+        log.info('cron.tick.market_open_wake', {
+          userId: account.userId,
+          lastRunAt: lastRun.startedAt.toISOString(),
+        });
       }
 
       try {

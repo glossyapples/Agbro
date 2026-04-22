@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/db';
 import { requirePageUser } from '@/lib/auth';
 import { formatPct, formatUsd } from '@/lib/money';
+import { LocalTime } from '@/components/LocalTime';
 
 export default async function TradesPage() {
   const user = await requirePageUser('/trades');
@@ -33,7 +34,7 @@ export default async function TradesPage() {
                 <span className="pill">{t.status}</span>
               </div>
               <p className="mt-1 text-[11px] text-ink-400">
-                {new Date(t.submittedAt).toLocaleString()} ·{' '}
+                <LocalTime value={t.submittedAt} /> ·{' '}
                 {t.fillPriceCents ? `Filled @ ${formatUsd(t.fillPriceCents)}` : 'Pending fill'}
               </p>
               <div className="mt-3 grid grid-cols-3 gap-2 text-xs">

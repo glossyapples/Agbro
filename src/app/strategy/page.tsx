@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { prisma } from '@/lib/db';
 import { requirePageUser } from '@/lib/auth';
+import { LocalTime } from '@/components/LocalTime';
 
 export default async function StrategyIndex() {
   const user = await requirePageUser('/strategy');
@@ -27,7 +28,7 @@ export default async function StrategyIndex() {
                   {s.name} <span className="text-ink-400">v{s.version}</span>
                 </p>
                 <p className="text-[11px] text-ink-400">
-                  Buffett-fit: {s.buffettScore}/100 · Updated {new Date(s.updatedAt).toLocaleDateString()}
+                  Buffett-fit: {s.buffettScore}/100 · Updated <LocalTime value={s.updatedAt} format="date" />
                 </p>
               </div>
               {s.isActive ? <span className="pill-good">Active</span> : <span className="pill">Archived</span>}

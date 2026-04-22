@@ -2,6 +2,7 @@ import { prisma } from '@/lib/db';
 import { requirePageUser } from '@/lib/auth';
 import { isBrainSeeded, STARTER_BRAIN_SUMMARY } from '@/lib/brain/seed-brain';
 import { BrainSeedButton } from '@/components/BrainSeedButton';
+import { LocalTime } from '@/components/LocalTime';
 
 const KIND_LABELS: Record<string, string> = {
   principle: 'Principle',
@@ -64,7 +65,7 @@ export default async function BrainPage() {
                   {KIND_LABELS[e.kind] ?? e.kind}
                 </span>
                 <span className="text-[11px] text-ink-400">
-                  {new Date(e.createdAt).toLocaleString()}
+                  <LocalTime value={e.createdAt} />
                 </span>
               </div>
               <h2 className="mt-2 text-sm font-semibold">{e.title}</h2>

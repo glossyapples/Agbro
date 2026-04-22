@@ -8,6 +8,7 @@ import { CryptoPerformanceChart } from '@/components/CryptoPerformanceChart';
 import { CryptoAllocationCard } from '@/components/CryptoAllocationCard';
 import { formatUsd } from '@/lib/money';
 import { getPreset, type CryptoPresetKey } from '@/lib/crypto/presets';
+import { LocalTime } from '@/components/LocalTime';
 
 export const runtime = 'nodejs';
 
@@ -218,7 +219,7 @@ export default async function CryptoPage() {
                   <span className="text-ink-400">{t.qty.toFixed(6)}</span>
                 </span>
                 <span className="text-xs text-ink-400">
-                  {new Date(t.submittedAt).toLocaleDateString()} · {t.status}
+                  <LocalTime value={t.submittedAt} format="date" /> · {t.status}
                 </span>
               </li>
             ))}

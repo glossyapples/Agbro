@@ -6,6 +6,7 @@ import { Controls } from '@/components/Controls';
 import { RunAgentButton } from '@/components/RunAgentButton';
 import { PerformanceChart } from '@/components/PerformanceChart';
 import { UpcomingEventsCard } from '@/components/UpcomingEventsCard';
+import { LocalTime } from '@/components/LocalTime';
 import { getPortfolioHistory, getBars } from '@/lib/alpaca';
 import { getUpcomingEvents } from '@/lib/data/events';
 
@@ -228,7 +229,7 @@ export default async function OverviewPage() {
         {lastRun ? (
           <div className="mt-2 space-y-1 text-sm">
             <p className="text-ink-200">
-              {new Date(lastRun.startedAt).toLocaleString()} ·{' '}
+              <LocalTime value={lastRun.startedAt} /> ·{' '}
               <span className="pill">{lastRun.status}</span>{' '}
               {lastRun.decision && <span className="pill-good">{lastRun.decision}</span>}
             </p>
