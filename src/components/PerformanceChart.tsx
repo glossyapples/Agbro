@@ -65,12 +65,7 @@ export function PerformanceChart({ initial }: { initial: Payload }) {
 
   return (
     <section className="card">
-      <div className="flex items-baseline justify-between gap-2">
-        <p className="stat-label">Portfolio value</p>
-        <p className="text-[10px] text-ink-500">
-          Stocks + cash only · crypto tracked on /crypto
-        </p>
-      </div>
+      <p className="stat-label">Portfolio · stocks</p>
       <p className="stat-value">
         {data.summary ? formatUsd(BigInt(Math.round(data.summary.currentEquity * 100))) : '—'}
       </p>
