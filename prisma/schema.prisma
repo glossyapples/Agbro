@@ -36,6 +36,7 @@ model User {
   brainEntries  BrainEntry[]
   auditLogs     AuditLog[]
   positions     Position[]
+  optionPositions OptionPosition[]
 }
 
 // Auth.js: OAuth provider links (used if/when OAuth added; magic-link flow alone doesn't populate this).
@@ -99,6 +100,13 @@ model Account {
   // leverage + fat margins + growing EPS) directly to the watchlist.
   // Off by default — conservative default keeps the human in the loop.
   autoPromoteCandidates Boolean @default(false)
+  // Master switch for options trading. Off by default. Must be flipped ON
+  // here AND the active strategy must list the specific setup (covered call
+  // or cash-secured put) in its rules for the agent to place any option
+  // order. Alpaca requires options approval on their side too; if this
+  // toggle is on but Alpaca hasn't approved options, the server reports
+  // the broker error back to the agent / user.
+  optionsEnabled    Boolean  @default(false)
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
   deposits            Deposit[]
@@ -361,6 +369,45 @@ model PriceSnapshot {
   source     String   @default("alpaca")
 
   @@index([symbol, at])
+}
+
+// -------------------- Options --------------------
+
+// Short-option positions AgBro has opened. Only covered calls and cash-
+// secured puts are allowed (enforced at the tool layer). Alpaca owns the
+// broker-side truth (fills, expiration, assignment); this table mirrors
+// the open position + the thesis behind it. When Alpaca stops reporting
+// the contract, we mark status='closed' — a later iteration will
+// distinguish expired-OTM vs. assigned by reading the activities feed.
+model OptionPosition {
+  id                String   @id @default(cuid())
+  userId            String
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // OCC format symbol: e.g. AAPL250117C00200000. Unique across all users
+  // is NOT guaranteed (different users can short the same contract) — so
+  // we only uniquify with userId.
+  optionSymbol      String
+  underlyingSymbol  String
+  contractType      String   // 'call' | 'put'
+  // Which strategy we opened this under. Values: 'covered_call' |
+  // 'cash_secured_put'. Anything else is rejected at the tool layer.
+  setup             String
+  strikeCents       BigInt
+  expiration        DateTime
+  // Number of contracts. 1 contract = 100 shares of underlying exposure.
+  quantity          Int
+  premiumPerContractCents BigInt   // credit received, per contract
+  totalCreditCents  BigInt
+  status            String   @default("open") // 'open' | 'closed' | 'expired_otm' | 'assigned'
+  alpacaOrderId     String?
+  thesis            String   @db.Text
+  openedAt          DateTime @default(now())
+  closedAt          DateTime?
+  openedUnderStrategyId String?
+
+  @@unique([userId, optionSymbol])
+  @@index([userId, status])
+  @@index([userId, expiration])
 }
 
 // -------------------- Event calendar --------------------

@@ -23,6 +23,7 @@ const Patch = z
     agentCadenceMinutes: z.number().int().min(5).max(1440).optional(),
     allowDayTrades: z.boolean().optional(),
     autoPromoteCandidates: z.boolean().optional(),
+    optionsEnabled: z.boolean().optional(),
   })
   .refine(
     (v) =>

@@ -132,6 +132,17 @@ async function main() {
         fundamentalsDegradationExit: true,
         dividendSafetyExit: true,
         rebalanceOnly: false,
+        // Options: both covered calls and cash-secured puts are philosophically
+        // aligned (Buffett sold $B of S&P puts at Berkshire; CCs on names you'd
+        // happily sell at fair value are just "get paid to wait"). Gated by the
+        // Account.optionsEnabled master toggle — the user must flip that ON
+        // before any of this does anything. Conservative book cap.
+        optionsAllowed: true,
+        optionStrategies: ['covered_call', 'cash_secured_put'],
+        maxOptionsBookPct: 10,
+        minDTE: 30,
+        maxDTE: 45,
+        maxDeltaAbs: 0.3,
       },
     },
   });

@@ -17,13 +17,28 @@ import { googleSearch } from '@/lib/research/google';
 import { toCents } from '@/lib/money';
 import { startOfDayET } from '@/lib/time';
 import { log } from '@/lib/logger';
-import { GetEventCalendarInput, PlaceTradeInput, ScreenUniverseInput, SizePositionInput, UpdateStockFundamentalsInput } from './schemas';
+import {
+  GetEventCalendarInput,
+  GetOptionChainInput,
+  PlaceOptionTradeInput,
+  PlaceTradeInput,
+  ScreenUniverseInput,
+  SizePositionInput,
+  UpdateStockFundamentalsInput,
+} from './schemas';
 import { refreshFundamentalsForSymbol } from '@/lib/data/refresh-fundamentals';
 import { runScreen } from '@/lib/data/screener';
 import { getUpcomingEvents } from '@/lib/data/events';
 import { isInEarningsBlackout } from '@/lib/data/earnings';
 import { checkWashSaleBlock } from '@/lib/data/tax';
 import { evaluateExits } from './exits';
+import {
+  getOptionContracts,
+  getOptionSnapshot,
+  parseOccSymbol,
+  placeOptionOrder,
+} from '@/lib/alpaca-options';
+import { validateOptionTrade } from './options';
 
 export const TOOL_DEFS: Anthropic.Tool[] = [
   {
@@ -252,6 +267,37 @@ export const TOOL_DEFS: Anthropic.Tool[] = [
     input_schema: { type: 'object', properties: {}, required: [] },
   },
   {
+    name: 'get_option_chain',
+    description:
+      'List active option contracts for an underlying, filtered by type (call|put) and DTE window. Returns OCC-format symbols, strikes, expirations, and (when available) greeks + bid/ask. USE ONLY when your active strategy allows options AND the user\'s account has optionsEnabled=true. Pick strikes aligned with your fair-value estimate: covered-call strike AT OR ABOVE your fair-value, cash-secured-put strike AT OR BELOW your desired entry price.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        underlying: { type: 'string', description: 'Equity ticker (e.g. AAPL).' },
+        type: { type: 'string', enum: ['call', 'put'] },
+        minDTE: { type: 'number', description: 'Minimum days to expiration. Default 30.' },
+        maxDTE: { type: 'number', description: 'Maximum days to expiration. Default 60.' },
+      },
+      required: ['underlying', 'type'],
+    },
+  },
+  {
+    name: 'place_option_trade',
+    description:
+      'Sell-to-open a covered call OR cash-secured put. These are the only option setups AgBro permits — no naked options, no long options, no spreads. Server hard-rejects anything else. Covered call: you must already hold ≥ qty × 100 shares of the underlying. Cash-secured put: you must have ≥ strike × 100 × qty idle cash. Server also enforces DTE window, max delta, and the strategy\'s options book cap. Your thesis must explain why selling this premium makes sense given your fair-value estimate.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        optionSymbol: { type: 'string', description: 'OCC format — e.g. AAPL250117C00200000.' },
+        setup: { type: 'string', enum: ['covered_call', 'cash_secured_put'] },
+        qty: { type: 'number', description: 'Number of contracts (1 = 100 shares of exposure).' },
+        limitPrice: { type: 'number', description: 'Per-share limit price. Omit for market order.' },
+        thesis: { type: 'string' },
+      },
+      required: ['optionSymbol', 'setup', 'qty', 'thesis'],
+    },
+  },
+  {
     name: 'get_event_calendar',
     description:
       'Returns upcoming scheduled events (earnings, FOMC, CPI, market closures) within horizonDays (default 14). Pass symbol to narrow to one name + market-wide events; omit to see events for the whole watchlist. USE THIS before place_trade with side=buy — the server blocks buys within 3 days of a symbol\'s earnings report regardless, but checking first lets you plan around it.',
@@ -402,6 +448,20 @@ export async function runTool(
       // the broker at the start of this wake-up, so evaluateExits reads
       // from aligned state. No extra Alpaca call needed here.
       return { assessments: await evaluateExits(ctx.userId) };
+    }
+    case 'get_option_chain': {
+      const parsed = GetOptionChainInput.safeParse(input);
+      if (!parsed.success) {
+        throw new Error(`get_option_chain: invalid input — ${parsed.error.message}`);
+      }
+      return getOptionChainTool(parsed.data);
+    }
+    case 'place_option_trade': {
+      const parsed = PlaceOptionTradeInput.safeParse(input);
+      if (!parsed.success) {
+        throw new Error(`place_option_trade: invalid input — ${parsed.error.message}`);
+      }
+      return placeOptionTradeTool(ctx, parsed.data);
     }
     case 'finalize_run':
       return finalizeRunTool(ctx, input);
@@ -753,4 +813,141 @@ async function finalizeRunTool(ctx: ToolContext, input: Record<string, unknown>)
     },
   });
   return { finalized: true };
+}
+
+// ─── Options handlers ────────────────────────────────────────────────────
+
+async function getOptionChainTool(input: GetOptionChainInput) {
+  const minDTE = input.minDTE ?? 30;
+  const maxDTE = input.maxDTE ?? 60;
+  const now = new Date();
+  const minExp = new Date(now.getTime() + minDTE * 86_400_000)
+    .toISOString()
+    .slice(0, 10);
+  const maxExp = new Date(now.getTime() + maxDTE * 86_400_000)
+    .toISOString()
+    .slice(0, 10);
+  const contracts = await getOptionContracts({
+    underlying: input.underlying,
+    type: input.type,
+    expirationDateGte: minExp,
+    expirationDateLte: maxExp,
+    limit: 200,
+  });
+  // Enrich a cap of 25 contracts with greeks/quote so the agent can pick.
+  // Fetching a snapshot per contract is rate-limited — cap to keep one tool
+  // call under ~2s and avoid burning Alpaca data quota.
+  const capped = contracts.slice(0, 25);
+  const enriched = await Promise.all(
+    capped.map(async (c) => {
+      const snap = await getOptionSnapshot(c.symbol).catch(() => null);
+      return {
+        symbol: c.symbol,
+        underlying: c.underlying_symbol,
+        type: c.type,
+        strike: Number(c.strike_price),
+        expiration: c.expiration_date,
+        bid: snap?.latestQuote?.bidPrice ?? null,
+        ask: snap?.latestQuote?.askPrice ?? null,
+        delta: snap?.greeks?.delta ?? null,
+        theta: snap?.greeks?.theta ?? null,
+        iv: snap?.impliedVolatility ?? null,
+      };
+    })
+  );
+  return { contracts: enriched };
+}
+
+async function placeOptionTradeTool(ctx: ToolContext, input: PlaceOptionTradeInput) {
+  const v = await validateOptionTrade({
+    userId: ctx.userId,
+    optionSymbol: input.optionSymbol,
+    setup: input.setup,
+    qty: input.qty,
+    limitPrice: input.limitPrice,
+  });
+  if (!v.ok) {
+    log.info('option_trade.blocked', { userId: ctx.userId, optionSymbol: input.optionSymbol, reason: v.reason });
+    throw new Error(`place_option_trade: ${v.reason}`);
+  }
+
+  const parsed = parseOccSymbol(input.optionSymbol)!; // v.ok guarantees parsable
+
+  // Submit sell-to-open. Prefer limit at bid-mid from validation; agent can
+  // override via input.limitPrice. Market orders on illiquid options are a
+  // good way to get fleeced, so we default to limit.
+  const midPerShare = Number(v.premiumPerContractCents) / 10_000;
+  const limitPrice = input.limitPrice ?? Math.max(0.01, Math.round(midPerShare * 100) / 100);
+
+  let order;
+  try {
+    order = await placeOptionOrder({
+      optionSymbol: input.optionSymbol,
+      side: 'sell',
+      qty: input.qty,
+      orderType: 'limit',
+      limitPrice,
+      timeInForce: 'day',
+      positionIntent: 'opening',
+    });
+  } catch (brokerErr) {
+    log.error('option_trade.broker_rejected', brokerErr, { userId: ctx.userId, optionSymbol: input.optionSymbol });
+    throw brokerErr;
+  }
+
+  const activeStrategy = await prisma.strategy.findFirst({
+    where: { userId: ctx.userId, isActive: true },
+    select: { id: true },
+  });
+
+  const totalCreditCents = v.premiumPerContractCents * BigInt(input.qty);
+  const strikeCents = BigInt(Math.round(parsed.strike * 100));
+  const expiration = new Date(`${parsed.expiration}T21:00:00Z`);
+
+  await prisma.optionPosition.create({
+    data: {
+      userId: ctx.userId,
+      optionSymbol: input.optionSymbol,
+      underlyingSymbol: parsed.underlying,
+      contractType: parsed.type,
+      setup: input.setup,
+      strikeCents,
+      expiration,
+      quantity: input.qty,
+      premiumPerContractCents: v.premiumPerContractCents,
+      totalCreditCents,
+      alpacaOrderId: order.id,
+      thesis: input.thesis.slice(0, 2_000),
+      openedUnderStrategyId: activeStrategy?.id ?? null,
+    },
+  });
+
+  await prisma.notification
+    .create({
+      data: {
+        userId: ctx.userId,
+        kind: 'option_opened',
+        title: `${input.setup.replace('_', ' ').toUpperCase()} ${input.qty}× ${parsed.underlying} $${parsed.strike} ${parsed.type} ${parsed.expiration}`,
+        body: `Credit ≈ $${(Number(totalCreditCents) / 100).toFixed(2)}. Thesis: ${input.thesis.slice(0, 220)}`,
+      },
+    })
+    .catch((notifErr) => {
+      log.error('option_trade.notification_failed', notifErr);
+    });
+
+  log.info('option_trade.opened', {
+    userId: ctx.userId,
+    optionSymbol: input.optionSymbol,
+    setup: input.setup,
+    qty: input.qty,
+    creditCents: totalCreditCents.toString(),
+  });
+
+  return {
+    optionSymbol: input.optionSymbol,
+    alpacaOrderId: order.id,
+    status: order.status,
+    creditCents: totalCreditCents.toString(),
+    limitPrice,
+  };
 }

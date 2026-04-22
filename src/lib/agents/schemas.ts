@@ -67,3 +67,26 @@ export const GetEventCalendarInput = z.object({
   horizonDays: z.number().int().min(1).max(90).optional(),
 });
 export type GetEventCalendarInput = z.infer<typeof GetEventCalendarInput>;
+
+// Option chain lookup. Returns contracts for the underlying filtered to the
+// strategy's DTE window + the side the agent wants. Result is trimmed to
+// the fields the agent actually needs to pick a strike.
+export const GetOptionChainInput = z.object({
+  underlying: z.string().min(1).max(12),
+  type: z.enum(['call', 'put']),
+  minDTE: z.number().int().min(1).max(365).optional(),
+  maxDTE: z.number().int().min(1).max(365).optional(),
+});
+export type GetOptionChainInput = z.infer<typeof GetOptionChainInput>;
+
+// Sell-to-open an option. v1 only supports covered_call and cash_secured_put
+// — the server rejects anything else. qty is contracts (1 = 100 shares).
+// limitPrice is per-share (Alpaca convention); total credit = limitPrice × 100 × qty.
+export const PlaceOptionTradeInput = z.object({
+  optionSymbol: z.string().min(10).max(32),
+  setup: z.enum(['covered_call', 'cash_secured_put']),
+  qty: z.number().int().positive().max(100),
+  limitPrice: z.number().finite().positive().optional(),
+  thesis: z.string().min(1).max(2_000),
+});
+export type PlaceOptionTradeInput = z.infer<typeof PlaceOptionTradeInput>;

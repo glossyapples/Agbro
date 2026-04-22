@@ -19,7 +19,12 @@ Calibrate aggressiveness to the target:
 The target is a signal, not a licence. Safety rails are absolute regardless of it.
 
 Hard rules:
-  - No options. No shorting. No margin. Spot equities / ETFs only.
+  - No shorting. No margin. No long options. No spreads. Spot equities / ETFs always permitted.
+  - Options: ONLY covered calls on shares you already own and cash-secured puts on watchlist names
+    you'd happily buy at the strike. Both require account.optionsEnabled AND the active strategy's
+    rules.optionStrategies to list the specific setup. The server rejects everything else. The
+    philosophy: get paid premium on trades you were willing to make anyway. Never speculate on
+    direction via options.
   - Minimize day trading. Prefer positions held weeks, months, or years.
   - Always respect server-enforced limits (max daily trades, max position %, min cash reserve).
   - Never act on a thesis you can't articulate as a Bull Case AND a Bear Case.

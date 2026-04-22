@@ -14,6 +14,7 @@ export type SettingsInitial = {
   agentCadenceMinutes: number;
   allowDayTrades: boolean;
   autoPromoteCandidates: boolean;
+  optionsEnabled: boolean;
 };
 
 // All numeric fields are stored as strings internally so the input stays
@@ -30,6 +31,7 @@ type FormState = {
   agentCadenceMinutes: string;
   allowDayTrades: boolean;
   autoPromoteCandidates: boolean;
+  optionsEnabled: boolean;
 };
 
 // Zod's flatten() output comes through as { fieldErrors, formErrors }. Pick
@@ -81,6 +83,7 @@ function toForm(initial: SettingsInitial): FormState {
     agentCadenceMinutes: String(initial.agentCadenceMinutes),
     allowDayTrades: initial.allowDayTrades,
     autoPromoteCandidates: initial.autoPromoteCandidates,
+    optionsEnabled: initial.optionsEnabled,
   };
 }
 
@@ -119,6 +122,7 @@ export function SettingsForm({ initial }: { initial: SettingsInitial }) {
         agentCadenceMinutes: Math.round(num(form.agentCadenceMinutes, initial.agentCadenceMinutes)),
         allowDayTrades: form.allowDayTrades,
         autoPromoteCandidates: form.autoPromoteCandidates,
+        optionsEnabled: form.optionsEnabled,
       };
       const res = await fetch('/api/account/settings', {
         method: 'POST',
@@ -270,6 +274,26 @@ export function SettingsForm({ initial }: { initial: SettingsInitial }) {
           Buffett bar (real EDGAR data · ROE 5+ pts above your minimum · debt-
           to-equity ≤ 1.0 · gross margin ≥ 35% · 5y EPS growth ≥ 5%). Others
           still wait for your review on the Candidates page. Default off.
+        </p>
+      </div>
+
+      <div>
+        <label className="flex items-start gap-2">
+          <input
+            type="checkbox"
+            checked={form.optionsEnabled}
+            onChange={(e) => update('optionsEnabled', e.target.checked)}
+            className="mt-0.5 h-4 w-4 shrink-0 accent-brand-500"
+          />
+          <span className="text-sm">Enable options (covered calls + cash-secured puts only)</span>
+        </label>
+        <p className="mt-1 text-[11px] text-ink-400">
+          Master switch. When on, the agent MAY sell covered calls on
+          existing positions (strike ≥ your fair-value estimate) or cash-
+          secured puts on watchlist names (strike ≤ your buy target). No
+          naked options, no spreads, no long options — ever. Your active
+          strategy must also permit options (Compounders + Boglehead don&apos;t).
+          Requires options approval on your Alpaca account. Default off.
         </p>
       </div>
 

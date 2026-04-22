@@ -45,6 +45,17 @@ export const ALTERNATIVE_STRATEGIES: StrategySeed[] = [
       dividendSafetyExit: false,
       moatBreakExit: false,
       rebalanceOnly: false,
+      // Graham-style: CSPs only. Selling puts at a strike below your Graham
+      // liquidation-value entry is a clean way to get paid while waiting for
+      // the bid. Covered calls don't fit — Graham sells on mean reversion,
+      // not on strike targets; writing a CC would cap the upside he's
+      // specifically trying to capture.
+      optionsAllowed: true,
+      optionStrategies: ['cash_secured_put'],
+      maxOptionsBookPct: 10,
+      minDTE: 30,
+      maxDTE: 45,
+      maxDeltaAbs: 0.3,
     },
   },
   {
@@ -91,6 +102,13 @@ export const ALTERNATIVE_STRATEGIES: StrategySeed[] = [
       fundamentalsDegradationExit: true,
       dividendSafetyExit: false,
       rebalanceOnly: false,
+      // Compounders: options OFF. Selling covered calls on a 20%-ROE
+      // compounding machine risks getting assigned and giving up the very
+      // name you're trying to hold for decades. CSPs could fit in theory,
+      // but the bar of "strike ≤ desired entry" is so high for this tier
+      // that the premium isn't worth the operational overhead. Keep simple.
+      optionsAllowed: false,
+      optionStrategies: [],
     },
   },
   {
@@ -138,6 +156,16 @@ export const ALTERNATIVE_STRATEGIES: StrategySeed[] = [
       fundamentalsDegradationExit: false,
       dividendSafetyExit: true,
       rebalanceOnly: false,
+      // Dividend Growth: income is the point. Both CC and CSP layer cleanly.
+      // Slightly higher book cap than Buffett Core reflects that extra yield
+      // is explicitly part of the strategy's mandate. User still has to
+      // flip the master Account.optionsEnabled toggle.
+      optionsAllowed: true,
+      optionStrategies: ['covered_call', 'cash_secured_put'],
+      maxOptionsBookPct: 15,
+      minDTE: 30,
+      maxDTE: 45,
+      maxDeltaAbs: 0.3,
     },
   },
   {
@@ -177,6 +205,11 @@ export const ALTERNATIVE_STRATEGIES: StrategySeed[] = [
       fundamentalsDegradationExit: false,
       dividendSafetyExit: false,
       rebalanceOnly: true,
+      // Boglehead: pure index discipline. Options contradict the mandate —
+      // you're not trying to optimize yield on holdings, you're holding the
+      // market. Off.
+      optionsAllowed: false,
+      optionStrategies: [],
     },
   },
 ];
