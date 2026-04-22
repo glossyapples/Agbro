@@ -17,6 +17,7 @@
 import { prisma } from '@/lib/db';
 import { log } from '@/lib/logger';
 import { getBrokerAccount } from '@/lib/alpaca';
+import { startOfDayET } from '@/lib/time';
 import {
   placeCryptoOrder,
   getCryptoLatestPrice,
@@ -131,6 +132,26 @@ async function tryDca(
       : BigInt(0);
   const cashUsd = Number(spendableCents) / 100;
   const requestedDcaUsd = Number(config.dcaAmountCents) / 100;
+
+  // Daily crypto trade cap. Counts BOTH DCA and rebalance legs for the
+  // day. When hit, DCA skips entirely — crypto DCA is rule-based and
+  // fundamentally not time-sensitive, so deferring to tomorrow is safe.
+  const sinceDayStart = startOfDayET();
+  const todaysCryptoTrades = await prisma.trade.count({
+    where: {
+      userId,
+      submittedAt: { gte: sinceDayStart },
+      assetClass: 'crypto',
+    },
+  });
+  if (todaysCryptoTrades >= account.maxDailyCryptoTrades) {
+    return {
+      ran: false,
+      trades: [],
+      skippedReason: `daily crypto trade cap reached (${todaysCryptoTrades}/${account.maxDailyCryptoTrades})`,
+    };
+  }
+
   if (cashUsd < requestedDcaUsd) {
     return {
       ran: false,
@@ -257,6 +278,27 @@ async function tryRebalance(
         skippedReason: `only ${daysSince.toFixed(0)}d since last rebalance; cadence is ${config.rebalanceCadenceDays}d`,
       };
     }
+  }
+
+  // Daily crypto trade cap — shared between DCA and rebalance. A
+  // rebalance can produce 2N legs (N sells + N buys for an N-coin book),
+  // so we defer rebalance entirely if any crypto activity today would
+  // push past the ceiling. Safer than partial rebalances that leave the
+  // book imbalanced.
+  const sinceDayStart = startOfDayET();
+  const todaysCryptoTrades = await prisma.trade.count({
+    where: {
+      userId,
+      submittedAt: { gte: sinceDayStart },
+      assetClass: 'crypto',
+    },
+  });
+  if (todaysCryptoTrades >= account.maxDailyCryptoTrades) {
+    return {
+      ran: false,
+      trades: [],
+      skippedReason: `daily crypto trade cap reached (${todaysCryptoTrades}/${account.maxDailyCryptoTrades})`,
+    };
   }
 
   const { validTargets, totalWeight } = resolveTargets(config);

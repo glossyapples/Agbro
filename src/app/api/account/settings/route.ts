@@ -17,6 +17,7 @@ const Patch = z
     riskTolerance: z.enum(['conservative', 'moderate', 'aggressive']).optional(),
     maxPositionPct: z.number().min(1).max(100).optional(),
     maxDailyTrades: z.number().int().min(0).max(20).optional(),
+    maxDailyCryptoTrades: z.number().int().min(0).max(50).optional(),
     minCashReservePct: z.number().min(0).max(100).optional(),
     tradingHoursStart: HHMM.optional(),
     tradingHoursEnd: HHMM.optional(),

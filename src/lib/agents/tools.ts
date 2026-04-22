@@ -675,11 +675,19 @@ async function placeTradeTool(ctx: ToolContext, input: Record<string, unknown>) 
 
     // Pending + submitted + filled all count toward the daily cap — they
     // represent intent that's either at the broker or already executed.
+    // ONLY stock trades count against maxDailyTrades; crypto has its own
+    // separate ceiling (maxDailyCryptoTrades) so rule-based DCA legs
+    // don't eat the agent's trade budget. Schema default 'stock' covers
+    // pre-crypto-module rows automatically.
     const todaysTrades = await tx.trade.count({
-      where: { userId: ctx.userId, submittedAt: { gte: since } },
+      where: {
+        userId: ctx.userId,
+        submittedAt: { gte: since },
+        assetClass: 'stock',
+      },
     });
     if (todaysTrades >= acct.maxDailyTrades) {
-      throw new Error(`daily trade cap reached (${acct.maxDailyTrades})`);
+      throw new Error(`daily stock trade cap reached (${acct.maxDailyTrades})`);
     }
 
     // Write the pending row BEFORE talking to Alpaca. Guarantees we have a

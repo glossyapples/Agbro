@@ -8,6 +8,7 @@ export type SettingsInitial = {
   riskTolerance: 'conservative' | 'moderate' | 'aggressive';
   maxPositionPct: number;
   maxDailyTrades: number;
+  maxDailyCryptoTrades: number;
   minCashReservePct: number;
   tradingHoursStart: string;
   tradingHoursEnd: string;
@@ -27,6 +28,7 @@ type FormState = {
   riskTolerance: SettingsInitial['riskTolerance'];
   maxPositionPct: string;
   maxDailyTrades: string;
+  maxDailyCryptoTrades: string;
   minCashReservePct: string;
   tradingHoursStart: string;
   tradingHoursEnd: string;
@@ -81,6 +83,7 @@ function toForm(initial: SettingsInitial): FormState {
     riskTolerance: initial.riskTolerance,
     maxPositionPct: String(initial.maxPositionPct),
     maxDailyTrades: String(initial.maxDailyTrades),
+    maxDailyCryptoTrades: String(initial.maxDailyCryptoTrades),
     minCashReservePct: String(initial.minCashReservePct),
     tradingHoursStart: initial.tradingHoursStart,
     tradingHoursEnd: initial.tradingHoursEnd,
@@ -122,6 +125,9 @@ export function SettingsForm({ initial }: { initial: SettingsInitial }) {
         riskTolerance: form.riskTolerance,
         maxPositionPct: num(form.maxPositionPct, initial.maxPositionPct),
         maxDailyTrades: Math.round(num(form.maxDailyTrades, initial.maxDailyTrades)),
+        maxDailyCryptoTrades: Math.round(
+          num(form.maxDailyCryptoTrades, initial.maxDailyCryptoTrades)
+        ),
         minCashReservePct: num(form.minCashReservePct, initial.minCashReservePct),
         tradingHoursStart: form.tradingHoursStart,
         tradingHoursEnd: form.tradingHoursEnd,
@@ -215,7 +221,7 @@ export function SettingsForm({ initial }: { initial: SettingsInitial }) {
 
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <label>Max trades / day</label>
+          <label>Max stock trades / day</label>
           <input
             type="number"
             inputMode="numeric"
@@ -224,6 +230,23 @@ export function SettingsForm({ initial }: { initial: SettingsInitial }) {
             min={0}
             max={20}
           />
+          <p className="mt-0.5 text-[10px] text-ink-400">
+            Agent-driven stock trades only. Crypto has its own cap below.
+          </p>
+        </div>
+        <div>
+          <label>Max crypto trades / day</label>
+          <input
+            type="number"
+            inputMode="numeric"
+            value={form.maxDailyCryptoTrades}
+            onChange={(e) => update('maxDailyCryptoTrades', e.target.value)}
+            min={0}
+            max={50}
+          />
+          <p className="mt-0.5 text-[10px] text-ink-400">
+            Rule-based DCA + rebalance legs. Each DCA writes one trade per coin.
+          </p>
         </div>
         <div>
           <label>Agent cadence (min)</label>

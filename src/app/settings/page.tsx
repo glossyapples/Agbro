@@ -38,6 +38,7 @@ export default async function SettingsPage() {
           riskTolerance: a.riskTolerance as 'conservative' | 'moderate' | 'aggressive',
           maxPositionPct: a.maxPositionPct,
           maxDailyTrades: a.maxDailyTrades,
+          maxDailyCryptoTrades: a.maxDailyCryptoTrades,
           minCashReservePct: a.minCashReservePct,
           tradingHoursStart: a.tradingHoursStart,
           tradingHoursEnd: a.tradingHoursEnd,

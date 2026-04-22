@@ -15,17 +15,39 @@ import { getUpcomingEvents } from '@/lib/data/events';
 // which gives a natural first-day view (mostly empty → fills as the agent
 // trades). Alpaca failures degrade to an empty payload; the component
 // handles that with a "waiting for data" state.
-async function getInitialChartPayload() {
+async function getInitialChartPayload(userId: string) {
   try {
     const portfolio = await getPortfolioHistory('1M').catch(() => []);
     if (portfolio.length === 0) {
       return { range: '1M' as const, summary: null, portfolio: [], spy: [] };
     }
-    const basis = portfolio[0].equity;
-    const portfolioSeries = portfolio.map((p) => ({
+    // Subtract crypto from each point so the stocks-tab chart excludes
+    // crypto book value. See /api/performance for the full rationale.
+    const snapshots = await prisma.cryptoBookSnapshot.findMany({
+      where: {
+        userId,
+        takenAt: { lte: new Date(portfolio[portfolio.length - 1].timestampMs) },
+      },
+      orderBy: { takenAt: 'asc' },
+      select: { takenAt: true, bookValueCents: true },
+    });
+    const cryptoAt = (ts: number): number => {
+      let latest: (typeof snapshots)[number] | null = null;
+      for (const s of snapshots) {
+        if (s.takenAt.getTime() <= ts) latest = s;
+        else break;
+      }
+      return latest ? Number(latest.bookValueCents) / 100 : 0;
+    };
+    const stocksPortfolio = portfolio.map((p) => ({
       t: p.timestampMs,
-      v: p.equity,
-      pct: basis > 0 ? ((p.equity - basis) / basis) * 100 : 0,
+      v: p.equity - cryptoAt(p.timestampMs),
+    }));
+    const basis = stocksPortfolio[0].v;
+    const portfolioSeries = stocksPortfolio.map((p) => ({
+      t: p.t,
+      v: p.v,
+      pct: basis > 0 ? ((p.v - basis) / basis) * 100 : 0,
     }));
     const startMs = portfolio[0].timestampMs;
     const endMs = portfolio[portfolio.length - 1].timestampMs;
@@ -35,13 +57,13 @@ async function getInitialChartPayload() {
       t: b.timestampMs,
       pct: spyBasis && spyBasis > 0 ? ((b.close - spyBasis) / spyBasis) * 100 : 0,
     }));
-    const last = portfolio[portfolio.length - 1];
+    const last = stocksPortfolio[stocksPortfolio.length - 1];
     return {
       range: '1M' as const,
       summary: {
-        currentEquity: last.equity,
-        rangePnl: last.equity - basis,
-        rangePnlPct: basis > 0 ? ((last.equity - basis) / basis) * 100 : 0,
+        currentEquity: last.v,
+        rangePnl: last.v - basis,
+        rangePnlPct: basis > 0 ? ((last.v - basis) / basis) * 100 : 0,
         spyPnlPct: spySeries[spySeries.length - 1]?.pct ?? null,
       },
       portfolio: portfolioSeries,
@@ -75,7 +97,7 @@ async function getOverview() {
       }),
       prisma.stock.count({ where: { onWatchlist: true } }),
       prisma.stock.count({ where: { candidateSource: 'screener' } }),
-      getInitialChartPayload(),
+      getInitialChartPayload(user.id),
       getUpcomingEvents({ horizonDays: 14 }),
     ]);
 

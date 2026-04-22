@@ -20,6 +20,26 @@ import {
 } from '@/lib/alpaca';
 import { apiError, requireUser } from '@/lib/api';
 import { log } from '@/lib/logger';
+import { prisma } from '@/lib/db';
+
+// For each Alpaca portfolio-history timestamp, estimate how much of the
+// reported equity came from the crypto book so we can subtract it and
+// surface a stocks-only view. Matches to the nearest-prior
+// CryptoBookSnapshot per point; falls back to 0 for points before our
+// snapshot series exists (crypto wasn't part of the portfolio yet).
+function subtractCryptoAt(
+  portfolioTimestampMs: number,
+  snapshots: Array<{ takenAt: Date; bookValueCents: bigint }>
+): number {
+  if (snapshots.length === 0) return 0;
+  let latest: (typeof snapshots)[number] | null = null;
+  for (const s of snapshots) {
+    if (s.takenAt.getTime() <= portfolioTimestampMs) latest = s;
+    else break; // snapshots are sorted asc; first future one means stop
+  }
+  if (!latest) return 0;
+  return Number(latest.bookValueCents) / 100;
+}
 
 export const runtime = 'nodejs';
 export const maxDuration = 30;
@@ -58,9 +78,30 @@ export async function GET(req: Request) {
       return [];
     });
 
+    // Crypto subtraction. Alpaca's portfolio_history returns TOTAL account
+    // equity (cash + stocks + options + crypto). The stocks-tab chart
+    // should exclude crypto so it doesn't get polluted by a 1%–10% crypto
+    // sleeve moving 5% in a day. Use our own CryptoBookSnapshot series
+    // (hourly) and subtract nearest-prior snapshot value per point.
+    const snapshots =
+      portfolio.length > 0
+        ? await prisma.cryptoBookSnapshot.findMany({
+            where: {
+              userId: user.id,
+              takenAt: { lte: new Date(portfolio[portfolio.length - 1].timestampMs) },
+            },
+            orderBy: { takenAt: 'asc' },
+            select: { takenAt: true, bookValueCents: true },
+          })
+        : [];
+    const stocksPortfolio = portfolio.map((p) => ({
+      timestampMs: p.timestampMs,
+      equity: p.equity - subtractCryptoAt(p.timestampMs, snapshots),
+    }));
+
     // Anchor returns to the first point so portfolio and SPY share a y-axis.
-    const basis = portfolio[0]?.equity ?? null;
-    const portfolioSeries = portfolio.map((p) => ({
+    const basis = stocksPortfolio[0]?.equity ?? null;
+    const portfolioSeries = stocksPortfolio.map((p) => ({
       t: p.timestampMs,
       v: p.equity,
       // pct return from range start — this is what the chart line draws
@@ -91,7 +132,7 @@ export async function GET(req: Request) {
       }));
     }
 
-    const last = portfolio[portfolio.length - 1];
+    const last = stocksPortfolio[stocksPortfolio.length - 1];
     const summary = last
       ? {
           currentEquity: last.equity,

@@ -91,6 +91,12 @@ model Account {
   isStopped           Boolean  @default(false)
   maxPositionPct      Float    @default(15.0)
   maxDailyTrades      Int      @default(3)
+  // Separate ceiling for rule-based crypto trades (DCA legs + rebalance
+  // legs). Keeps the crypto engine's mechanical activity from eating into
+  // the LLM agent's stock trade budget. Each DCA of a 3-coin allowlist
+  // writes 3 Trade rows; without this split the agent's whole day of
+  // trades could be burned by one crypto rebalance.
+  maxDailyCryptoTrades Int      @default(10)
   minCashReservePct   Float    @default(10.0)
   tradingHoursStart   String   @default("09:45")    // ET, avoid the open bell
   tradingHoursEnd     String   @default("15:45")    // avoid the close
