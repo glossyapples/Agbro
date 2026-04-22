@@ -207,6 +207,60 @@ export async function getBars(
   return bars;
 }
 
+// ─── Account activities (dividends, interest, etc.) ─────────────────────
+// Alpaca records cash events on /v2/account/activities. Used by the
+// analytics attribution view to show "dividends earned" without needing a
+// separate Dividend table on our side. One activity type at a time keeps
+// the payload tight.
+
+export type DividendActivity = {
+  date: string;           // YYYY-MM-DD
+  symbol: string | null;  // null for aggregated "CASH DIV" events on some rows
+  netAmountCents: bigint; // positive = cash in
+};
+
+export async function getDividends(
+  sinceDate?: string
+): Promise<DividendActivity[]> {
+  const keyId = process.env.ALPACA_KEY_ID;
+  const secretKey = process.env.ALPACA_SECRET_KEY;
+  if (!keyId || !secretKey) return [];
+  const paper = (process.env.ALPACA_PAPER ?? 'true') !== 'false';
+  const base = paper ? 'https://paper-api.alpaca.markets' : 'https://api.alpaca.markets';
+  const qs = new URLSearchParams({
+    activity_types: 'DIV',
+    page_size: '100',
+  });
+  if (sinceDate) qs.set('date', sinceDate);
+  try {
+    const res = await fetch(`${base}/v2/account/activities?${qs.toString()}`, {
+      headers: {
+        'APCA-API-KEY-ID': keyId,
+        'APCA-API-SECRET-KEY': secretKey,
+      },
+    });
+    if (!res.ok) {
+      log.warn('alpaca.dividends_failed', { status: res.status });
+      return [];
+    }
+    const data = (await res.json()) as Array<{
+      date?: string;
+      symbol?: string | null;
+      net_amount?: string;
+    }>;
+    return data
+      .filter((r) => typeof r.net_amount === 'string')
+      .map((r) => ({
+        date: String(r.date ?? ''),
+        symbol: r.symbol ?? null,
+        netAmountCents: BigInt(Math.round(Number(r.net_amount) * 100)),
+      }));
+  } catch (err) {
+    log.error('alpaca.dividends_exception', err);
+    return [];
+  }
+}
+
 // ─── Market calendar ─────────────────────────────────────────────────────
 // Alpaca's /v2/calendar is free and authoritative for NYSE/NASDAQ trading
 // days. We use it to know when the market is closed or closing early (July
