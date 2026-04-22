@@ -7,6 +7,7 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import { prisma } from '@/lib/db';
 import { apiError, requireUser } from '@/lib/api';
+import { CRYPTO_PRESET_KEYS } from '@/lib/crypto/presets';
 
 export const runtime = 'nodejs';
 
@@ -26,6 +27,10 @@ const Body = z.object({
   dcaCadenceDays: z.number().int().min(1).max(90),
   rebalanceBandPct: z.number().min(1).max(50).optional(),
   rebalanceCadenceDays: z.number().int().min(7).max(365).optional(),
+  // Preset tag — not functional, just a UI label stored alongside the
+  // raw fields so the dashboard can show "you're running Top-3 Core"
+  // without inferring it from the numbers.
+  presetKey: z.enum(CRYPTO_PRESET_KEYS as [string, ...string[]]).optional(),
 });
 
 export async function POST(req: Request) {
@@ -63,6 +68,7 @@ export async function POST(req: Request) {
         ...(p.rebalanceCadenceDays != null
           ? { rebalanceCadenceDays: p.rebalanceCadenceDays }
           : {}),
+        ...(p.presetKey ? { presetKey: p.presetKey } : {}),
       },
       create: {
         userId: user.id,
@@ -72,6 +78,7 @@ export async function POST(req: Request) {
         dcaCadenceDays: p.dcaCadenceDays,
         rebalanceBandPct: p.rebalanceBandPct ?? 10,
         rebalanceCadenceDays: p.rebalanceCadenceDays ?? 90,
+        presetKey: p.presetKey ?? null,
       },
     });
     revalidatePath('/crypto');

@@ -278,6 +278,13 @@ model CryptoConfig {
   rebalanceBandPct      Float    @default(10)
   rebalanceCadenceDays  Int      @default(90)
   lastRebalancedAt      DateTime?
+  // Strategy preset the user picked, if any. Values: 'btc_only' |
+  // 'top3_core' | 'equal_weight_top3' | 'custom' (or null for legacy
+  // configs before presets existed). Purely a UI label — the engine reads
+  // allowlist / targetAllocations / rebalanceBandPct directly, so the
+  // preset is just a snapshot of those fields at selection time plus a
+  // human-readable tag for the dashboard.
+  presetKey             String?
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
 }

@@ -7,6 +7,7 @@ import { CryptoConfigForm } from '@/components/CryptoConfigForm';
 import { CryptoPerformanceChart } from '@/components/CryptoPerformanceChart';
 import { CryptoAllocationCard } from '@/components/CryptoAllocationCard';
 import { formatUsd } from '@/lib/money';
+import { getPreset, type CryptoPresetKey } from '@/lib/crypto/presets';
 
 export const runtime = 'nodejs';
 
@@ -79,6 +80,9 @@ export default async function CryptoPage() {
     0
   );
 
+  const presetKey = (config?.presetKey ?? null) as CryptoPresetKey | null;
+  const activePreset = getPreset(presetKey);
+
   const initial = {
     allowlist: config?.allowlist ?? [],
     targetAllocations:
@@ -90,6 +94,7 @@ export default async function CryptoPage() {
     rebalanceBandPct: config?.rebalanceBandPct ?? 10,
     rebalanceCadenceDays: config?.rebalanceCadenceDays ?? 90,
     lastDcaAt: config?.lastDcaAt ? config.lastDcaAt.toISOString() : null,
+    presetKey,
   };
 
   return (
@@ -107,6 +112,21 @@ export default async function CryptoPage() {
           ← Stocks
         </Link>
       </header>
+
+      <section className="card border border-brand-500/30 bg-brand-500/5">
+        <div className="flex items-baseline justify-between gap-2">
+          <p className="text-xs uppercase tracking-[0.15em] text-brand-300">
+            Active strategy
+          </p>
+          {presetKey == null && (
+            <span className="text-[10px] text-amber-300">
+              legacy config — pick a preset below
+            </span>
+          )}
+        </div>
+        <p className="mt-1 text-lg font-semibold text-ink-50">{activePreset.label}</p>
+        <p className="mt-0.5 text-xs text-ink-300">{activePreset.oneLiner}</p>
+      </section>
 
       {!cryptoEnabled && (
         <Link

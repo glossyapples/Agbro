@@ -2,6 +2,11 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import {
+  CRYPTO_PRESETS,
+  CRYPTO_PRESET_KEYS,
+  type CryptoPresetKey,
+} from '@/lib/crypto/presets';
 
 // Preset allowlist. We intentionally cap the v1 universe to the three
 // highest-liquidity, best-tracked pairs Alpaca supports. Adding more is a
@@ -16,10 +21,15 @@ export type CryptoConfigInitial = {
   rebalanceBandPct: number;
   rebalanceCadenceDays: number;
   lastDcaAt: string | null;
+  presetKey: CryptoPresetKey | null;
 };
 
 export function CryptoConfigForm({ initial }: { initial: CryptoConfigInitial }) {
   const router = useRouter();
+  // Default to Custom for legacy configs with no preset tag — they've
+  // been editing the raw fields freely and we shouldn't silently retag
+  // their config as a named strategy.
+  const [presetKey, setPresetKey] = useState<CryptoPresetKey>(initial.presetKey ?? 'custom');
   const [allowed, setAllowed] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(ALLOWED_SYMBOLS.map((s) => [s, initial.allowlist.includes(s)]))
   );
@@ -33,6 +43,27 @@ export function CryptoConfigForm({ initial }: { initial: CryptoConfigInitial }) 
   const [error, setError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const [runMsg, setRunMsg] = useState<string | null>(null);
+
+  const currentPreset = CRYPTO_PRESETS[presetKey];
+  const locked = currentPreset.locked;
+
+  // When user picks a non-Custom preset, overwrite allowlist / allocations
+  // from the preset definition. DCA amount + cadence stay as-is — those
+  // are user-specific and don't belong to the preset.
+  function applyPreset(key: CryptoPresetKey) {
+    setPresetKey(key);
+    setSaved(false);
+    if (key === 'custom') return;
+    const preset = CRYPTO_PRESETS[key];
+    setAllowed(
+      Object.fromEntries(ALLOWED_SYMBOLS.map((s) => [s, preset.allowlist.includes(s)]))
+    );
+    setAlloc(
+      Object.fromEntries(
+        ALLOWED_SYMBOLS.map((s) => [s, String(preset.targetAllocations[s] ?? 0)])
+      )
+    );
+  }
 
   const allocSum = Object.entries(alloc)
     .filter(([sym]) => allowed[sym])
@@ -55,6 +86,9 @@ export function CryptoConfigForm({ initial }: { initial: CryptoConfigInitial }) 
         targetAllocations,
         dcaAmountUsd: Number(dcaAmount) || 0,
         dcaCadenceDays: Math.max(1, Math.round(Number(dcaCadence) || 7)),
+        rebalanceBandPct: currentPreset.rebalanceBandPct,
+        rebalanceCadenceDays: currentPreset.rebalanceCadenceDays,
+        presetKey,
       };
       const res = await fetch('/api/crypto/config', {
         method: 'POST',
@@ -76,13 +110,54 @@ export function CryptoConfigForm({ initial }: { initial: CryptoConfigInitial }) 
   }
 
   return (
-    <section className="card flex flex-col gap-3">
+    <section className="card flex flex-col gap-4">
       <div>
-        <h2 className="text-sm font-semibold">Allowlist & allocation targets</h2>
+        <h2 className="text-sm font-semibold">Strategy</h2>
         <p className="mt-1 text-[11px] text-ink-400">
-          Pick which coins the engine can trade and how to split each DCA
-          buy. Anything not in the allowlist is ignored entirely. Targets
-          sum must be ≤ 100% — residual stays as cash.
+          Pick a preset for opinionated defaults — coins, weights, and
+          rebalance cadence are set for you. Choose <em>Custom</em> for
+          expert mode, where you pick everything.
+        </p>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        {CRYPTO_PRESET_KEYS.map((key) => {
+          const p = CRYPTO_PRESETS[key];
+          const active = presetKey === key;
+          return (
+            <button
+              key={key}
+              type="button"
+              onClick={() => applyPreset(key)}
+              className={`flex flex-col items-start gap-1 rounded-md border p-3 text-left transition ${
+                active
+                  ? 'border-brand-500 bg-brand-500/10'
+                  : 'border-ink-700/60 bg-ink-800/40 hover:border-ink-600'
+              }`}
+            >
+              <span className="text-sm font-semibold text-ink-100">{p.label}</span>
+              <span className="text-[11px] text-ink-400">{p.oneLiner}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      <p className="rounded-md border border-ink-700/60 bg-ink-800/40 p-2 text-[11px] text-ink-300">
+        {currentPreset.description}
+      </p>
+
+      <div>
+        <h3 className="text-sm font-semibold">
+          Allowlist &amp; allocation targets{' '}
+          {locked && (
+            <span className="ml-1 text-[10px] font-normal text-ink-400">
+              (locked by preset — choose Custom to edit)
+            </span>
+          )}
+        </h3>
+        <p className="mt-1 text-[11px] text-ink-400">
+          Which coins the engine can trade and how each DCA buy is split.
+          Targets sum must be ≤ 100% — residual stays as cash.
         </p>
       </div>
       <div className="flex flex-col gap-2">
@@ -93,9 +168,10 @@ export function CryptoConfigForm({ initial }: { initial: CryptoConfigInitial }) 
                 type="checkbox"
                 checked={allowed[sym]}
                 onChange={(e) => setAllowed((a) => ({ ...a, [sym]: e.target.checked }))}
-                className="h-4 w-4 accent-brand-500"
+                disabled={locked}
+                className="h-4 w-4 accent-brand-500 disabled:opacity-50"
               />
-              <span>{sym}</span>
+              <span className={locked ? 'text-ink-300' : undefined}>{sym}</span>
             </label>
             <div className="flex items-center gap-1 text-sm">
               <input
@@ -103,8 +179,8 @@ export function CryptoConfigForm({ initial }: { initial: CryptoConfigInitial }) 
                 inputMode="decimal"
                 value={alloc[sym]}
                 onChange={(e) => setAlloc((a) => ({ ...a, [sym]: e.target.value }))}
-                disabled={!allowed[sym]}
-                className="w-20"
+                disabled={locked || !allowed[sym]}
+                className="w-20 disabled:opacity-50"
                 min={0}
                 max={100}
               />
@@ -119,15 +195,16 @@ export function CryptoConfigForm({ initial }: { initial: CryptoConfigInitial }) 
       </div>
 
       <div>
-        <h2 className="text-sm font-semibold">DCA schedule — how much you BUY each period</h2>
+        <h3 className="text-sm font-semibold">DCA schedule — how much you BUY each period</h3>
         <p className="mt-1 text-[11px] text-ink-400">
-          Every <em>{dcaCadence}</em> day(s) the engine will spend{' '}
-          <em>${Number(dcaAmount) || 0}</em>, split across your targets
-          above. This is the <em>accumulation flow</em> — distinct from the
-          portfolio cap (set in Settings) which is the <em>maximum</em>{' '}
-          crypto can grow to as a share of your whole portfolio. When the
-          book nears the cap, DCA automatically scales down or pauses. Set
-          amount to $0 to hold without adding more.
+          Every <em>{dcaCadence}</em> day(s) the engine spends{' '}
+          <em>${Number(dcaAmount) || 0}</em>, split across your allowlist
+          above. This is the <em>accumulation flow</em> — separate from the
+          portfolio cap (in Settings) which is the <em>maximum</em> crypto
+          can grow to as a share of your whole portfolio. When the book
+          nears the cap, DCA auto-scales or pauses. Set amount to $0 to
+          hold without adding more. These two fields are yours regardless
+          of the preset above.
         </p>
       </div>
       <div className="grid grid-cols-2 gap-3">
@@ -154,6 +231,19 @@ export function CryptoConfigForm({ initial }: { initial: CryptoConfigInitial }) 
           />
         </div>
       </div>
+
+      <p className="text-[11px] text-ink-400">
+        Rebalance:{' '}
+        {currentPreset.allowlist.length > 1 || !locked ? (
+          <>
+            drift band <span className="text-ink-200">{currentPreset.rebalanceBandPct}%</span> ·
+            cadence <span className="text-ink-200">{currentPreset.rebalanceCadenceDays} days</span>
+            {locked && ' (set by preset)'}
+          </>
+        ) : (
+          <>n/a for single-asset preset</>
+        )}
+      </p>
 
       <div className="flex items-center justify-between">
         <p className="text-[11px] text-ink-400">
