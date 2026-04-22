@@ -233,6 +233,28 @@ export default async function OverviewPage() {
               <span className="pill">{lastRun.status}</span>{' '}
               {lastRun.decision && <span className="pill-good">{lastRun.decision}</span>}
             </p>
+            {(() => {
+              // Diagnostic: compute when the next wake is due so the user
+              // can verify cadence is honoured at a glance. If the ETA is
+              // already in the past, the cron didn't fire (or fired and
+              // skipped) — show amber so it stands out.
+              const nextWakeMs =
+                new Date(lastRun.startedAt).getTime() +
+                account.agentCadenceMinutes * 60_000;
+              const overdue = nextWakeMs < Date.now();
+              return (
+                <p className={`text-[11px] ${overdue ? 'text-amber-300' : 'text-ink-400'}`}>
+                  Next wake: <LocalTime value={nextWakeMs} format="relative" />
+                  {overdue && (
+                    <>
+                      {' '}
+                      · overdue — cron may not be firing. Check Railway
+                      schedule + logs for <code>cron.tick.*</code>.
+                    </>
+                  )}
+                </p>
+              );
+            })()}
             {lastRun.summary && <p className="text-xs text-ink-400 line-clamp-4">{lastRun.summary}</p>}
           </div>
         ) : (
