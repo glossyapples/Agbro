@@ -189,13 +189,22 @@ export function CryptoConfigForm({ initial }: { initial: CryptoConfigInitial }) 
               const data = await res.json();
               if (!res.ok) {
                 setRunMsg(typeof data.error === 'string' ? data.error : 'run failed');
-              } else if (data.ranDca) {
-                setRunMsg(
-                  `DCA placed: ${data.dcaTrades.length} order(s). Refresh to see them below.`
-                );
-                router.refresh();
               } else {
-                setRunMsg(`Skipped — ${data.skippedReason ?? 'not due yet'}.`);
+                const parts: string[] = [];
+                if (data.dca?.ran) {
+                  parts.push(`DCA placed ${data.dca.trades.length} order(s)`);
+                } else if (data.dca?.skippedReason) {
+                  parts.push(`DCA skipped — ${data.dca.skippedReason}`);
+                }
+                if (data.rebalance?.ran) {
+                  parts.push(
+                    `rebalance placed ${data.rebalance.trades.length} order(s) (max drift ${data.rebalance.maxDriftPct?.toFixed(1)}%)`
+                  );
+                } else if (data.rebalance?.skippedReason) {
+                  parts.push(`rebalance skipped — ${data.rebalance.skippedReason}`);
+                }
+                setRunMsg(parts.join(' · ') || 'nothing to do');
+                if (data.dca?.ran || data.rebalance?.ran) router.refresh();
               }
             } catch {
               setRunMsg('Network error — try again.');

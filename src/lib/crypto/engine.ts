@@ -1,23 +1,51 @@
 // Crypto automation engine — deterministic, rule-based. No LLM involvement
-// anywhere in this file. The user's CryptoConfig is the full input:
-// allowlist, target allocations, DCA cadence + amount. The engine's job is
-// to decide, on each cron tick, whether a DCA is due and if so to submit
-// the orders.
+// anywhere in this file. CryptoConfig is the full input: allowlist, target
+// allocations, DCA cadence + amount, rebalance band + cadence. The engine
+// orchestrates two operations on every tick:
 //
-// v1: DCA only. Rebalancing (sell overweights, buy underweights) is
-// intentionally deferred — it adds realized-gain complexity and isn't
-// strictly necessary for accumulating a long-term crypto allocation.
+//   1. DCA (dollar-cost average): on cadence, spend dcaAmountCents split
+//      across target allocations to accumulate more exposure.
+//
+//   2. Rebalance: when any holding has drifted > rebalanceBandPct from its
+//      target weight AND rebalanceCadenceDays have elapsed, sell
+//      overweights and buy underweights to restore target ratios. Triggered
+//      by price action, not the schedule — drift-based.
+//
+// Both operations self-rate-limit via timestamps stored on CryptoConfig.
+// Hourly cron ticks are cheap when nothing is due.
 
 import { prisma } from '@/lib/db';
 import { log } from '@/lib/logger';
 import { getBrokerAccount } from '@/lib/alpaca';
-import { placeCryptoOrder, getCryptoLatestPrice } from '@/lib/alpaca-crypto';
+import {
+  placeCryptoOrder,
+  getCryptoLatestPrice,
+  getCryptoPositions,
+  type CryptoPosition,
+} from '@/lib/alpaca-crypto';
+import type { Account, CryptoConfig } from '@prisma/client';
+
+export type DcaTrade = { symbol: string; notionalUsd: number; orderId: string };
+export type RebalanceTrade = {
+  symbol: string;
+  side: 'buy' | 'sell';
+  notionalUsd: number;
+  orderId: string;
+};
 
 export type CycleResult = {
   userId: string;
-  ranDca: boolean;
-  dcaTrades: Array<{ symbol: string; notionalUsd: number; orderId: string }>;
-  skippedReason?: string;
+  dca: {
+    ran: boolean;
+    trades: DcaTrade[];
+    skippedReason?: string;
+  };
+  rebalance: {
+    ran: boolean;
+    trades: RebalanceTrade[];
+    skippedReason?: string;
+    maxDriftPct?: number;
+  };
 };
 
 type Targets = Record<string, number>; // { "BTC/USD": 60, "ETH/USD": 40 }
@@ -32,77 +60,64 @@ function parseTargets(raw: unknown): Targets {
   return out;
 }
 
-export async function runCryptoCycleForUser(userId: string): Promise<CycleResult> {
-  const [account, config] = await Promise.all([
-    prisma.account.findUnique({ where: { userId } }),
-    prisma.cryptoConfig.findUnique({ where: { userId } }),
-  ]);
+// Resolve target weights intersected with the allowlist. Returns the raw
+// weights (not normalised) + the sum so callers can normalise if needed.
+function resolveTargets(config: CryptoConfig): { validTargets: Targets; totalWeight: number } {
+  const raw = parseTargets(config.targetAllocations);
+  const validTargets: Targets = {};
+  for (const sym of config.allowlist) {
+    if (raw[sym] != null) validTargets[sym] = raw[sym];
+  }
+  const totalWeight = Object.values(validTargets).reduce((s, v) => s + v, 0);
+  return { validTargets, totalWeight };
+}
 
-  if (!account) {
-    return { userId, ranDca: false, dcaTrades: [], skippedReason: 'no account' };
-  }
-  if (!account.cryptoEnabled) {
-    return { userId, ranDca: false, dcaTrades: [], skippedReason: 'crypto disabled' };
-  }
-  if (account.isPaused || account.isStopped) {
-    return { userId, ranDca: false, dcaTrades: [], skippedReason: 'account paused or stopped' };
-  }
-  if (!config) {
-    return { userId, ranDca: false, dcaTrades: [], skippedReason: 'no config' };
-  }
-  if (config.allowlist.length === 0) {
-    return { userId, ranDca: false, dcaTrades: [], skippedReason: 'empty allowlist' };
-  }
+// ─── DCA ─────────────────────────────────────────────────────────────────
+
+async function tryDca(
+  userId: string,
+  account: Account,
+  config: CryptoConfig
+): Promise<CycleResult['dca']> {
   if (config.dcaAmountCents <= BigInt(0)) {
-    return { userId, ranDca: false, dcaTrades: [], skippedReason: 'dca amount is 0' };
+    return { ran: false, trades: [], skippedReason: 'dca amount is 0' };
   }
 
-  // Cadence check.
   const now = new Date();
   if (config.lastDcaAt) {
     const daysSince = (now.getTime() - config.lastDcaAt.getTime()) / 86_400_000;
     if (daysSince < config.dcaCadenceDays) {
       return {
-        userId,
-        ranDca: false,
-        dcaTrades: [],
+        ran: false,
+        trades: [],
         skippedReason: `only ${daysSince.toFixed(1)}d since last DCA; cadence is ${config.dcaCadenceDays}d`,
       };
     }
   }
 
-  // Resolve targets. Intersection with allowlist; drop anything not allowed.
-  const targets = parseTargets(config.targetAllocations);
-  const validTargets: Targets = {};
-  for (const sym of config.allowlist) {
-    if (targets[sym] != null) validTargets[sym] = targets[sym];
-  }
-  const totalWeight = Object.values(validTargets).reduce((s, v) => s + v, 0);
+  const { validTargets, totalWeight } = resolveTargets(config);
   if (totalWeight <= 0) {
-    return { userId, ranDca: false, dcaTrades: [], skippedReason: 'no valid target allocations' };
+    return { ran: false, trades: [], skippedReason: 'no valid target allocations' };
   }
 
-  // Buying power check — don't DCA if the account is dry. Crypto uses the
-  // same cash pool as equities on Alpaca paper, so sumbmitting into an
-  // underfunded account just produces broker rejections.
+  // Buying power check — Alpaca paper shares one cash pool across equities
+  // and crypto, so submitting into a dry account just produces rejections.
   const broker = await getBrokerAccount().catch(() => null);
   const cashUsd = broker ? Number(broker.cashCents) / 100 : 0;
   const dcaUsd = Number(config.dcaAmountCents) / 100;
   if (cashUsd < dcaUsd) {
     return {
-      userId,
-      ranDca: false,
-      dcaTrades: [],
+      ran: false,
+      trades: [],
       skippedReason: `not enough cash ($${cashUsd.toFixed(0)}) for DCA ($${dcaUsd.toFixed(0)})`,
     };
   }
 
-  // Split the DCA amount across targets proportionally.
-  const orders: CycleResult['dcaTrades'] = [];
+  const trades: DcaTrade[] = [];
   for (const [symbol, weight] of Object.entries(validTargets)) {
     const notionalUsd = (dcaUsd * weight) / totalWeight;
-    // Alpaca crypto minimum order is $1 on paper; skip dust.
-    if (notionalUsd < 1) continue;
+    if (notionalUsd < 1) continue; // Alpaca crypto minimum is $1
+
     try {
       const order = await placeCryptoOrder({
         symbol,
@@ -110,7 +125,6 @@ export async function runCryptoCycleForUser(userId: string): Promise<CycleResult
         notionalUsd,
         timeInForce: 'gtc',
       });
-      // Best-effort price capture for the trade row.
       const priceAtOrder = await getCryptoLatestPrice(symbol).catch(() => null);
       const qty = priceAtOrder ? notionalUsd / priceAtOrder : 0;
       await prisma.trade.create({
@@ -125,16 +139,13 @@ export async function runCryptoCycleForUser(userId: string): Promise<CycleResult
           fillPriceCents: priceAtOrder
             ? BigInt(Math.round(priceAtOrder * 100))
             : null,
-          // Crypto trades skip the bull/bear/thesis triad — they're
-          // rule-based, not LLM-driven. A short rule-summary lives in
-          // thesis so audit trails read cleanly.
           bullCase: null,
           bearCase: null,
-          thesis: `DCA: ${weight.toFixed(1)}% of $${dcaUsd.toFixed(0)} weekly crypto buy (rule-based)`,
+          thesis: `DCA: ${weight.toFixed(1)}% of $${dcaUsd.toFixed(0)} crypto buy (rule-based)`,
           confidence: null,
         },
       });
-      orders.push({ symbol, notionalUsd, orderId: order.id });
+      trades.push({ symbol, notionalUsd, orderId: order.id });
       log.info('crypto.dca_submitted', {
         userId,
         symbol,
@@ -143,24 +154,274 @@ export async function runCryptoCycleForUser(userId: string): Promise<CycleResult
       });
     } catch (err) {
       log.error('crypto.dca_order_failed', err, { userId, symbol });
-      // Continue with other symbols — one failed leg shouldn't block the
-      // rest of the DCA split.
     }
   }
 
-  // Only bump lastDcaAt if at least one order went through; otherwise the
-  // next cron tick retries.
-  if (orders.length > 0) {
+  // Only bump lastDcaAt when at least one leg went through; otherwise the
+  // next tick retries.
+  if (trades.length > 0) {
     await prisma.cryptoConfig.update({
       where: { userId },
-      data: { lastDcaAt: now },
+      data: { lastDcaAt: new Date() },
+    });
+  }
+  return {
+    ran: trades.length > 0,
+    trades,
+    skippedReason: trades.length === 0 ? 'all legs failed at broker' : undefined,
+  };
+}
+
+// ─── Rebalance ───────────────────────────────────────────────────────────
+
+async function tryRebalance(
+  userId: string,
+  _account: Account,
+  config: CryptoConfig
+): Promise<CycleResult['rebalance']> {
+  // Cadence floor. Rebalancing is a drift-driven action; the cadence is the
+  // soft floor that prevents thrash if targets are near band boundaries.
+  const now = new Date();
+  if (config.lastRebalancedAt) {
+    const daysSince = (now.getTime() - config.lastRebalancedAt.getTime()) / 86_400_000;
+    if (daysSince < config.rebalanceCadenceDays) {
+      return {
+        ran: false,
+        trades: [],
+        skippedReason: `only ${daysSince.toFixed(0)}d since last rebalance; cadence is ${config.rebalanceCadenceDays}d`,
+      };
+    }
+  }
+
+  const { validTargets, totalWeight } = resolveTargets(config);
+  // Even if there are no targets, positions outside the allowlist should be
+  // flagged for sell — use the allowlist as the "inside the book" set.
+
+  let cryptoPositions: CryptoPosition[];
+  try {
+    cryptoPositions = await getCryptoPositions();
+  } catch (err) {
+    log.error('crypto.rebalance_positions_failed', err, { userId });
+    return {
+      ran: false,
+      trades: [],
+      skippedReason: `failed to fetch positions: ${(err as Error).message}`,
+    };
+  }
+
+  const bookValueUsd = cryptoPositions.reduce(
+    (s, p) => s + Number(p.marketValueCents) / 100,
+    0
+  );
+  if (bookValueUsd <= 0) {
+    return { ran: false, trades: [], skippedReason: 'no crypto book to rebalance' };
+  }
+
+  // Compute desired $ per symbol (normalised to 100% of book value) +
+  // actual $ per symbol. Symbols in the allowlist with no position contribute
+  // actual=0. Symbols in positions but not in the allowlist contribute
+  // desired=0 → full sell.
+  const desiredBySymbol = new Map<string, number>();
+  if (totalWeight > 0) {
+    for (const [sym, weight] of Object.entries(validTargets)) {
+      desiredBySymbol.set(sym, (weight / totalWeight) * bookValueUsd);
+    }
+  }
+  const actualBySymbol = new Map<string, number>();
+  for (const p of cryptoPositions) {
+    actualBySymbol.set(p.symbol, Number(p.marketValueCents) / 100);
+  }
+
+  const allSymbols = new Set<string>([
+    ...desiredBySymbol.keys(),
+    ...actualBySymbol.keys(),
+  ]);
+
+  type Drift = { symbol: string; actual: number; desired: number; diffUsd: number; diffPct: number };
+  const drifts: Drift[] = [];
+  let maxDriftPct = 0;
+  for (const sym of allSymbols) {
+    const actual = actualBySymbol.get(sym) ?? 0;
+    const desired = desiredBySymbol.get(sym) ?? 0;
+    const diffUsd = actual - desired; // positive = overweight → sell
+    const diffPct = (Math.abs(diffUsd) / bookValueUsd) * 100;
+    drifts.push({ symbol: sym, actual, desired, diffUsd, diffPct });
+    if (diffPct > maxDriftPct) maxDriftPct = diffPct;
+  }
+
+  if (maxDriftPct < config.rebalanceBandPct) {
+    return {
+      ran: false,
+      trades: [],
+      skippedReason: `max drift ${maxDriftPct.toFixed(1)}% below band ${config.rebalanceBandPct}%`,
+      maxDriftPct,
+    };
+  }
+
+  log.info('crypto.rebalance_triggered', {
+    userId,
+    maxDriftPct: maxDriftPct.toFixed(2),
+    bookValueUsd: bookValueUsd.toFixed(2),
+    drifts: drifts.map((d) => ({ sym: d.symbol, diff: d.diffUsd.toFixed(2) })),
+  });
+
+  // Execute sells first to free up cash for the buys. Keeps sequencing
+  // predictable and avoids buy rejections for insufficient funds.
+  const trades: RebalanceTrade[] = [];
+  const sells = drifts.filter((d) => d.diffUsd > 1);
+  const buys = drifts.filter((d) => d.diffUsd < -1);
+
+  for (const sell of sells) {
+    const notionalUsd = sell.diffUsd;
+    try {
+      const order = await placeCryptoOrder({
+        symbol: sell.symbol,
+        side: 'sell',
+        notionalUsd,
+        timeInForce: 'gtc',
+      });
+      const priceAtOrder = await getCryptoLatestPrice(sell.symbol).catch(() => null);
+      const qty = priceAtOrder ? notionalUsd / priceAtOrder : 0;
+      await prisma.trade.create({
+        data: {
+          userId,
+          alpacaOrderId: order.id,
+          symbol: sell.symbol,
+          side: 'sell',
+          qty,
+          status: 'submitted',
+          assetClass: 'crypto',
+          fillPriceCents: priceAtOrder
+            ? BigInt(Math.round(priceAtOrder * 100))
+            : null,
+          bullCase: null,
+          bearCase: null,
+          thesis: `Rebalance: ${sell.symbol} was ${(sell.actual / bookValueUsd * 100).toFixed(1)}% of book vs target ${(sell.desired / bookValueUsd * 100).toFixed(1)}%; selling $${notionalUsd.toFixed(0)} to restore (rule-based)`,
+          confidence: null,
+        },
+      });
+      trades.push({ symbol: sell.symbol, side: 'sell', notionalUsd, orderId: order.id });
+      log.info('crypto.rebalance_sell_submitted', {
+        userId,
+        symbol: sell.symbol,
+        notionalUsd: notionalUsd.toFixed(2),
+        orderId: order.id,
+      });
+    } catch (err) {
+      log.error('crypto.rebalance_sell_failed', err, { userId, symbol: sell.symbol });
+    }
+  }
+
+  for (const buy of buys) {
+    const notionalUsd = -buy.diffUsd; // diffUsd is negative for underweight
+    try {
+      const order = await placeCryptoOrder({
+        symbol: buy.symbol,
+        side: 'buy',
+        notionalUsd,
+        timeInForce: 'gtc',
+      });
+      const priceAtOrder = await getCryptoLatestPrice(buy.symbol).catch(() => null);
+      const qty = priceAtOrder ? notionalUsd / priceAtOrder : 0;
+      await prisma.trade.create({
+        data: {
+          userId,
+          alpacaOrderId: order.id,
+          symbol: buy.symbol,
+          side: 'buy',
+          qty,
+          status: 'submitted',
+          assetClass: 'crypto',
+          fillPriceCents: priceAtOrder
+            ? BigInt(Math.round(priceAtOrder * 100))
+            : null,
+          bullCase: null,
+          bearCase: null,
+          thesis: `Rebalance: ${buy.symbol} was ${(buy.actual / bookValueUsd * 100).toFixed(1)}% of book vs target ${(buy.desired / bookValueUsd * 100).toFixed(1)}%; buying $${notionalUsd.toFixed(0)} to restore (rule-based)`,
+          confidence: null,
+        },
+      });
+      trades.push({ symbol: buy.symbol, side: 'buy', notionalUsd, orderId: order.id });
+      log.info('crypto.rebalance_buy_submitted', {
+        userId,
+        symbol: buy.symbol,
+        notionalUsd: notionalUsd.toFixed(2),
+        orderId: order.id,
+      });
+    } catch (err) {
+      log.error('crypto.rebalance_buy_failed', err, { userId, symbol: buy.symbol });
+    }
+  }
+
+  if (trades.length > 0) {
+    await prisma.cryptoConfig.update({
+      where: { userId },
+      data: { lastRebalancedAt: new Date() },
     });
   }
 
-  return { userId, ranDca: orders.length > 0, dcaTrades: orders };
+  return {
+    ran: trades.length > 0,
+    trades,
+    maxDriftPct,
+    skippedReason: trades.length === 0 ? 'drift exceeded band but all legs failed at broker' : undefined,
+  };
 }
 
-// For the cron loop: run for every user who has cryptoEnabled + a config.
+// ─── Orchestrator ────────────────────────────────────────────────────────
+
+function earlySkip(userId: string, reason: string): CycleResult {
+  return {
+    userId,
+    dca: { ran: false, trades: [], skippedReason: reason },
+    rebalance: { ran: false, trades: [], skippedReason: reason },
+  };
+}
+
+export async function runCryptoCycleForUser(userId: string): Promise<CycleResult> {
+  const [account, config] = await Promise.all([
+    prisma.account.findUnique({ where: { userId } }),
+    prisma.cryptoConfig.findUnique({ where: { userId } }),
+  ]);
+
+  if (!account) return earlySkip(userId, 'no account');
+  if (!account.cryptoEnabled) return earlySkip(userId, 'crypto disabled');
+  if (account.isPaused || account.isStopped) {
+    return earlySkip(userId, 'account paused or stopped');
+  }
+  if (!config) return earlySkip(userId, 'no config');
+  if (config.allowlist.length === 0) return earlySkip(userId, 'empty allowlist');
+
+  // DCA first, then rebalance. Order matters only mildly: DCA buys in target
+  // ratios (doesn't introduce drift), rebalance corrects drift from price
+  // action. Running DCA first means new contributions enter at the current
+  // targets; then rebalance fixes whatever drift exists across the book.
+  const dca = await tryDca(userId, account, config).catch((err) => {
+    log.error('crypto.dca_exception', err, { userId });
+    return {
+      ran: false,
+      trades: [] as DcaTrade[],
+      skippedReason: (err as Error).message,
+    };
+  });
+  // Refetch config so the lastDcaAt bump (if any) is visible to rebalance.
+  const refreshedConfig = await prisma.cryptoConfig.findUnique({
+    where: { userId },
+  });
+  const rebalance = refreshedConfig
+    ? await tryRebalance(userId, account, refreshedConfig).catch((err) => {
+        log.error('crypto.rebalance_exception', err, { userId });
+        return {
+          ran: false,
+          trades: [] as RebalanceTrade[],
+          skippedReason: (err as Error).message,
+        };
+      })
+    : { ran: false, trades: [], skippedReason: 'config missing mid-cycle' };
+
+  return { userId, dca, rebalance };
+}
+
 export async function runCryptoCycleAllUsers(): Promise<CycleResult[]> {
   const candidates = await prisma.user.findMany({
     where: {
@@ -175,12 +436,7 @@ export async function runCryptoCycleAllUsers(): Promise<CycleResult[]> {
       out.push(await runCryptoCycleForUser(u.id));
     } catch (err) {
       log.error('crypto.cycle_exception', err, { userId: u.id });
-      out.push({
-        userId: u.id,
-        ranDca: false,
-        dcaTrades: [],
-        skippedReason: (err as Error).message,
-      });
+      out.push(earlySkip(u.id, (err as Error).message));
     }
   }
   return out;
