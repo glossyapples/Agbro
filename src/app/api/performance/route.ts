@@ -71,7 +71,13 @@ export async function GET(req: Request) {
     let spySeries: Array<{ t: number; pct: number }> = [];
     if (portfolio.length > 0) {
       const startMs = portfolio[0].timestampMs;
-      const endMs = portfolio[portfolio.length - 1].timestampMs;
+      // Alpaca's free IEX feed has a ~15 min delay. Asking for bars past
+      // that point produces the "code: undefined, message: undefined"
+      // error we were seeing on 1D. Back the end off by 20 min to stay
+      // safely inside the feed's available range. Negligible impact on
+      // longer ranges where the last point is days/hours old anyway.
+      const rawEndMs = portfolio[portfolio.length - 1].timestampMs;
+      const endMs = Math.min(rawEndMs, Date.now() - 20 * 60_000);
       const bars = await getBars('SPY', SPY_TIMEFRAME[range], startMs, endMs).catch(
         (err) => {
           log.warn('performance.spy_bars_failed', { range }, err);

@@ -235,13 +235,14 @@ export default async function OverviewPage() {
             </p>
             {(() => {
               // Diagnostic: compute when the next wake is due so the user
-              // can verify cadence is honoured at a glance. If the ETA is
-              // already in the past, the cron didn't fire (or fired and
-              // skipped) — show amber so it stands out.
-              const nextWakeMs =
-                new Date(lastRun.startedAt).getTime() +
-                account.agentCadenceMinutes * 60_000;
-              const overdue = nextWakeMs < Date.now();
+              // can verify cadence is honoured at a glance. "Overdue" only
+              // fires when the lateness exceeds one full cadence cycle —
+              // small overages are normal jitter between the wake ETA and
+              // the next Railway cron tick.
+              const cadenceMs = account.agentCadenceMinutes * 60_000;
+              const nextWakeMs = new Date(lastRun.startedAt).getTime() + cadenceMs;
+              const overageMs = Date.now() - nextWakeMs;
+              const overdue = overageMs > cadenceMs; // a full cycle late
               return (
                 <p className={`text-[11px] ${overdue ? 'text-amber-300' : 'text-ink-400'}`}>
                   Next wake: <LocalTime value={nextWakeMs} format="relative" />
