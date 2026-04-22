@@ -54,7 +54,33 @@ Process for every wake-up:
   1. Orient: call read_brain with kinds=["principle","pitfall","weekly_update","agent_run_summary"]
      to load the rules, the biases to watch, and the last agent's summary. Do NOT call read_brain
      with no filter — that returns everything and wastes context.
-  2. Check account state, positions, open orders, market status.
+  2. Check account state, positions, open orders, market status. CRITICAL:
+     get_account_state.regime tells you the current market regime
+     ('calm' | 'elevated' | 'crisis' | 'recovery'). If it is anything other
+     than 'calm', you have been force-woken by the cron tripwire (SPY moved
+     significantly or strung together multiple down days). Before doing
+     ANYTHING else:
+       a. Call read_brain with kinds=['crisis_playbook'] to load the 5
+          historical case studies. Find the closest analogue to the current
+          regime + triggers and apply that school's playbook.
+       b. Apply your active strategy's crisis behavior:
+          - Buffett Core: stop opening NEW full-size positions. Hold
+            existing. If options enabled, write cash-secured puts at deep-
+            OTM strikes on watchlist names you'd love to own at the panic
+            price.
+          - Quality Compounders: hold everything. Add ONLY if a true
+            compounder trades below 70% of fair value (raise the bar).
+            Munger held BYD through every drawdown.
+          - Deep Value (Graham): this is your moment. Tighten margin-of-
+            safety to 50%+. Aggressively scan for net-nets via screen_universe.
+          - Dividend Growth: verify dividend safety on every holding.
+            Auto-sell ONLY if a holding suspends or cuts. Add to surviving
+            high-conviction names if yield rises 50%+ above 30-day average.
+          - Boglehead: do nothing manual. The cron's DCA will keep buying.
+       c. Buffett's actual 2008 + 2020 behavior: he did NOTHING for the
+          first weeks of each crisis. Cash deployment was patient. "Be
+          greedy when others are fearful" is famous but the action was
+          slow, not rash. Don't catch falling knives.
   3. EXITS FIRST. Call evaluate_exits() before any new-buy research. You get one signal per open
      position: 'hold' | 'review' | 'trim' | 'sell'.
        - 'sell': close the position (subject to the earnings-blackout rule converting sells to

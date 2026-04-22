@@ -12,6 +12,7 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { runAgent, AgentRunInflightError } from '@/lib/agents/orchestrator';
 import { runCryptoCycleAllUsers } from '@/lib/crypto/engine';
+import { detectAndPersistRegime } from '@/lib/data/regime';
 import { apiError, assertCronSecret } from '@/lib/api';
 import { log } from '@/lib/logger';
 
@@ -84,16 +85,33 @@ export async function POST(req: Request) {
       return [] as Awaited<ReturnType<typeof runCryptoCycleAllUsers>>;
     });
 
+    // Market-regime tripwire. Cheap (one SPY bars fetch). On a transition
+    // away from 'calm' we'll bypass the cadence + market-hours gates below
+    // so the agent can't sleep through a flash crash.
+    const regimeResult = await detectAndPersistRegime().catch((err) => {
+      log.error('cron.tick.regime_detect_failed', err);
+      return null;
+    });
+    const regimeChanged = regimeResult?.changed ?? false;
+    const currentRegime = regimeResult?.assessment.regime ?? 'calm';
+    const forceWakeFromRegime =
+      regimeChanged && currentRegime !== 'calm';
+
     const now = new Date();
     const dow = new Intl.DateTimeFormat('en-US', {
       timeZone: 'America/New_York',
       weekday: 'short',
     }).format(now);
-    if (dow === 'Sat' || dow === 'Sun') {
+    // Weekend short-circuit applies to the stock agent ONLY when the
+    // market regime is calm. A regime transition (e.g. crisis triggered
+    // by Friday's close) MUST wake the agent over the weekend so it can
+    // research before Monday open. Crypto ran above regardless.
+    if ((dow === 'Sat' || dow === 'Sun') && !forceWakeFromRegime) {
       return NextResponse.json({
         skipped: true,
         reason: 'weekend (stock agent only — crypto ran)',
         crypto: cryptoResults,
+        regime: currentRegime,
       });
     }
 
@@ -104,7 +122,14 @@ export async function POST(req: Request) {
 
     const outcomes: Outcome[] = [];
     for (const account of accounts) {
-      if (!withinTradingHours(now, account.tradingHoursStart, account.tradingHoursEnd)) {
+      // Trading-hours + cadence gates are SUSPENDED on a regime transition
+      // away from calm. The whole point of the tripwire is to react to
+      // SHTF events the moment they're detectable — sleeping on cadence
+      // until the next scheduled wake defeats the purpose.
+      if (
+        !forceWakeFromRegime &&
+        !withinTradingHours(now, account.tradingHoursStart, account.tradingHoursEnd)
+      ) {
         outcomes.push({ userId: account.userId, skipped: true, reason: 'outside_trading_hours' });
         continue;
       }
@@ -122,7 +147,13 @@ export async function POST(req: Request) {
       const lastRunWasToday =
         lastRun != null && isSameEtDay(lastRun.startedAt, now);
 
-      if (lastRun && lastRunWasToday) {
+      if (forceWakeFromRegime) {
+        log.info('cron.tick.regime_wake', {
+          userId: account.userId,
+          regime: currentRegime,
+          triggers: regimeResult?.assessment.triggers ?? [],
+        });
+      } else if (lastRun && lastRunWasToday) {
         const mins = (now.getTime() - lastRun.startedAt.getTime()) / 60_000;
         if (mins < account.agentCadenceMinutes) {
           outcomes.push({
@@ -178,7 +209,16 @@ export async function POST(req: Request) {
     const skipped = outcomes.filter((o) => 'skipped' in o).length;
 
     return NextResponse.json(
-      { total: outcomes.length, ran, skipped, failed, outcomes, crypto: cryptoResults },
+      {
+        total: outcomes.length,
+        ran,
+        skipped,
+        failed,
+        outcomes,
+        crypto: cryptoResults,
+        regime: regimeResult?.assessment ?? null,
+        regimeChanged,
+      },
       { status: failed > 0 ? 207 : 200 }
     );
   } catch (err) {

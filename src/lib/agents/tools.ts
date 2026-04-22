@@ -33,6 +33,7 @@ import { getUpcomingEvents } from '@/lib/data/events';
 import { isInEarningsBlackout } from '@/lib/data/earnings';
 import { checkWashSaleBlock } from '@/lib/data/tax';
 import { computeSpendable } from '@/lib/wallet';
+import { getCurrentRegime } from '@/lib/data/regime';
 import { evaluateExits } from './exits';
 import {
   getOptionContracts,
@@ -501,9 +502,10 @@ async function safeAlpaca<T>(fn: () => Promise<T>): Promise<T | { error: string 
 }
 
 async function getAccountState(ctx: ToolContext) {
-  const [broker, account] = await Promise.all([
+  const [broker, account, regime] = await Promise.all([
     safeAlpaca(() => getBrokerAccount()),
     prisma.account.findUnique({ where: { userId: ctx.userId } }),
+    getCurrentRegime(),
   ]);
   // Wallet reservation: if the user parked cash in the AgBro wallet,
   // the agent should see reduced buying power. Surface both the raw
@@ -523,6 +525,11 @@ async function getAccountState(ctx: ToolContext) {
       walletBalanceCents: wallet.walletBalanceCents.toString(),
       spendableCents: wallet.spendableCents.toString(),
     },
+    // Current market regime. When != 'calm', the agent MUST read brain
+    // entries with kinds=['crisis_playbook'] before deciding anything,
+    // and apply the strategy-specific crisis behavior. See AGBRO_PRINCIPLES
+    // step 5 in the wake-up process.
+    regime,
     policy: account && {
       isPaused: account.isPaused,
       isStopped: account.isStopped,

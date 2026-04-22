@@ -11,7 +11,8 @@ export type BrainSeed = {
     | 'checklist'
     | 'pitfall'
     | 'sector_primer'
-    | 'case_study';
+    | 'case_study'
+    | 'crisis_playbook';
   title: string;
   body: string;
   tags: string[];

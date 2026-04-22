@@ -7,6 +7,7 @@ import { CHECKLISTS } from './checklists';
 import { PITFALLS } from './pitfalls';
 import { SECTOR_PRIMERS } from './sector-primers';
 import { CASE_STUDIES } from './case-studies';
+import { CRISIS_PLAYBOOKS } from './crisis-playbooks';
 import { ALTERNATIVE_STRATEGIES } from './alternative-strategies';
 import type { BrainSeed, StrategySeed } from './types';
 
@@ -16,6 +17,7 @@ export const STARTER_BRAIN: BrainSeed[] = [
   ...PITFALLS,
   ...SECTOR_PRIMERS,
   ...CASE_STUDIES,
+  ...CRISIS_PLAYBOOKS,
 ];
 
 export const STARTER_STRATEGIES: StrategySeed[] = ALTERNATIVE_STRATEGIES;
@@ -27,6 +29,7 @@ export const STARTER_BRAIN_SUMMARY = {
   pitfalls: PITFALLS.length,
   sector_primers: SECTOR_PRIMERS.length,
   case_studies: CASE_STUDIES.length,
+  crisis_playbooks: CRISIS_PLAYBOOKS.length,
   total: STARTER_BRAIN.length,
   alternative_strategies: STARTER_STRATEGIES.length,
 };

@@ -522,6 +522,33 @@ model MarketEvent {
   @@index([kind, occursAt])
 }
 
+// -------------------- Market regime tripwire --------------------
+
+// Global market state derived from SPY price action. Recomputed on every
+// cron tick. A new row is written ONLY when the regime transitions
+// (calm → elevated, elevated → crisis, etc.) so the table doubles as
+// an audit log of "when did we enter / leave each state."
+//
+// Used by the cron to force-wake every user agent the moment the
+// market shifts away from calm — bypasses normal cadence + market-hours
+// checks so the bot can't sleep through a flash crash. The agent reads
+// the current regime from get_account_state and applies its strategy's
+// crisis playbook when regime != 'calm'.
+model MarketRegime {
+  id                       String   @id @default(cuid())
+  // 'calm' | 'elevated' | 'crisis' | 'recovery'
+  regime                   String
+  enteredAt                DateTime @default(now())
+  spyDailyMovePct          Float?
+  spyConsecutiveDownDays   Int?
+  // List of human-readable trigger strings (e.g. "SPY -7.2% today",
+  // "4 consecutive down days, -11.3% cumulative"). Stored as JSON
+  // for flexibility — no schema change when we add new tripwires.
+  triggers                 Json?
+
+  @@index([enteredAt])
+}
+
 // -------------------- Notifications & Audit --------------------
 
 model Notification {
