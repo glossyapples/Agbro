@@ -1,6 +1,6 @@
 import { prisma } from '@/lib/db';
 import { requirePageUser } from '@/lib/auth';
-import { isBrainSeeded, STARTER_BRAIN_SUMMARY } from '@/lib/brain/seed-brain';
+import { isBrainSeeded, lastSeedTimestamp, STARTER_BRAIN_SUMMARY } from '@/lib/brain/seed-brain';
 import { BrainSeedButton } from '@/components/BrainSeedButton';
 import { LocalTime } from '@/components/LocalTime';
 
@@ -27,13 +27,14 @@ const KIND_PILL_CLASS: Record<string, string> = {
 
 export default async function BrainPage() {
   const user = await requirePageUser('/brain');
-  const [entries, seeded] = await Promise.all([
+  const [entries, seeded, lastSyncedAt] = await Promise.all([
     prisma.brainEntry.findMany({
       where: { userId: user.id },
       orderBy: { createdAt: 'desc' },
       take: 100,
     }),
     isBrainSeeded(user.id),
+    lastSeedTimestamp(user.id),
   ]);
 
   return (
@@ -45,8 +46,20 @@ export default async function BrainPage() {
             Principles · checklists · pitfalls · sector primers · case studies · weekly updates ·
             post-mortems. The company gets smarter every week.
           </p>
+          {seeded && lastSyncedAt && (
+            <p className="mt-1 text-[11px] text-ink-500">
+              Starter brain v{STARTER_BRAIN_SUMMARY.version} · last synced{' '}
+              <LocalTime value={lastSyncedAt} format="relative" />
+            </p>
+          )}
         </div>
-        {seeded && <BrainSeedButton summary={STARTER_BRAIN_SUMMARY} variant="compact" />}
+        {seeded && (
+          <BrainSeedButton
+            summary={STARTER_BRAIN_SUMMARY}
+            variant="compact"
+            lastSyncedAt={lastSyncedAt?.toISOString() ?? null}
+          />
+        )}
       </header>
 
       {!seeded && <BrainSeedButton summary={STARTER_BRAIN_SUMMARY} variant="empty" />}

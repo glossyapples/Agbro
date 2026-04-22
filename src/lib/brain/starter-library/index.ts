@@ -11,6 +11,18 @@ import { CRISIS_PLAYBOOKS } from './crisis-playbooks';
 import { ALTERNATIVE_STRATEGIES } from './alternative-strategies';
 import type { BrainSeed, StrategySeed } from './types';
 
+// Bump this whenever the starter library's CONTENT changes (new entries
+// added, existing entries edited). The /brain page compares this against
+// the most recent seed entry's updatedAt to show users whether they're
+// running the latest library. Bump = a meaningful content change worth
+// a user re-sync. Don't bump for typos.
+//
+// History:
+//   1.0.0 — initial public brain (principles, checklists, pitfalls,
+//            sector primers, case studies, alternative strategies)
+//   1.1.0 — added 5 crisis playbooks (1987, 2000, 2008, 2020, 2022)
+export const STARTER_BRAIN_VERSION = '1.1.0';
+
 export const STARTER_BRAIN: BrainSeed[] = [
   ...PRINCIPLES,
   ...CHECKLISTS,
@@ -32,6 +44,7 @@ export const STARTER_BRAIN_SUMMARY = {
   crisis_playbooks: CRISIS_PLAYBOOKS.length,
   total: STARTER_BRAIN.length,
   alternative_strategies: STARTER_STRATEGIES.length,
+  version: STARTER_BRAIN_VERSION,
 };
 
 // Canonical marker entry: presence signals the seed has run for this user.

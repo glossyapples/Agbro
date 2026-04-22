@@ -363,6 +363,9 @@ model BrainEntry {
   tags      String[] @default([])
   relatedSymbols String[] @default([])
   createdAt DateTime @default(now())
+  // Tracked so the /brain page can show "last synced X ago" for starter
+  // entries. Prisma auto-bumps on any field change via @updatedAt.
+  updatedAt DateTime @updatedAt
 
   @@index([userId, createdAt])
   @@index([kind])

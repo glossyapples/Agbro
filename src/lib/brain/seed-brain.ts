@@ -26,11 +26,13 @@ export type SeedBrainResult = {
   brainEntries: {
     inserted: number;
     updated: number;
+    unchanged: number;
     total: number;
   };
   strategies: {
     inserted: number;
     updated: number;
+    unchanged: number;
     total: number;
   };
   summary: typeof STARTER_BRAIN_SUMMARY;
@@ -42,10 +44,14 @@ export type SeedBrainResult = {
 export async function seedBrainForUser(userId: string): Promise<SeedBrainResult> {
   let brainInserted = 0;
   let brainUpdated = 0;
+  let brainUnchanged = 0;
 
   for (const entry of STARTER_BRAIN) {
     const id = brainRowId(userId, entry.kind, entry.slug);
-    const existing = await prisma.brainEntry.findUnique({ where: { id } });
+    const existing = await prisma.brainEntry.findUnique({
+      where: { id },
+      select: { title: true, body: true, tags: true },
+    });
     await prisma.brainEntry.upsert({
       where: { id },
       create: {
@@ -65,8 +71,17 @@ export async function seedBrainForUser(userId: string): Promise<SeedBrainResult>
         tags: entry.tags,
       },
     });
-    if (existing) brainUpdated += 1;
-    else brainInserted += 1;
+    if (!existing) {
+      brainInserted += 1;
+    } else if (
+      existing.title !== entry.title ||
+      existing.body !== entry.body ||
+      existing.tags.join('|') !== entry.tags.join('|')
+    ) {
+      brainUpdated += 1;
+    } else {
+      brainUnchanged += 1;
+    }
   }
 
   // Archived alternative strategies for the wizard's comparison library.
@@ -74,10 +89,14 @@ export async function seedBrainForUser(userId: string): Promise<SeedBrainResult>
   // is never modified by this function.
   let strategyInserted = 0;
   let strategyUpdated = 0;
+  let strategyUnchanged = 0;
 
   for (const strat of STARTER_STRATEGIES) {
     const id = strategyRowId(userId, strat.slug);
-    const existing = await prisma.strategy.findUnique({ where: { id } });
+    const existing = await prisma.strategy.findUnique({
+      where: { id },
+      select: { name: true, summary: true, rules: true, buffettScore: true },
+    });
     await prisma.strategy.upsert({
       where: { id },
       create: {
@@ -98,8 +117,18 @@ export async function seedBrainForUser(userId: string): Promise<SeedBrainResult>
         // Never flip isActive or version on re-seed — that's owned by the user.
       },
     });
-    if (existing) strategyUpdated += 1;
-    else strategyInserted += 1;
+    if (!existing) {
+      strategyInserted += 1;
+    } else if (
+      existing.name !== strat.name ||
+      existing.summary !== strat.summary ||
+      existing.buffettScore !== strat.buffettScore ||
+      JSON.stringify(existing.rules) !== JSON.stringify(strat.rules)
+    ) {
+      strategyUpdated += 1;
+    } else {
+      strategyUnchanged += 1;
+    }
   }
 
   return {
@@ -107,15 +136,32 @@ export async function seedBrainForUser(userId: string): Promise<SeedBrainResult>
     brainEntries: {
       inserted: brainInserted,
       updated: brainUpdated,
+      unchanged: brainUnchanged,
       total: STARTER_BRAIN.length,
     },
     strategies: {
       inserted: strategyInserted,
       updated: strategyUpdated,
+      unchanged: strategyUnchanged,
       total: STARTER_STRATEGIES.length,
     },
     summary: STARTER_BRAIN_SUMMARY,
   };
+}
+
+// Timestamp of the most recent starter-entry write for this user, so the
+// UI can render "last synced X ago". Returns null if the brain was never
+// seeded. Cheap — single indexed query.
+export async function lastSeedTimestamp(userId: string): Promise<Date | null> {
+  const latest = await prisma.brainEntry.findFirst({
+    where: {
+      userId,
+      id: { startsWith: `${userId}-seed-brain-` },
+    },
+    orderBy: { updatedAt: 'desc' },
+    select: { updatedAt: true },
+  });
+  return latest?.updatedAt ?? null;
 }
 
 // Cheap check for the UI: is the starter brain already loaded for this user?
