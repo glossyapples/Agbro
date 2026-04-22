@@ -29,18 +29,6 @@ type WizardResult = {
   model: string;
 };
 
-const PILL_CLASS: Record<WizardRecommendation, string> = {
-  approve: 'pill-good',
-  reject: 'pill-bad',
-  defer: 'pill-warn',
-};
-
-const PILL_LABEL: Record<WizardRecommendation, string> = {
-  approve: 'Approve',
-  reject: 'Reject',
-  defer: 'Wait',
-};
-
 export function CandidateWizardPanel({
   candidateCount,
   onVerdictsChange,
@@ -115,55 +103,22 @@ export function CandidateWizardPanel({
       {error && <p className="text-xs text-red-400">{error}</p>}
 
       {result && (
-        <>
-          <div className="rounded-md border border-brand-500/40 bg-brand-500/5 p-3 text-xs text-ink-200">
-            <p className="font-semibold text-ink-100">
-              Verdict{result.topPick && <> · top pick: <span className="text-brand-300">{result.topPick}</span></>}
-            </p>
-            <p className="mt-1">{result.overallSummary}</p>
-            <p className="mt-1 text-[10px] text-ink-500">
-              {result.model} · {result.latencyMs}ms · ${result.costUsd.toFixed(3)}
-            </p>
-          </div>
-
-          <ul className="flex flex-col gap-2">
-            {result.verdicts.map((v) => (
-              <li
-                key={v.symbol}
-                className="rounded-md border border-ink-700/60 bg-ink-800/40 p-3 text-xs"
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <span className="text-[10px] text-ink-400">#{v.rank}</span>
-                    <span className="font-semibold text-ink-50">{v.symbol}</span>
-                    <span className={`${PILL_CLASS[v.recommendation]} text-[10px]`}>
-                      {PILL_LABEL[v.recommendation]}
-                    </span>
-                  </div>
-                  <span className="text-[10px] text-ink-400">
-                    confidence {(v.confidence * 100).toFixed(0)}%
-                  </span>
-                </div>
-                <p className="mt-2 text-ink-200">
-                  <span className="text-brand-400">Bull: </span>
-                  {v.bullCase}
-                </p>
-                <p className="mt-1 text-ink-200">
-                  <span className="text-red-300">Bear: </span>
-                  {v.bearCase}
-                </p>
-                {v.fitWithStrategy && (
-                  <p className="mt-1 text-[11px] text-ink-400">
-                    Strategy fit: {v.fitWithStrategy}
-                  </p>
-                )}
-                {v.concerns && (
-                  <p className="mt-1 text-[11px] text-ink-400">Concerns: {v.concerns}</p>
-                )}
-              </li>
-            ))}
-          </ul>
-        </>
+        <div className="rounded-md border border-brand-500/40 bg-brand-500/5 p-3 text-xs text-ink-200">
+          <p className="font-semibold text-ink-100">
+            Verdict{result.topPick && <> · top pick: <span className="text-brand-300">{result.topPick}</span></>}
+          </p>
+          <p className="mt-1">{result.overallSummary}</p>
+          <p className="mt-2 text-[10px] text-ink-500">
+            {result.model} · {result.latencyMs}ms · ${result.costUsd.toFixed(3)} ·{' '}
+            {result.verdicts.filter((v) => v.recommendation === 'approve').length} approve ·{' '}
+            {result.verdicts.filter((v) => v.recommendation === 'reject').length} reject ·{' '}
+            {result.verdicts.filter((v) => v.recommendation === 'defer').length} wait
+          </p>
+          <p className="mt-2 text-[11px] text-ink-400">
+            Per-candidate Bull/Bear cases are shown directly on each candidate card below — scroll
+            down to read them alongside the Approve/Reject buttons.
+          </p>
+        </div>
       )}
     </section>
   );

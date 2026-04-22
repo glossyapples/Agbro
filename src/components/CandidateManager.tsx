@@ -151,7 +151,16 @@ export function CandidateManager({
             }}
           />
           <ul className="flex flex-col gap-3">
-          {candidates.map((c) => (
+          {[...candidates]
+            .sort((a, b) => {
+              // When wizard verdicts exist, order by rank ascending (best first).
+              // Otherwise preserve the server's ordering (discoveredAt desc).
+              const ra = verdictsBySymbol[a.symbol]?.rank ?? Number.MAX_SAFE_INTEGER;
+              const rb = verdictsBySymbol[b.symbol]?.rank ?? Number.MAX_SAFE_INTEGER;
+              if (ra !== rb) return ra - rb;
+              return 0;
+            })
+            .map((c) => (
             <li key={c.symbol} className="card">
               <div className="flex items-center justify-between">
                 <div>
@@ -200,12 +209,41 @@ export function CandidateManager({
 
               {c.candidateNotes && (
                 <p className="mt-2 text-xs text-ink-300 italic">
-                  <span className="not-italic text-ink-400">Thesis: </span>
+                  <span className="not-italic text-ink-400">Screener thesis: </span>
                   {c.candidateNotes}
                 </p>
               )}
 
               <p className="mt-2 text-[11px] text-ink-400">{fundamentalsLine(c)}</p>
+
+              {verdictsBySymbol[c.symbol] && (
+                <div className="mt-3 rounded-md border border-ink-700/60 bg-ink-800/40 p-3 text-xs">
+                  <p className="flex items-center gap-2 text-[11px] font-semibold text-ink-100">
+                    <span>Wizard (Opus 4.7)</span>
+                    <span className="text-[10px] font-normal text-ink-400">
+                      confidence {(verdictsBySymbol[c.symbol].confidence * 100).toFixed(0)}%
+                    </span>
+                  </p>
+                  <p className="mt-2 text-ink-200">
+                    <span className="text-brand-400">Bull: </span>
+                    {verdictsBySymbol[c.symbol].bullCase}
+                  </p>
+                  <p className="mt-1 text-ink-200">
+                    <span className="text-red-300">Bear: </span>
+                    {verdictsBySymbol[c.symbol].bearCase}
+                  </p>
+                  {verdictsBySymbol[c.symbol].fitWithStrategy && (
+                    <p className="mt-1 text-[11px] text-ink-400">
+                      Strategy fit: {verdictsBySymbol[c.symbol].fitWithStrategy}
+                    </p>
+                  )}
+                  {verdictsBySymbol[c.symbol].concerns && (
+                    <p className="mt-1 text-[11px] text-ink-400">
+                      Concerns: {verdictsBySymbol[c.symbol].concerns}
+                    </p>
+                  )}
+                </div>
+              )}
 
               <div className="mt-3 flex gap-2">
                 <button
