@@ -78,7 +78,7 @@ ${JSON.stringify(
     status: t.status,
     conf: t.confidence,
     mos: t.marginOfSafetyPct,
-    thesis: t.thesis.slice(0, 300),
+    thesis: (t.thesis ?? '').slice(0, 300),
   })),
   null,
   2
@@ -89,7 +89,7 @@ ${JSON.stringify(
   closed.map((t) => ({
     sym: t.symbol,
     pnlCents: t.realizedPnlCents?.toString(),
-    thesis: t.thesis.slice(0, 200),
+    thesis: (t.thesis ?? '').slice(0, 200),
   })),
   null,
   2

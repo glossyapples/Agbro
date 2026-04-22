@@ -37,6 +37,7 @@ model User {
   auditLogs     AuditLog[]
   positions     Position[]
   optionPositions OptionPosition[]
+  cryptoConfig  CryptoConfig?
 }
 
 // Auth.js: OAuth provider links (used if/when OAuth added; magic-link flow alone doesn't populate this).
@@ -107,6 +108,13 @@ model Account {
   // toggle is on but Alpaca hasn't approved options, the server reports
   // the broker error back to the agent / user.
   optionsEnabled    Boolean  @default(false)
+  // Master switch for the crypto module. Off by default. When off, the
+  // crypto dashboard shows a "get started" state and no DCA / rebalance
+  // runs. Crypto trades use a deterministic rule engine (NOT the LLM
+  // agent) — Buffett's view on crypto is well known, and we don't have
+  // evidence that LLM reasoning adds value in a market dominated by
+  // narrative / macro / flows.
+  cryptoEnabled     Boolean  @default(false)
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
   deposits            Deposit[]
@@ -170,12 +178,18 @@ model Trade {
   status        String     // "pending" | "submitted" | "filled" | "rejected" | "canceled"
   errorMessage  String?    @db.Text
   orderType     String     @default("market")
-  bullCase      String     @db.Text
-  bearCase      String     @db.Text
-  thesis        String     @db.Text
+  // Required for stock trades (LLM agent must write both cases). Null for
+  // crypto DCA / rebalance trades, which are rule-based and don't carry a
+  // thesis. The agent path still enforces non-null via the PlaceTradeInput
+  // schema; relaxation is at the DB level only.
+  bullCase      String?    @db.Text
+  bearCase      String?    @db.Text
+  thesis        String?    @db.Text
   marginOfSafetyPct Float?
   intrinsicValuePerShareCents BigInt?
-  confidence    Float       // 0..1 from the agent
+  confidence    Float?      // 0..1 from the agent; null for rule-based trades
+  // 'stock' | 'crypto'. Default keeps all pre-existing rows correct.
+  assetClass    String     @default("stock")
   agentRunId    String?
   agentRun      AgentRun?   @relation(fields: [agentRunId], references: [id])
   strategyId    String?
@@ -219,9 +233,46 @@ model Position {
   thesisReviewDueAt     DateTime?
   lastReviewedAt        DateTime?
   openedUnderStrategyId String?
+  // 'stock' | 'crypto'. Crypto positions skip the thesis review / exit
+  // evaluator entirely — crypto is rule-based, not LLM-driven.
+  assetClass            String    @default("stock")
 
   @@unique([userId, symbol])
   @@index([userId, thesisReviewDueAt])
+}
+
+// -------------------- Crypto (rule-based) --------------------
+
+// Per-user crypto automation config. One row per user. Deliberately simple
+// for v1 — allowlist of symbols (Alpaca crypto format e.g. BTC/USD), target
+// weights that sum to ≤ 100%, and a DCA schedule. No LLM involvement;
+// engine is in src/lib/crypto/engine.ts.
+model CryptoConfig {
+  id                    String   @id @default(cuid())
+  userId                String   @unique
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // Symbols the agent is allowed to trade. Alpaca format: "BTC/USD", "ETH/USD".
+  // Empty list = DCA/rebalance no-op.
+  allowlist             String[]
+  // Target allocation by symbol, in percent (0..100). Keys must be a subset
+  // of allowlist. Sum should be ≤ 100; any residual is held as cash.
+  // Stored as JSON so it's schema-less and easy to edit.
+  targetAllocations     Json     @default("{}")
+  // DCA: every `dcaCadenceDays`, buy `dcaAmountCents` split across the
+  // target allocations. Set dcaAmountCents=0 to disable DCA while keeping
+  // the allowlist / config intact (lets user hold positions without
+  // accumulating more).
+  dcaAmountCents        BigInt   @default(0)
+  dcaCadenceDays        Int      @default(7)
+  lastDcaAt             DateTime?
+  // Rebalance (v1.1): triggers when any holding drifts > rebalanceBandPct
+  // from its target, capped at rebalanceCadenceDays since last rebalance.
+  // Not used in v1 but fields are here so the UI can surface them.
+  rebalanceBandPct      Float    @default(10)
+  rebalanceCadenceDays  Int      @default(90)
+  lastRebalancedAt      DateTime?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
 }
 
 // -------------------- Agent runs & decisions --------------------

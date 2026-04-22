@@ -39,7 +39,9 @@ export default async function TradesPage() {
               <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
                 <div>
                   <p className="stat-label">Confidence</p>
-                  <p className="font-semibold text-ink-100">{(t.confidence * 100).toFixed(0)}%</p>
+                  <p className="font-semibold text-ink-100">
+                    {t.confidence != null ? `${(t.confidence * 100).toFixed(0)}%` : '—'}
+                  </p>
                 </div>
                 <div>
                   <p className="stat-label">Margin of safety</p>

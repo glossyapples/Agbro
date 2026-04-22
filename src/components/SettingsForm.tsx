@@ -15,6 +15,7 @@ export type SettingsInitial = {
   allowDayTrades: boolean;
   autoPromoteCandidates: boolean;
   optionsEnabled: boolean;
+  cryptoEnabled: boolean;
 };
 
 // All numeric fields are stored as strings internally so the input stays
@@ -32,6 +33,7 @@ type FormState = {
   allowDayTrades: boolean;
   autoPromoteCandidates: boolean;
   optionsEnabled: boolean;
+  cryptoEnabled: boolean;
 };
 
 // Zod's flatten() output comes through as { fieldErrors, formErrors }. Pick
@@ -84,6 +86,7 @@ function toForm(initial: SettingsInitial): FormState {
     allowDayTrades: initial.allowDayTrades,
     autoPromoteCandidates: initial.autoPromoteCandidates,
     optionsEnabled: initial.optionsEnabled,
+    cryptoEnabled: initial.cryptoEnabled,
   };
 }
 
@@ -123,6 +126,7 @@ export function SettingsForm({ initial }: { initial: SettingsInitial }) {
         allowDayTrades: form.allowDayTrades,
         autoPromoteCandidates: form.autoPromoteCandidates,
         optionsEnabled: form.optionsEnabled,
+        cryptoEnabled: form.cryptoEnabled,
       };
       const res = await fetch('/api/account/settings', {
         method: 'POST',
@@ -294,6 +298,25 @@ export function SettingsForm({ initial }: { initial: SettingsInitial }) {
           naked options, no spreads, no long options — ever. Your active
           strategy must also permit options (Compounders + Boglehead don&apos;t).
           Requires options approval on your Alpaca account. Default off.
+        </p>
+      </div>
+
+      <div>
+        <label className="flex items-start gap-2">
+          <input
+            type="checkbox"
+            checked={form.cryptoEnabled}
+            onChange={(e) => update('cryptoEnabled', e.target.checked)}
+            className="mt-0.5 h-4 w-4 shrink-0 accent-brand-500"
+          />
+          <span className="text-sm">Enable crypto module (rule-based DCA only)</span>
+        </label>
+        <p className="mt-1 text-[11px] text-ink-400">
+          Master switch for the Crypto tab. When on, a deterministic DCA
+          engine runs on its own cron, buying the coins + percentages you
+          set on the /crypto page. The LLM agent never reasons about
+          crypto — it&apos;s pure rules. Off by default. Turning this off
+          preserves your config but stops all DCA activity.
         </p>
       </div>
 

@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import { BottomNav } from '@/components/BottomNav';
 import { DisclaimerBar } from '@/components/DisclaimerBar';
+import { AssetClassToggle } from '@/components/AssetClassToggle';
 import { maybeCurrentUser } from '@/lib/auth';
 
 export const metadata: Metadata = {
@@ -26,6 +27,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
       <body className="min-h-dvh bg-ink-900 text-ink-100 antialiased">
         <div className="mx-auto flex min-h-dvh max-w-screen-sm flex-col">
           {signedIn && <DisclaimerBar />}
+          {signedIn && <AssetClassToggle />}
           <main className={`flex-1 ${signedIn ? 'pb-24' : ''}`}>{children}</main>
           {signedIn && <BottomNav />}
         </div>

@@ -24,6 +24,7 @@ const Patch = z
     allowDayTrades: z.boolean().optional(),
     autoPromoteCandidates: z.boolean().optional(),
     optionsEnabled: z.boolean().optional(),
+    cryptoEnabled: z.boolean().optional(),
   })
   .refine(
     (v) =>

@@ -38,6 +38,7 @@ export default async function SettingsPage() {
           allowDayTrades: a.allowDayTrades,
           autoPromoteCandidates: a.autoPromoteCandidates,
           optionsEnabled: a.optionsEnabled,
+          cryptoEnabled: a.cryptoEnabled,
         }}
       />
 
