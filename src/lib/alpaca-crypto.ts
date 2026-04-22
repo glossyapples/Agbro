@@ -74,6 +74,50 @@ export async function getCryptoLatestPrice(symbol: string): Promise<number | nul
   }
 }
 
+export type CryptoBar = {
+  timestampMs: number;
+  close: number;
+};
+
+// Historical crypto bars. Alpaca's crypto data endpoint is separate from
+// equities (different base URL, different auth header semantics). Used by
+// the /crypto performance chart to render a BTC benchmark line.
+export async function getCryptoBars(
+  symbol: string,
+  timeframe: '1Hour' | '1Day',
+  startMs: number,
+  endMs: number
+): Promise<CryptoBar[]> {
+  const keyId = process.env.ALPACA_KEY_ID;
+  const secretKey = process.env.ALPACA_SECRET_KEY;
+  if (!keyId || !secretKey) return [];
+  const start = new Date(startMs).toISOString();
+  const end = new Date(endMs).toISOString();
+  const url = `https://data.alpaca.markets/v1beta3/crypto/us/bars?symbols=${encodeURIComponent(
+    symbol
+  )}&timeframe=${timeframe}&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&limit=10000`;
+  try {
+    const res = await fetch(url, {
+      headers: {
+        'APCA-API-KEY-ID': keyId,
+        'APCA-API-SECRET-KEY': secretKey,
+      },
+    });
+    if (!res.ok) {
+      log.warn('crypto.bars_failed', { symbol, status: res.status });
+      return [];
+    }
+    const data = (await res.json()) as {
+      bars?: Record<string, Array<{ t: string; c: number }>>;
+    };
+    const raw = data.bars?.[symbol] ?? [];
+    return raw.map((b) => ({ timestampMs: new Date(b.t).getTime(), close: b.c }));
+  } catch (err) {
+    log.error('crypto.bars_exception', err, { symbol });
+    return [];
+  }
+}
+
 export type CryptoOrderArgs = {
   symbol: string; // "BTC/USD"
   side: 'buy' | 'sell';

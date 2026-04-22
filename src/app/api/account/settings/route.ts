@@ -25,6 +25,7 @@ const Patch = z
     autoPromoteCandidates: z.boolean().optional(),
     optionsEnabled: z.boolean().optional(),
     cryptoEnabled: z.boolean().optional(),
+    maxCryptoAllocationPct: z.number().min(0).max(100).optional(),
   })
   .refine(
     (v) =>

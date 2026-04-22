@@ -1,29 +1,74 @@
 import Link from 'next/link';
 import { prisma } from '@/lib/db';
 import { requirePageUser } from '@/lib/auth';
-import { getCryptoPositions } from '@/lib/alpaca-crypto';
+import { getCryptoPositions, getCryptoBars } from '@/lib/alpaca-crypto';
 import { CryptoConfigForm } from '@/components/CryptoConfigForm';
+import { CryptoPerformanceChart } from '@/components/CryptoPerformanceChart';
 import { formatUsd } from '@/lib/money';
 
 export const runtime = 'nodejs';
 
+async function loadInitialChart(userId: string) {
+  // Server-side equivalent of /api/crypto/performance with range=1M, so the
+  // chart paints on first byte. Mirrors the stocks-side PerformanceChart
+  // loading pattern.
+  const start = new Date();
+  start.setMonth(start.getMonth() - 1);
+  const snapshots = await prisma.cryptoBookSnapshot.findMany({
+    where: { userId, takenAt: { gte: start } },
+    orderBy: { takenAt: 'asc' },
+    select: { takenAt: true, bookValueCents: true },
+  });
+  const basisValue = snapshots[0] ? Number(snapshots[0].bookValueCents) / 100 : null;
+  const book = snapshots.map((s) => {
+    const v = Number(s.bookValueCents) / 100;
+    return {
+      t: s.takenAt.getTime(),
+      v,
+      pct: basisValue && basisValue > 0 ? ((v - basisValue) / basisValue) * 100 : 0,
+    };
+  });
+  let btc: Array<{ t: number; pct: number }> = [];
+  if (book.length >= 2) {
+    const bars = await getCryptoBars('BTC/USD', '1Day', book[0].t, book[book.length - 1].t).catch(
+      () => []
+    );
+    const basis = bars[0]?.close ?? null;
+    btc = bars.map((b) => ({
+      t: b.timestampMs,
+      pct: basis && basis > 0 ? ((b.close - basis) / basis) * 100 : 0,
+    }));
+  }
+  const last = book[book.length - 1];
+  const summary =
+    last && basisValue != null
+      ? {
+          currentBookValue: last.v,
+          rangePnl: last.v - basisValue,
+          rangePnlPct: basisValue > 0 ? ((last.v - basisValue) / basisValue) * 100 : 0,
+        }
+      : null;
+  return { range: '1M' as const, summary, book, btc };
+}
+
 async function loadDashboard(userId: string) {
-  const [config, account, positionsRaw] = await Promise.all([
+  const [config, account, positionsRaw, chart] = await Promise.all([
     prisma.cryptoConfig.findUnique({ where: { userId } }),
     prisma.account.findUnique({ where: { userId } }),
     getCryptoPositions().catch(() => []),
+    loadInitialChart(userId),
   ]);
   const recentTrades = await prisma.trade.findMany({
     where: { userId, assetClass: 'crypto' },
     orderBy: { submittedAt: 'desc' },
     take: 10,
   });
-  return { config, account, positionsRaw, recentTrades };
+  return { config, account, positionsRaw, recentTrades, chart };
 }
 
 export default async function CryptoPage() {
   const user = await requirePageUser('/crypto');
-  const { config, account, positionsRaw, recentTrades } = await loadDashboard(user.id);
+  const { config, account, positionsRaw, recentTrades, chart } = await loadDashboard(user.id);
 
   const cryptoEnabled = account?.cryptoEnabled === true;
   const totalValueCents = positionsRaw.reduce(
@@ -73,6 +118,8 @@ export default async function CryptoPage() {
           </p>
         </Link>
       )}
+
+      <CryptoPerformanceChart initial={chart} />
 
       <section className="card">
         <div className="flex items-center justify-between">

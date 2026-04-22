@@ -72,6 +72,25 @@ function resolveTargets(config: CryptoConfig): { validTargets: Targets; totalWei
   return { validTargets, totalWeight };
 }
 
+// Defensive rail: compute how many MORE dollars of crypto we're allowed to
+// buy before hitting Account.maxCryptoAllocationPct. Returns 0 if we're at
+// or over the cap. SELLS are always allowed regardless — they reduce the
+// ratio, which is what the cap is trying to enforce.
+async function getCryptoBuyHeadroomUsd(account: Account): Promise<number> {
+  const broker = await getBrokerAccount().catch(() => null);
+  if (!broker) return 0;
+  const portfolioValueUsd = Number(broker.portfolioValueCents) / 100;
+  if (portfolioValueUsd <= 0) return 0;
+
+  const positions = await getCryptoPositions().catch(() => [] as CryptoPosition[]);
+  const cryptoBookUsd = positions.reduce(
+    (s, p) => s + Number(p.marketValueCents) / 100,
+    0
+  );
+  const maxCryptoUsd = (portfolioValueUsd * account.maxCryptoAllocationPct) / 100;
+  return Math.max(0, maxCryptoUsd - cryptoBookUsd);
+}
+
 // ─── DCA ─────────────────────────────────────────────────────────────────
 
 async function tryDca(
@@ -104,13 +123,37 @@ async function tryDca(
   // and crypto, so submitting into a dry account just produces rejections.
   const broker = await getBrokerAccount().catch(() => null);
   const cashUsd = broker ? Number(broker.cashCents) / 100 : 0;
-  const dcaUsd = Number(config.dcaAmountCents) / 100;
-  if (cashUsd < dcaUsd) {
+  const requestedDcaUsd = Number(config.dcaAmountCents) / 100;
+  if (cashUsd < requestedDcaUsd) {
     return {
       ran: false,
       trades: [],
-      skippedReason: `not enough cash ($${cashUsd.toFixed(0)}) for DCA ($${dcaUsd.toFixed(0)})`,
+      skippedReason: `not enough cash ($${cashUsd.toFixed(0)}) for DCA ($${requestedDcaUsd.toFixed(0)})`,
     };
+  }
+
+  // Total-portfolio crypto cap. If the crypto book is already at or above
+  // maxCryptoAllocationPct, skip DCA entirely — we're not in the business
+  // of compounding into a concentration risk. If there's some headroom but
+  // less than the full DCA, scale the DCA down to fit. Matches how a
+  // disciplined allocator would treat a "satellite" position.
+  const headroomUsd = await getCryptoBuyHeadroomUsd(account);
+  if (headroomUsd < 1) {
+    return {
+      ran: false,
+      trades: [],
+      skippedReason: `crypto exposure at or above cap (${account.maxCryptoAllocationPct}% of portfolio); no headroom for new buys`,
+    };
+  }
+  const dcaUsd = Math.min(requestedDcaUsd, headroomUsd);
+  if (dcaUsd < requestedDcaUsd) {
+    log.info('crypto.dca_scaled_by_cap', {
+      userId,
+      requested: requestedDcaUsd.toFixed(2),
+      scaled: dcaUsd.toFixed(2),
+      headroom: headroomUsd.toFixed(2),
+      cap: account.maxCryptoAllocationPct,
+    });
   }
 
   const trades: DcaTrade[] = [];
@@ -176,7 +219,7 @@ async function tryDca(
 
 async function tryRebalance(
   userId: string,
-  _account: Account,
+  account: Account,
   config: CryptoConfig
 ): Promise<CycleResult['rebalance']> {
   // Cadence floor. Rebalancing is a drift-driven action; the cadence is the
@@ -312,8 +355,33 @@ async function tryRebalance(
     }
   }
 
+  // Apply the crypto cap to the BUY phase only. Sells already executed
+  // above — they reduce exposure regardless. The cap is the maximum crypto
+  // book size allowed given the user's current portfolio value; rebalance
+  // buys must fit under it. If headroom is less than the sum of target
+  // buys, scale each buy proportionally so the ratios between underweights
+  // stay intact.
+  const totalBuyUsd = buys.reduce((s, b) => s + -b.diffUsd, 0);
+  let buyHeadroomUsd = totalBuyUsd;
+  if (totalBuyUsd > 0) {
+    const accountHeadroomUsd = await getCryptoBuyHeadroomUsd(account);
+    if (accountHeadroomUsd < totalBuyUsd) {
+      buyHeadroomUsd = accountHeadroomUsd;
+      log.info('crypto.rebalance_buys_scaled_by_cap', {
+        userId,
+        totalWanted: totalBuyUsd.toFixed(2),
+        headroom: accountHeadroomUsd.toFixed(2),
+        cap: account.maxCryptoAllocationPct,
+      });
+    }
+  }
+  const scaleFactor = totalBuyUsd > 0 ? buyHeadroomUsd / totalBuyUsd : 0;
+
   for (const buy of buys) {
-    const notionalUsd = -buy.diffUsd; // diffUsd is negative for underweight
+    // Apply cap-scaling. If scaleFactor is 0 or the scaled amount would be
+    // dust, skip this leg.
+    const notionalUsd = -buy.diffUsd * scaleFactor; // diffUsd is negative for underweight
+    if (notionalUsd < 1) continue;
     try {
       const order = await placeCryptoOrder({
         symbol: buy.symbol,
@@ -434,10 +502,41 @@ export async function runCryptoCycleAllUsers(): Promise<CycleResult[]> {
   for (const u of candidates) {
     try {
       out.push(await runCryptoCycleForUser(u.id));
+      // After each user's cycle runs, maybe record a daily book-value
+      // snapshot for the performance chart. No-op if < 23h since the last
+      // one. Isolated from the cycle's own success so a snapshot failure
+      // never blocks trading.
+      await maybeSnapshotCryptoBook(u.id).catch((err) => {
+        log.error('crypto.snapshot_failed', err, { userId: u.id });
+      });
     } catch (err) {
       log.error('crypto.cycle_exception', err, { userId: u.id });
       out.push(earlySkip(u.id, (err as Error).message));
     }
   }
   return out;
+}
+
+// Record a daily snapshot of the user's crypto book value. Rate-limited to
+// once per 23h so hourly cron ticks don't over-write. The 23h (vs. 24h)
+// slack prevents drift from exact tick timing.
+export async function maybeSnapshotCryptoBook(userId: string): Promise<void> {
+  const last = await prisma.cryptoBookSnapshot.findFirst({
+    where: { userId },
+    orderBy: { takenAt: 'desc' },
+    select: { takenAt: true },
+  });
+  if (last) {
+    const hoursSince = (Date.now() - last.takenAt.getTime()) / 3_600_000;
+    if (hoursSince < 23) return;
+  }
+  const positions = await getCryptoPositions().catch(() => [] as CryptoPosition[]);
+  const bookValueCents = BigInt(
+    Math.round(
+      positions.reduce((s, p) => s + Number(p.marketValueCents), 0)
+    )
+  );
+  await prisma.cryptoBookSnapshot.create({
+    data: { userId, bookValueCents },
+  });
 }

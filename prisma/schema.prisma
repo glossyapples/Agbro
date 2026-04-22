@@ -115,6 +115,13 @@ model Account {
   // evidence that LLM reasoning adds value in a market dominated by
   // narrative / macro / flows.
   cryptoEnabled     Boolean  @default(false)
+  // Defensive rail: never let total crypto exposure exceed this % of total
+  // portfolio value (stocks + options + crypto combined). Checked before
+  // every DCA and rebalance-buy. When the cap is hit, underweight-crypto
+  // buys are skipped; overweight-crypto sells (from rebalance or drift)
+  // still execute since they REDUCE the exposure. Default 10% keeps crypto
+  // as an asymmetric satellite for a Buffett-style core.
+  maxCryptoAllocationPct Float @default(10.0)
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
   deposits            Deposit[]
@@ -459,6 +466,21 @@ model OptionPosition {
   @@unique([userId, optionSymbol])
   @@index([userId, status])
   @@index([userId, expiration])
+}
+
+// Daily snapshot of a user's crypto book value. Alpaca's portfolio_history
+// returns total equity (stocks + options + crypto), not crypto-only, so we
+// build our own series by snapshotting on every cron tick that's been at
+// least 23 hours since the last one. Starts sparse; over weeks/months it
+// accumulates enough points to render a meaningful performance chart with
+// a BTC benchmark overlay.
+model CryptoBookSnapshot {
+  id             String   @id @default(cuid())
+  userId         String
+  takenAt        DateTime @default(now())
+  bookValueCents BigInt
+
+  @@index([userId, takenAt])
 }
 
 // -------------------- Event calendar --------------------

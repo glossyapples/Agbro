@@ -16,6 +16,7 @@ export type SettingsInitial = {
   autoPromoteCandidates: boolean;
   optionsEnabled: boolean;
   cryptoEnabled: boolean;
+  maxCryptoAllocationPct: number;
 };
 
 // All numeric fields are stored as strings internally so the input stays
@@ -34,6 +35,7 @@ type FormState = {
   autoPromoteCandidates: boolean;
   optionsEnabled: boolean;
   cryptoEnabled: boolean;
+  maxCryptoAllocationPct: string;
 };
 
 // Zod's flatten() output comes through as { fieldErrors, formErrors }. Pick
@@ -87,6 +89,7 @@ function toForm(initial: SettingsInitial): FormState {
     autoPromoteCandidates: initial.autoPromoteCandidates,
     optionsEnabled: initial.optionsEnabled,
     cryptoEnabled: initial.cryptoEnabled,
+    maxCryptoAllocationPct: String(initial.maxCryptoAllocationPct),
   };
 }
 
@@ -127,6 +130,7 @@ export function SettingsForm({ initial }: { initial: SettingsInitial }) {
         autoPromoteCandidates: form.autoPromoteCandidates,
         optionsEnabled: form.optionsEnabled,
         cryptoEnabled: form.cryptoEnabled,
+        maxCryptoAllocationPct: num(form.maxCryptoAllocationPct, initial.maxCryptoAllocationPct),
       };
       const res = await fetch('/api/account/settings', {
         method: 'POST',
@@ -317,6 +321,25 @@ export function SettingsForm({ initial }: { initial: SettingsInitial }) {
           set on the /crypto page. The LLM agent never reasons about
           crypto — it&apos;s pure rules. Off by default. Turning this off
           preserves your config but stops all DCA activity.
+        </p>
+      </div>
+
+      <div>
+        <label>Max crypto allocation (% of total portfolio)</label>
+        <input
+          type="number"
+          inputMode="decimal"
+          value={form.maxCryptoAllocationPct}
+          onChange={(e) => update('maxCryptoAllocationPct', e.target.value)}
+          min={0}
+          max={100}
+        />
+        <p className="mt-1 text-[11px] text-ink-400">
+          Hard cap on total crypto exposure versus your whole portfolio
+          (stocks + options + crypto). DCA buys scale down or skip when
+          this is reached; rebalance buys scale down to fit. Sells always
+          proceed regardless. Default 10% — keeps crypto as a small
+          asymmetric satellite for a Buffett-style core.
         </p>
       </div>
 

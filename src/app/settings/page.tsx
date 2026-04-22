@@ -39,6 +39,7 @@ export default async function SettingsPage() {
           autoPromoteCandidates: a.autoPromoteCandidates,
           optionsEnabled: a.optionsEnabled,
           cryptoEnabled: a.cryptoEnabled,
+          maxCryptoAllocationPct: a.maxCryptoAllocationPct,
         }}
       />
 
