@@ -67,10 +67,10 @@ export function BrainSeedButton({
         <button
           onClick={load}
           disabled={busy}
-          className="btn-ghost text-xs disabled:opacity-50"
-          title={`Library v${summary.version} · ${summary.total} entries`}
+          className="btn-ghost whitespace-nowrap text-xs disabled:opacity-50"
+          title={`Sync starter brain · Library v${summary.version} · ${summary.total} entries`}
         >
-          {busy ? 'Syncing…' : `↻ Sync starter brain (v${summary.version})`}
+          {busy ? 'Syncing…' : '↻ Sync'}
         </button>
         {resultLine && <span className="text-[11px] text-ink-300">{resultLine}</span>}
         {error && <span className="text-[11px] text-red-400">{error}</span>}
@@ -130,12 +130,8 @@ function summarize(r: SyncResult): string {
   const parts: string[] = [];
   if (r.brainEntries.inserted > 0) parts.push(`+${r.brainEntries.inserted} new`);
   if (r.brainEntries.updated > 0) parts.push(`${r.brainEntries.updated} updated`);
-  if (r.strategies.inserted + r.strategies.updated > 0) {
-    parts.push(
-      `${r.strategies.inserted + r.strategies.updated} strategy${
-        r.strategies.inserted + r.strategies.updated === 1 ? '' : 'ies'
-      }`
-    );
+  if (stratChanges > 0) {
+    parts.push(`${stratChanges} ${stratChanges === 1 ? 'strategy' : 'strategies'}`);
   }
   return `✓ ${parts.join(' · ')}`;
 }
