@@ -260,6 +260,12 @@ export function BacktestRunner({ initialRuns }: { initialRuns: Run[] }) {
             <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
           </div>
         </div>
+        <p className="text-[10px] text-ink-500">
+          Alpaca&apos;s free IEX feed coverage varies by symbol and starts
+          around 2015–2016 at the earliest. Picking an older start date will
+          silently drop symbols without data — the results panel flags which
+          ones when it happens.
+        </p>
 
         <div>
           <label className="text-[11px] text-ink-400">Starting cash (USD)</label>
@@ -438,6 +444,8 @@ function SelectedRun({ run }: { run: Run }) {
         </span>
       </h2>
 
+      <DataWarnings eventLog={run.eventLog} />
+
       <svg viewBox={viewBox} className="h-32 w-full" preserveAspectRatio="none">
         {pathBenchmark && (
           <path
@@ -486,6 +494,75 @@ function SelectedRun({ run }: { run: Run }) {
 
       <FilterSummary eventLog={run.eventLog} />
     </section>
+  );
+}
+
+// Data coverage warnings — surfaces symbols that didn't have full
+// Alpaca bar history for the requested window. Without this, a run
+// with a too-old start date silently produces a flatline equity
+// curve and the user has no idea why.
+function DataWarnings({
+  eventLog,
+}: {
+  eventLog: Run['eventLog'];
+}) {
+  if (!eventLog || eventLog.length === 0) return null;
+  const warnings = eventLog.filter((e) => e.event === 'data_warning');
+  if (warnings.length === 0) return null;
+
+  const noBars: string[] = [];
+  const lateStarts: Array<{ symbol: string; firstBarDate: string; daysLate: number }> = [];
+  for (const w of warnings) {
+    const kind = String(w.details.kind ?? '');
+    const sym = String(w.details.symbol ?? '');
+    if (kind === 'no_bars') {
+      noBars.push(sym);
+    } else if (kind === 'late_start') {
+      lateStarts.push({
+        symbol: sym,
+        firstBarDate: String(w.details.firstBarDate ?? ''),
+        daysLate: Number(w.details.daysLate ?? 0),
+      });
+    }
+  }
+
+  return (
+    <div className="rounded-md border border-amber-500/50 bg-amber-500/10 p-3 text-[11px] text-amber-100">
+      <p className="flex items-center gap-1.5 font-semibold text-amber-200">
+        <span>⚠</span>
+        Data coverage warning
+      </p>
+      <p className="mt-1 text-amber-100/90">
+        Alpaca&apos;s free IEX feed doesn&apos;t cover this full window for every
+        symbol. Results reflect only the subset of data we actually have.
+      </p>
+      {noBars.length > 0 && (
+        <p className="mt-1.5">
+          <span className="font-semibold">No bars returned</span> (excluded
+          entirely):{' '}
+          <span className="font-mono text-amber-200">{noBars.join(', ')}</span>
+        </p>
+      )}
+      {lateStarts.length > 0 && (
+        <div className="mt-1.5">
+          <p className="font-semibold">Data starts after requested window:</p>
+          <ul className="mt-0.5 space-y-0.5">
+            {lateStarts.map((l) => (
+              <li key={l.symbol} className="text-amber-100/90">
+                <span className="font-mono font-semibold">{l.symbol}</span>
+                <span className="ml-2">
+                  first bar {l.firstBarDate} ({l.daysLate} days late)
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      <p className="mt-1.5 text-amber-100/75">
+        Fix: pick a start date ≥ 2016 or use a universe with deeper
+        Alpaca history.
+      </p>
+    </div>
   );
 }
 

@@ -63,6 +63,7 @@ export type SimulatorEvent = {
     | 'filter_rebalance_sell'
     | 'filter_rebalance_buy'
     | 'fundamentals_backfill'
+    | 'data_warning'
     | 'end_of_run';
   details: Record<string, unknown>;
 };
@@ -144,6 +145,46 @@ export async function runSimulation(config: SimulatorConfig): Promise<SimulatorR
     return t >= startMs && t <= endMs;
   });
 
+  // Bar coverage check — emit data_warning events for symbols whose
+  // Alpaca history doesn't span the requested window. Alpaca's free
+  // IEX feed coverage varies by symbol; some have data back to 2015,
+  // others much later. Without explicit warnings the user sees a
+  // flatline and has no idea why.
+  const LATE_START_TOLERANCE_DAYS = 30;
+  const preEventLog: SimulatorEvent[] = [];
+  for (const sym of config.universe) {
+    const map = symbolBars.get(sym);
+    const size = map?.size ?? 0;
+    if (size === 0) {
+      preEventLog.push({
+        date: calendar[0] ?? new Date(startMs).toISOString().slice(0, 10),
+        event: 'data_warning',
+        details: {
+          symbol: sym,
+          kind: 'no_bars',
+          message: `No Alpaca bars returned for ${sym} in the requested window. Symbol excluded — widen the start date to ~2016+ to include.`,
+        },
+      });
+      continue;
+    }
+    const firstBar = Array.from(map!.keys()).sort()[0];
+    const firstBarMs = new Date(`${firstBar}T00:00:00Z`).getTime();
+    const lateDays = Math.round((firstBarMs - startMs) / ONE_DAY_MS);
+    if (lateDays > LATE_START_TOLERANCE_DAYS) {
+      preEventLog.push({
+        date: firstBar,
+        event: 'data_warning',
+        details: {
+          symbol: sym,
+          kind: 'late_start',
+          firstBarDate: firstBar,
+          daysLate: lateDays,
+          message: `${sym} data starts ${firstBar} — ${lateDays} days after requested start. Pre-${firstBar} period excluded for this symbol.`,
+        },
+      });
+    }
+  }
+
   if (calendar.length === 0) {
     return {
       equitySeries: [],
@@ -159,7 +200,7 @@ export async function runSimulation(config: SimulatorConfig): Promise<SimulatorR
   let cash = Number(config.startingCashCents) / 100;
   const positions = new Map<string, Position>();
   const trades: SimulatorEvent[] = [];
-  const eventLog: SimulatorEvent[] = [];
+  const eventLog: SimulatorEvent[] = [...preEventLog];
   const equitySeries: SimulatorResult['equitySeries'] = [];
 
   // Benchmark tracker — virtual "what if we just bought $X of SPY on
