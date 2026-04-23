@@ -188,10 +188,9 @@ async function renderComicImage(params: {
       prompt: params.script,
       n: 1,
       size: IMAGE_SIZE,
-      // gpt-image-1 returns base64 by default unless response_format is
-      // explicitly set. Ask for b64 so we don't depend on short-lived
-      // URL hosting — we save the image ourselves.
-      response_format: 'b64_json',
+      // gpt-image-1 always returns b64_json and does NOT accept the
+      // response_format parameter (unlike dall-e-2/3). Sending it
+      // throws 400 "Unknown parameter: 'response_format'".
     }),
   });
   if (!res.ok) {
