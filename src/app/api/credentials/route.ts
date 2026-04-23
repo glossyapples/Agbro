@@ -51,12 +51,18 @@ export async function POST(req: Request) {
     // Surface specific config errors directly so the user knows to fix
     // their env vars. Fall back to a generic message for anything else.
     const msg = (err as Error).message ?? '';
-    if (msg.includes('AGBRO_CREDENTIAL_ENCRYPTION_KEY')) {
+    if (msg.startsWith('AGBRO_CREDENTIAL_ENCRYPTION_KEY_MISSING')) {
       return NextResponse.json(
         {
           error:
-            'Server missing AGBRO_CREDENTIAL_ENCRYPTION_KEY env var. Generate one with `openssl rand -hex 32` and set it in Railway → Variables. See src/lib/credentials.ts.',
+            'Server env var AGBRO_CREDENTIAL_ENCRYPTION_KEY is not set. Generate one with `openssl rand -hex 32` and add it in Railway → Variables.',
         },
+        { status: 500 }
+      );
+    }
+    if (msg.startsWith('AGBRO_CREDENTIAL_ENCRYPTION_KEY_INVALID')) {
+      return NextResponse.json(
+        { error: msg.replace(/^AGBRO_CREDENTIAL_ENCRYPTION_KEY_INVALID:\s*/, '') },
         { status: 500 }
       );
     }

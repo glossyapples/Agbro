@@ -27,15 +27,19 @@ const ALGO = 'aes-256-gcm';
 const IV_LEN = 12; // GCM standard
 
 function getMasterKey(): Buffer {
-  const hex = process.env.AGBRO_CREDENTIAL_ENCRYPTION_KEY;
-  if (!hex) {
+  const raw = process.env.AGBRO_CREDENTIAL_ENCRYPTION_KEY;
+  if (!raw) {
     throw new Error(
-      'AGBRO_CREDENTIAL_ENCRYPTION_KEY is not set. Generate with `openssl rand -hex 32` and set in Railway env.'
+      'AGBRO_CREDENTIAL_ENCRYPTION_KEY_MISSING: env var not set. Generate with `openssl rand -hex 32` and set in Railway → Variables.'
     );
   }
+  // Trim whitespace / newlines that can sneak in when pasting into
+  // platform UIs (common on mobile paste). We accept the key with or
+  // without a '0x' prefix or surrounding quotes.
+  const hex = raw.trim().replace(/^['"]|['"]$/g, '').replace(/^0x/i, '');
   if (!/^[0-9a-fA-F]{64}$/.test(hex)) {
     throw new Error(
-      'AGBRO_CREDENTIAL_ENCRYPTION_KEY must be 64 hex chars (32 bytes). Got length ' + hex.length
+      `AGBRO_CREDENTIAL_ENCRYPTION_KEY_INVALID: env var is set but the value isn't 64 hex chars (got length ${hex.length}, expected 64). Regenerate with \`openssl rand -hex 32\` and paste ONLY the hex — no quotes, no 0x prefix, no whitespace.`
     );
   }
   return Buffer.from(hex, 'hex');
