@@ -32,9 +32,21 @@ function cacheKey(symbol: string, asOfYmd: string, price: number): string {
   return `${symbol}|${asOfYmd}|${Math.round(price * 100)}`;
 }
 
-// Look up the most recent fundamentals snapshot for a symbol whose
-// asOfDate <= the decision date. Enriches with the caller-supplied
-// price to derive a point-in-time P/E.
+// Look up the latest known fundamentals for a symbol as of `decisionDate`.
+//
+// Why "latest known per metric" instead of just the latest snapshot:
+// EDGAR filings often produce snapshots where some metrics are null
+// because the underlying TTM rolling sum couldn't gather four quarters
+// at that filing or because a balance-sheet item wasn't republished.
+// The original "first row wins" lookup landed on null-metric rows
+// at random based on filing alignment, causing the filter to reject
+// symbols whose data was actually fine just one quarter back.
+//
+// Now we fetch the most recent ~15 years of snapshots ≤ decisionDate
+// and compose the result from the latest non-null value of each
+// metric. The semantic this implements is what an analyst does
+// manually — "the latest known ROE as of date X" — independent of
+// whether the very most recent snapshot happened to compute it.
 export async function lookupFundamentalsAt(
   symbol: string,
   decisionDate: Date,
@@ -45,29 +57,41 @@ export async function lookupFundamentalsAt(
   const cached = memoryCache.get(key);
   if (cached !== undefined) return cached;
 
-  const snap = await prisma.stockFundamentalsSnapshot.findFirst({
+  const snaps = await prisma.stockFundamentalsSnapshot.findMany({
     where: {
       symbol,
       asOfDate: { lte: decisionDate },
     },
     orderBy: { asOfDate: 'desc' },
+    take: 60, // ~15 years of quarterlies — enough for any null-gap recovery
   });
-  if (!snap) {
+  if (snaps.length === 0) {
     memoryCache.set(key, null);
     return null;
   }
+
+  const firstNonNull = (
+    extract: (s: (typeof snaps)[number]) => number | null
+  ): number | null => {
+    for (const s of snaps) {
+      const v = extract(s);
+      if (v != null) return v;
+    }
+    return null;
+  };
+
+  const epsTTM = firstNonNull((s) => s.epsTTM);
   const result: PointInTimeFundamentals = {
     symbol,
-    asOfDate: snap.asOfDate,
+    asOfDate: snaps[0].asOfDate,
     priceAtDate,
-    epsTTM: snap.epsTTM,
-    peRatio:
-      snap.epsTTM != null && snap.epsTTM > 0 ? priceAtDate / snap.epsTTM : null,
-    returnOnEquity: snap.returnOnEquity,
-    debtToEquity: snap.debtToEquity,
-    grossMarginPct: snap.grossMarginPct,
-    dividendYield: snap.dividendYield,
-    bookValuePerShare: snap.bookValuePerShare,
+    epsTTM,
+    peRatio: epsTTM != null && epsTTM > 0 ? priceAtDate / epsTTM : null,
+    returnOnEquity: firstNonNull((s) => s.returnOnEquity),
+    debtToEquity: firstNonNull((s) => s.debtToEquity),
+    grossMarginPct: firstNonNull((s) => s.grossMarginPct),
+    dividendYield: firstNonNull((s) => s.dividendYield),
+    bookValuePerShare: firstNonNull((s) => s.bookValuePerShare),
   };
   memoryCache.set(key, result);
   return result;
