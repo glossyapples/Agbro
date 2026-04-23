@@ -33,6 +33,8 @@ import {
   type FilterSpec,
 } from './point-in-time';
 
+export type BacktestMode = 'tier1' | 'tier2';
+
 export type SimulatorConfig = {
   strategyKey: StrategyKey;
   universe: string[];
@@ -40,6 +42,10 @@ export type SimulatorConfig = {
   startDate: Date;
   endDate: Date;
   startingCashCents: bigint;
+  // 'tier1' = classic deterministic rules only (original behaviour).
+  // 'tier2' = additionally screen the universe by point-in-time EDGAR
+  // fundamentals at each decision date.
+  mode: BacktestMode;
 };
 
 export type SimulatorEvent = {
@@ -96,8 +102,11 @@ const ONE_DAY_MS = 86_400_000;
 
 export async function runSimulation(config: SimulatorConfig): Promise<SimulatorResult> {
   const rules = resolveRuleset(config.strategyKey);
-  const filterSpec = filterSpecFrom(rules);
-  const filtersActive = hasAnyFilter(filterSpec);
+  // Filters only run in tier2 mode. Tier 1 ignores the fundamentals
+  // fields on the ruleset and executes the deterministic core only —
+  // matches the original behaviour before Tier 2 shipped.
+  const filterSpec = config.mode === 'tier2' ? filterSpecFrom(rules) : {};
+  const filtersActive = config.mode === 'tier2' && hasAnyFilter(filterSpec);
   const startMs = config.startDate.getTime();
   const endMs = config.endDate.getTime();
   // Fresh cache per run — previous runs may have queried different

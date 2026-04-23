@@ -576,6 +576,11 @@ model BacktestRun {
   // 'quality_compounders' | 'dividend_growth' | 'boglehead_index'.
   // Maps to the same preset keys used for the live strategies.
   strategyKey       String
+  // Backtest mode — 'tier1' runs the deterministic rules only (original
+  // proven behaviour); 'tier2' additionally screens the universe by
+  // point-in-time fundamentals (EDGAR-derived ROE / P/E / D/E). Default
+  // is tier1 to keep the safe path default.
+  mode              String   @default("tier1")
   // Set when this run was part of the robustness grid so the UI can
   // place it in the right cell. Null for ad-hoc runs from the /backtest
   // single-run page. Matches keys in src/lib/backtest/windows.ts.

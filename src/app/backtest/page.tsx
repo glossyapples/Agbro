@@ -17,6 +17,7 @@ export default async function BacktestPage() {
   const serialized = runs.map((r) => ({
     id: r.id,
     strategyKey: r.strategyKey as StrategyKey,
+    mode: (r.mode as 'tier1' | 'tier2') ?? 'tier1',
     label: r.label,
     universe: r.universe,
     benchmarkSymbol: r.benchmarkSymbol,

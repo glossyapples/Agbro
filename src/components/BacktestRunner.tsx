@@ -16,9 +16,12 @@ import {
 } from '@/lib/backtest/rules';
 import { formatUsd } from '@/lib/money';
 
+type BacktestMode = 'tier1' | 'tier2';
+
 type Run = {
   id: string;
   strategyKey: StrategyKey;
+  mode: BacktestMode;
   label: string | null;
   universe: string[];
   benchmarkSymbol: string;
@@ -101,6 +104,7 @@ export function BacktestRunner({ initialRuns }: { initialRuns: Run[] }) {
   }, [busy]);
 
   const [strategyKey, setStrategyKey] = useState<StrategyKey>('buffett_core');
+  const [mode, setMode] = useState<BacktestMode>('tier1');
   const [startDate, setStartDate] = useState('2020-01-01');
   const [endDate, setEndDate] = useState('2021-01-01');
   const [cash, setCash] = useState('100000');
@@ -123,6 +127,7 @@ export function BacktestRunner({ initialRuns }: { initialRuns: Run[] }) {
     const optimistic: Run = {
       id: pendingId,
       strategyKey,
+      mode,
       label,
       universe: universe
         .split(',')
@@ -154,6 +159,7 @@ export function BacktestRunner({ initialRuns }: { initialRuns: Run[] }) {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           strategyKey,
+          mode,
           universe: optimistic.universe,
           startDate,
           endDate,
@@ -200,6 +206,48 @@ export function BacktestRunner({ initialRuns }: { initialRuns: Run[] }) {
               </option>
             ))}
           </select>
+        </div>
+
+        <div className="flex flex-col gap-1">
+          <label className="text-[11px] text-ink-400">Mode</label>
+          <div className="flex gap-2">
+            <label
+              className={`flex-1 cursor-pointer rounded-md border p-2 text-[11px] ${
+                mode === 'tier1'
+                  ? 'border-brand-500 bg-brand-500/10 text-ink-100'
+                  : 'border-ink-700 text-ink-300'
+              }`}
+            >
+              <input
+                type="radio"
+                className="hidden"
+                checked={mode === 'tier1'}
+                onChange={() => setMode('tier1')}
+              />
+              <span className="font-semibold">Classic</span>
+              <span className="ml-1 text-ink-400">
+                · rules only, proven
+              </span>
+            </label>
+            <label
+              className={`flex-1 cursor-pointer rounded-md border p-2 text-[11px] ${
+                mode === 'tier2'
+                  ? 'border-brand-500 bg-brand-500/10 text-ink-100'
+                  : 'border-ink-700 text-ink-300'
+              }`}
+            >
+              <input
+                type="radio"
+                className="hidden"
+                checked={mode === 'tier2'}
+                onChange={() => setMode('tier2')}
+              />
+              <span className="font-semibold">Fundamentals-aware</span>
+              <span className="ml-1 text-ink-400">
+                · + EDGAR screens
+              </span>
+            </label>
+          </div>
         </div>
 
         <div className="grid grid-cols-2 gap-3">
@@ -298,6 +346,15 @@ export function BacktestRunner({ initialRuns }: { initialRuns: Run[] }) {
                   <div>
                     <p className="font-semibold">
                       {STRATEGY_LABELS[r.strategyKey] ?? r.strategyKey}
+                      <span
+                        className={`ml-2 rounded px-1.5 py-0.5 text-[9px] font-normal ${
+                          r.mode === 'tier2'
+                            ? 'bg-brand-500/20 text-brand-300'
+                            : 'bg-ink-700/60 text-ink-300'
+                        }`}
+                      >
+                        {r.mode === 'tier2' ? 'fund.' : 'classic'}
+                      </span>
                       {r.label && <span className="ml-2 text-[10px] font-normal text-ink-400">{r.label}</span>}
                     </p>
                     <p className="text-[11px] text-ink-400">

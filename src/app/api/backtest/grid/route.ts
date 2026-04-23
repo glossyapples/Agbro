@@ -46,12 +46,14 @@ const Body = z.object({
   // improvement). Explicitly separate endpoints so the Proposer can
   // never accidentally see held-out results.
   windowSet: z.enum(['visible', 'held_out']),
+  mode: z.enum(['tier1', 'tier2']).optional(),
 });
 
 async function runOneCell(
   userId: string,
   strategyKey: StrategyKey,
-  window: BacktestWindow
+  window: BacktestWindow,
+  mode: 'tier1' | 'tier2'
 ): Promise<{ runId: string; ok: boolean; error?: string }> {
   const universe = DEFAULT_UNIVERSES[strategyKey];
   const startingCashCents = BigInt(100_000 * 100); // $100k fixed for cross-cell comparability
@@ -59,6 +61,7 @@ async function runOneCell(
     data: {
       userId,
       strategyKey,
+      mode,
       windowKey: window.key,
       label: `${strategyKey} · ${window.label}`,
       universe,
@@ -77,6 +80,7 @@ async function runOneCell(
       startDate: new Date(`${window.startDate}T00:00:00Z`),
       endDate: new Date(`${window.endDate}T23:59:59Z`),
       startingCashCents,
+      mode,
     });
     const metrics = computeMetrics(result.equitySeries);
     await prisma.backtestRun.update({
@@ -140,6 +144,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
     }
     const { strategyKeys, windowSet } = parsed.data;
+    const mode = parsed.data.mode ?? 'tier1';
     const windows = windowSet === 'visible' ? VISIBLE_WINDOWS : HELDOUT_WINDOWS;
 
     const cells: Array<{ strategyKey: StrategyKey; window: BacktestWindow }> = [];
@@ -153,12 +158,13 @@ export async function POST(req: Request) {
       userId: user.id,
       strategyKeys,
       windowSet,
+      mode,
       cellCount: cells.length,
     });
 
     const t0 = Date.now();
     const results = await runInWaves(cells, (cell) =>
-      runOneCell(user.id, cell.strategyKey, cell.window)
+      runOneCell(user.id, cell.strategyKey, cell.window, mode)
     );
     const elapsedMs = Date.now() - t0;
     const okCount = results.filter((r) => r.ok).length;

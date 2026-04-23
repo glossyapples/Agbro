@@ -35,6 +35,9 @@ const Body = z.object({
   endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   startingCashUsd: z.number().positive().max(10_000_000),
   label: z.string().max(120).optional(),
+  // 'tier1' = deterministic rules only; 'tier2' = also apply
+  // point-in-time EDGAR fundamentals filters.
+  mode: z.enum(['tier1', 'tier2']).optional(),
 });
 
 export async function POST(req: Request) {
@@ -53,11 +56,15 @@ export async function POST(req: Request) {
     const strategyKeyTyped = strategyKey as StrategyKey;
     const universe = parsed.data.universe ?? DEFAULT_UNIVERSES[strategyKeyTyped];
     const benchmarkSymbol = parsed.data.benchmarkSymbol ?? 'SPY';
+    // Default mode = tier1 (classic, proven). Tier 2 must be opted into
+    // explicitly so the stable path stays the default.
+    const mode = parsed.data.mode ?? 'tier1';
 
     const run = await prisma.backtestRun.create({
       data: {
         userId: user.id,
         strategyKey,
+        mode,
         label: label ?? null,
         universe,
         benchmarkSymbol,
@@ -77,6 +84,7 @@ export async function POST(req: Request) {
         startDate: new Date(`${startDate}T00:00:00Z`),
         endDate: new Date(`${endDate}T23:59:59Z`),
         startingCashCents,
+        mode,
       });
       const metrics = computeMetrics(result.equitySeries);
       await prisma.backtestRun.update({
