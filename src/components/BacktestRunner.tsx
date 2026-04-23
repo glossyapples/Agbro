@@ -331,6 +331,8 @@ export function BacktestRunner({ initialRuns }: { initialRuns: Run[] }) {
         {error && <p className="text-xs text-red-400">{error}</p>}
       </section>
 
+      <ResultsCard runs={runs} selectedId={selectedId} onSelect={setSelectedId} />
+
       <section className="card">
         <h2 className="text-sm font-semibold">Runs</h2>
         {runs.length === 0 ? (
@@ -396,20 +398,89 @@ export function BacktestRunner({ initialRuns }: { initialRuns: Run[] }) {
         )}
       </section>
 
-      {selected && selected.status === 'completed' && selected.equitySeries && (
-        <SelectedRun run={selected} />
-      )}
-      {selected && selected.status === 'errored' && (
-        <section className="card border border-red-500/40 bg-red-500/5 text-xs text-red-300">
-          <p className="font-semibold">Errored</p>
-          <p className="mt-1">{selected.errorMessage ?? 'Unknown error'}</p>
-        </section>
-      )}
     </>
   );
 }
 
-function SelectedRun({ run }: { run: Run }) {
+// Compact identifier for the run picker — short enough to fit in a
+// native <select> on mobile (iOS renders selects as a wheel picker
+// automatically), with enough info to tell runs apart at a glance.
+function shortRunLabel(r: Run): string {
+  const strategy = STRATEGY_LABELS[r.strategyKey] ?? r.strategyKey;
+  const mode = r.mode === 'tier2' ? 'fund' : 'classic';
+  const range = `${r.startDate.slice(2, 7)}→${r.endDate.slice(2, 7)}`;
+  const ret =
+    r.totalReturnPct != null
+      ? ` · ${r.totalReturnPct >= 0 ? '+' : ''}${r.totalReturnPct.toFixed(1)}%`
+      : r.status === 'running'
+        ? ' · running…'
+        : r.status === 'errored'
+          ? ' · errored'
+          : '';
+  return `${strategy} · ${mode} · ${range}${ret}`;
+}
+
+function ResultsCard({
+  runs,
+  selectedId,
+  onSelect,
+}: {
+  runs: Run[];
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+}) {
+  const selected = selectedId ? runs.find((r) => r.id === selectedId) ?? null : null;
+  // Only completed runs are pickable — running / errored / pending are
+  // shown in the full list below but wouldn't render a chart anyway.
+  const pickable = runs.filter((r) => r.status === 'completed');
+
+  if (pickable.length === 0 && !selected) {
+    return (
+      <section className="card">
+        <h2 className="text-sm font-semibold">Results</h2>
+        <p className="mt-1 text-sm text-ink-400">
+          No completed runs yet. Kick off one above — results will render here.
+        </p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="card flex flex-col gap-3">
+      <div className="flex flex-col gap-1">
+        <label className="text-[10px] uppercase tracking-[0.1em] text-ink-400">
+          Results
+        </label>
+        <select
+          value={selectedId ?? ''}
+          onChange={(e) => onSelect(e.target.value)}
+          className="w-full"
+        >
+          {pickable.map((r) => (
+            <option key={r.id} value={r.id}>
+              {shortRunLabel(r)}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {selected && selected.status === 'completed' && selected.equitySeries ? (
+        <SelectedRunBody run={selected} />
+      ) : selected && selected.status === 'errored' ? (
+        <div className="rounded-md border border-red-500/40 bg-red-500/5 p-3 text-xs text-red-300">
+          <p className="font-semibold">Errored</p>
+          <p className="mt-1">{selected.errorMessage ?? 'Unknown error'}</p>
+        </div>
+      ) : selected && selected.status === 'running' ? (
+        <p className="text-xs text-ink-400">Run still in progress — the chart will render when it finishes.</p>
+      ) : (
+        <p className="text-xs text-ink-400">Pick a completed run above.</p>
+      )}
+    </section>
+  );
+}
+
+function SelectedRunBody({ run }: { run: Run }) {
   const series = run.equitySeries ?? [];
   const { pathEquity, pathBenchmark, viewBox } = useMemo(() => {
     if (series.length < 2)
@@ -436,14 +507,7 @@ function SelectedRun({ run }: { run: Run }) {
   }, [series]);
 
   return (
-    <section className="card flex flex-col gap-3">
-      <h2 className="text-sm font-semibold">
-        Results — {STRATEGY_LABELS[run.strategyKey] ?? run.strategyKey}
-        <span className="ml-2 text-[10px] font-normal text-ink-400">
-          {run.mode === 'tier2' ? 'fundamentals-aware' : 'classic'}
-        </span>
-      </h2>
-
+    <div className="flex flex-col gap-3">
       <DataWarnings eventLog={run.eventLog} />
 
       <svg viewBox={viewBox} className="h-32 w-full" preserveAspectRatio="none">
@@ -493,7 +557,7 @@ function SelectedRun({ run }: { run: Run }) {
       </div>
 
       <FilterSummary eventLog={run.eventLog} />
-    </section>
+    </div>
   );
 }
 
