@@ -321,6 +321,34 @@ export function parseWithDiagnostics(
   }
   rows.sort((a, b) => a.asOfDate.getTime() - b.asOfDate.getTime());
 
+  // Carry-forward balance-sheet items. Background: NetIncomeLoss is
+  // reported many times — original 10-Q, the next 10-K's prior-period
+  // section, subsequent quarters' comparison columns, restatements.
+  // Each of those creates a new filed-date for the SAME period. But
+  // StockholdersEquity is typically only reported once per period
+  // (original filing) and NOT republished in later prior-period
+  // sections. The original buildRows joined by exact filed-date, so any
+  // NetIncome filing without a same-day equity got null equity → null
+  // ROE → filter rejects "ROE n/a".
+  //
+  // Fix: walk rows chronologically and carry forward the most recently
+  // reported equity / debt / shares. The point-in-time semantic is
+  // "what was the latest known balance-sheet value as of this filing"
+  // — which is exactly what an analyst would do.
+  let lastEquity: number | null = null;
+  let lastDebt: number | null = null;
+  let lastShares: number | null = null;
+  for (const r of rows) {
+    if (r.equity != null) lastEquity = r.equity;
+    else if (lastEquity != null) r.equity = lastEquity;
+
+    if (r.totalDebt != null) lastDebt = r.totalDebt;
+    else if (lastDebt != null) r.totalDebt = lastDebt;
+
+    if (r.sharesOutstanding != null) lastShares = r.sharesOutstanding;
+    else if (lastShares != null) r.sharesOutstanding = lastShares;
+  }
+
   const diagnostics: ParseDiagnostics = {
     tags: {
       netIncome: niRes.diag,
@@ -411,21 +439,28 @@ function rollingTTM(facts: Fact[]): Map<string, number> {
 export async function backfillHistoricalFundamentals(
   symbol: string
 ): Promise<{ symbol: string; rowsWritten: number; skippedReason?: string }> {
-  // Skip if we already have >= 20 snapshots AND at least a few of them
-  // carry real ratio data. The AND is important: an earlier, buggy
-  // backfill could have written 20+ rows of all-null ratios, and a
-  // plain count check would lock us into that broken state forever.
+  // Skip only if we have a healthy stockpile of computed ratios. Earlier
+  // parser versions silently produced rows with null ROE because of a
+  // filed-date alignment bug between NetIncomeLoss and StockholdersEquity
+  // — those rows pass a plain row-count check but are useless to the
+  // filter. Threshold of 30 healthy rows ≈ 7.5 years of quarterlies,
+  // enough for any backtest window we run. Symbols below that get
+  // wiped and re-parsed with the current code.
   const existing = await prisma.stockFundamentalsSnapshot.count({ where: { symbol } });
   if (existing >= 20) {
     const healthy = await prisma.stockFundamentalsSnapshot.count({
       where: { symbol, returnOnEquity: { not: null } },
     });
-    if (healthy >= 4) {
+    if (healthy >= 30) {
       return { symbol, rowsWritten: 0, skippedReason: 'already backfilled' };
     }
-    // Stale/null-only data — wipe and re-fetch with the corrected parser.
     await prisma.stockFundamentalsSnapshot.deleteMany({ where: { symbol } });
-    log.info('historical_fundamentals.refreshing_stale', { symbol, existing });
+    log.info('historical_fundamentals.refreshing_stale', {
+      symbol,
+      existing,
+      healthy,
+      reason: `healthy ${healthy} < 30 threshold`,
+    });
   }
 
   const cik = await cikForSymbol(symbol).catch(() => null);
