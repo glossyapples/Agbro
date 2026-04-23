@@ -177,6 +177,16 @@ export async function runSimulation(config: SimulatorConfig): Promise<SimulatorR
   // facts advance at most once per quarter so more frequent checks would
   // just hit the cache.
   const filterCheckCadenceDays = 90;
+  // Cooldown after an ejection before the same symbol can be re-admitted.
+  // Without this, names that straddle the P/E threshold whip back and
+  // forth between admit/eject on every cadence, eroding returns by
+  // buying at the local peak (when P/E just dropped below threshold)
+  // and selling at the local trough (when price drops push P/E back).
+  // 18 months is long enough to capture meaningful valuation shifts
+  // (multiple earnings cycles) while still allowing the universe to
+  // rotate as conditions change.
+  const admissionCooldownDays = 540;
+  const lastEjectedAt = new Map<string, string>();
 
   // ── Day 0: initial deployment ────────────────────────────────────────
   // When filters are active, evaluate each universe symbol against the
@@ -292,6 +302,7 @@ export async function runSimulation(config: SimulatorConfig): Promise<SimulatorR
         for (const s of toSell) {
           cash += s.qty * s.price;
           positions.delete(s.symbol);
+          lastEjectedAt.set(s.symbol, date);
           trades.push({
             date,
             event: 'filter_rebalance_sell',
@@ -305,16 +316,20 @@ export async function runSimulation(config: SimulatorConfig): Promise<SimulatorR
         }
 
         // Pass 2: admit universe symbols we don't currently hold that
-        // now pass the filter. Equal-weight whatever cash we have
-        // across the new admissions.
+        // now pass the filter AND aren't in the post-ejection cooldown
+        // window. Equal-weight whatever cash we have across new admits.
         const candidates: Array<{ symbol: string; price: number }> = [];
         for (const sym of config.universe) {
           if (positions.has(sym)) continue;
+          const ejectedOn = lastEjectedAt.get(sym);
+          if (ejectedOn && daysBetween(ejectedOn, date) < admissionCooldownDays) {
+            continue; // still cooling down — prevents whipsaw
+          }
           const price = symbolPrice(sym, date, symbolBars);
           if (price == null || price <= 0) continue;
           const result = await evaluateFilter(sym, decisionDate, price, filterSpec);
           // Only admit on explicit pass with data. passedWithoutData
-          // means we couldn't evaluate — don't blind-buy on day re-check.
+          // means we couldn't evaluate — don't blind-buy on re-check.
           if (result.pass && !result.passedWithoutData) {
             candidates.push({ symbol: sym, price });
           }
