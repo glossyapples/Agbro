@@ -542,6 +542,10 @@ model BacktestRun {
   // 'quality_compounders' | 'dividend_growth' | 'boglehead_index'.
   // Maps to the same preset keys used for the live strategies.
   strategyKey       String
+  // Set when this run was part of the robustness grid so the UI can
+  // place it in the right cell. Null for ad-hoc runs from the /backtest
+  // single-run page. Matches keys in src/lib/backtest/windows.ts.
+  windowKey         String?
   label             String?
   assetClass        String   @default("stock")
   universe          String[] @default([])
@@ -574,6 +578,7 @@ model BacktestRun {
 
   @@index([userId, runAt])
   @@index([strategyKey])
+  @@index([userId, strategyKey, windowKey])
 }
 
 // -------------------- Market regime tripwire --------------------

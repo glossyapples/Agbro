@@ -46,9 +46,11 @@ export default async function BacktestPage() {
         <div>
           <h1 className="text-2xl font-semibold">Backtest</h1>
           <p className="mt-1 text-xs text-ink-400">
-            Replay a strategy against historical prices. Deterministic rules only
-            (Tier 1) — no LLM judgement is simulated. Use to validate exit
-            framework + rebalance + regime detection against real crash windows.
+            Single-run backtester for custom date ranges. For the
+            strategy-vs-window comparison matrix, use the{' '}
+            <Link href="/backtest/grid" className="text-brand-400">
+              robustness grid →
+            </Link>
           </p>
         </div>
         <Link href="/" className="text-xs text-brand-400">
