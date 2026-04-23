@@ -264,6 +264,38 @@ function firstAvailableWithDiag(
   return { arr: [], diag };
 }
 
+// Union variant for tag lists where every entry is a SYNONYM (filers
+// switched conventions between filings — e.g. JNJ uses StockholdersEquity
+// for 2023+ filings but the longer-named NoncontrollingInterest variant
+// for pre-2023). Combines facts across all tags and dedupes by period
+// end so the same period reported under both tags doesn't double-count.
+//
+// Only safe when the listed tags genuinely measure the same concept.
+// Don't use for EPS (basic vs diluted differ) or shortTermDebt (the
+// listed tags are different debt categories that should sum, not unify).
+function unionSynonymTagsWithDiag(
+  facts: FactsJson['facts'],
+  tags: string[],
+  unit: string
+): { arr: Fact[]; diag: TagDiagnostic } {
+  const diag: TagDiagnostic = { tagsTried: tags, tagUsed: null, factCount: 0, unit };
+  if (!facts?.['us-gaap']) return { arr: [], diag };
+  const combined: Fact[] = [];
+  const sources: string[] = [];
+  for (const tag of tags) {
+    const node = facts['us-gaap'][tag];
+    const arr = node?.units?.[unit];
+    if (arr && arr.length > 0) {
+      combined.push(...arr);
+      sources.push(`${tag}(${arr.length})`);
+    }
+  }
+  if (combined.length === 0) return { arr: combined, diag };
+  diag.tagUsed = sources.join(' + ');
+  diag.factCount = combined.length;
+  return { arr: combined, diag };
+}
+
 // Parse the EDGAR companyfacts JSON into per-filing rows AND a
 // step-by-step diagnostic so we can see exactly where a symbol drops
 // data (missing tag / wrong unit / no 3-month slices / etc).
@@ -271,12 +303,22 @@ export function parseWithDiagnostics(
   factsJson: FactsJson
 ): { rows: RowAtFiled[]; diagnostics: ParseDiagnostics } {
   const facts = factsJson.facts;
+  // Synonym tags get unioned: TAGS.equity / TAGS.revenues /
+  // TAGS.costOfRevenue / TAGS.longTermDebt are all alternative names for
+  // the same underlying concept, and filers (notably JNJ) switch
+  // between them across years. Without union we'd silently drop 15+
+  // years of data per filer.
+  //
+  // First-available stays in place for tags that represent DIFFERENT
+  // concepts: EPS basic vs diluted differ, sharesOutstanding's three
+  // tags measure different things (point-in-time vs weighted average),
+  // shortTermDebt's tags are distinct debt categories.
   const niRes = firstAvailableWithDiag(facts, TAGS.netIncome, 'USD');
-  const eqRes = firstAvailableWithDiag(facts, TAGS.equity, 'USD');
-  const revRes = firstAvailableWithDiag(facts, TAGS.revenues, 'USD');
-  const costRes = firstAvailableWithDiag(facts, TAGS.costOfRevenue, 'USD');
+  const eqRes = unionSynonymTagsWithDiag(facts, TAGS.equity, 'USD');
+  const revRes = unionSynonymTagsWithDiag(facts, TAGS.revenues, 'USD');
+  const costRes = unionSynonymTagsWithDiag(facts, TAGS.costOfRevenue, 'USD');
   const epsRes = firstAvailableWithDiag(facts, TAGS.eps, 'USD/shares');
-  const ltRes = firstAvailableWithDiag(facts, TAGS.longTermDebt, 'USD');
+  const ltRes = unionSynonymTagsWithDiag(facts, TAGS.longTermDebt, 'USD');
   const stRes = firstAvailableWithDiag(facts, TAGS.shortTermDebt, 'USD');
   const shRes = firstAvailableWithDiag(facts, TAGS.sharesOutstanding, 'shares');
 
