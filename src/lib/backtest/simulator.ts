@@ -61,6 +61,7 @@ export type SimulatorEvent = {
     | 'filter_pass_no_data'
     | 'filter_reject'
     | 'filter_rebalance_sell'
+    | 'filter_rebalance_buy'
     | 'fundamentals_backfill'
     | 'end_of_run';
   details: Record<string, unknown>;
@@ -266,22 +267,24 @@ export async function runSimulation(config: SimulatorConfig): Promise<SimulatorR
       }
     }
 
-    // Filter re-check — evaluate held positions against the current
-    // filter spec using point-in-time fundamentals. Names that no longer
-    // qualify (ROE collapsed, P/E too rich, D/E blew out) get sold; the
-    // proceeds sit in cash until the next rebalance redeploys them.
+    // Filter re-check — symmetric. Eject held positions that no longer
+    // qualify AND admit previously-rejected universe names that now
+    // qualify. Cash from ejections is redeployed equal-weight into
+    // admissions (and/or surviving passers if there are no admissions)
+    // so the strategy doesn't mechanically decay to 100% cash when
+    // valuations expand.
     if (filtersActive) {
       const daysSince = lastFilterCheckDay ? daysBetween(lastFilterCheckDay, date) : Infinity;
       if (daysSince >= filterCheckCadenceDays) {
         const decisionDate = new Date(`${date}T00:00:00Z`);
+
+        // Pass 1: sell held positions that no longer qualify.
         const toSell: Array<{ symbol: string; qty: number; price: number; reason: string }> = [];
         for (const [sym, pos] of positions) {
           const price = symbolPrice(sym, date, symbolBars);
           if (price == null) continue;
           const result = await evaluateFilter(sym, decisionDate, price, filterSpec);
-          // Don't eject a held position just because fundamentals data
-          // went missing — that's a pipeline gap, not a strategy signal.
-          // Only sell on explicit rejects (specific metric out of bounds).
+          // Don't eject on data gaps — pipeline issue, not a signal.
           if (!result.pass && !result.passedWithoutData) {
             toSell.push({ symbol: sym, qty: pos.qty, price, reason: result.reason ?? 'no longer qualifies' });
           }
@@ -300,6 +303,47 @@ export async function runSimulation(config: SimulatorConfig): Promise<SimulatorR
             details: { symbol: s.symbol, reason: s.reason },
           });
         }
+
+        // Pass 2: admit universe symbols we don't currently hold that
+        // now pass the filter. Equal-weight whatever cash we have
+        // across the new admissions.
+        const candidates: Array<{ symbol: string; price: number }> = [];
+        for (const sym of config.universe) {
+          if (positions.has(sym)) continue;
+          const price = symbolPrice(sym, date, symbolBars);
+          if (price == null || price <= 0) continue;
+          const result = await evaluateFilter(sym, decisionDate, price, filterSpec);
+          // Only admit on explicit pass with data. passedWithoutData
+          // means we couldn't evaluate — don't blind-buy on day re-check.
+          if (result.pass && !result.passedWithoutData) {
+            candidates.push({ symbol: sym, price });
+          }
+        }
+        if (candidates.length > 0 && cash > 1) {
+          const allocation = cash / candidates.length;
+          for (const c of candidates) {
+            const qty = allocation / c.price;
+            if (qty <= 0) continue;
+            positions.set(c.symbol, {
+              symbol: c.symbol,
+              qty,
+              costBasisPerShare: c.price,
+              entryDate: date,
+            });
+            cash -= qty * c.price;
+            trades.push({
+              date,
+              event: 'filter_rebalance_buy',
+              details: { symbol: c.symbol, qty, price: c.price, allocation },
+            });
+            eventLog.push({
+              date,
+              event: 'filter_rebalance_buy',
+              details: { symbol: c.symbol, price: c.price },
+            });
+          }
+        }
+
         lastFilterCheckDay = date;
       }
     }
