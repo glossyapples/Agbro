@@ -213,11 +213,16 @@ async function writeComicScript(params: {
 }
 
 // ─── Step 2: image render ───────────────────────────────────────────────
-// Calls OpenAI's Images API with the user's key. Using gpt-image-1
-// which handles text-in-image well — essential for speech bubbles.
+// Calls OpenAI's Images API with the user's key. Using gpt-image-2 —
+// released 2026-04-21 as "ChatGPT Images 2.0" — which renders legible
+// speech-bubble text noticeably better than gpt-image-1 (essential for
+// a dialogue-driven comic). Parameter spec remains backward-compatible
+// with gpt-image-1; response still in data[0].b64_json. If OpenAI
+// tweaks the spec, the runner persists the exact 400 error to
+// meeting.comicError so we can see it on the card and fix.
 
 const OPENAI_IMAGE_ENDPOINT = 'https://api.openai.com/v1/images/generations';
-const IMAGE_MODEL = 'gpt-image-1';
+const IMAGE_MODEL = 'gpt-image-2';
 const IMAGE_SIZE: '1024x1024' | '1024x1536' | '1536x1024' = '1024x1536';
 
 async function renderComicImage(params: {

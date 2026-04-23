@@ -39,6 +39,12 @@ export function MeetingCard({ meeting }: { meeting: MeetingSummary }) {
   const [expanded, setExpanded] = useState(false);
   const [comicBusy, setComicBusy] = useState(false);
   const [comicError, setComicError] = useState<string | null>(null);
+  // Local override — populated synchronously from the API response
+  // when the user clicks "Generate comic" so the image renders
+  // immediately without waiting for router.refresh() to re-fetch the
+  // server component tree. Falls back to the persisted prop otherwise.
+  const [localComicUrl, setLocalComicUrl] = useState<string | null>(null);
+  const effectiveComicUrl = localComicUrl ?? meeting.comicUrl;
 
   async function generateComic() {
     setComicBusy(true);
@@ -47,12 +53,21 @@ export function MeetingCard({ meeting }: { meeting: MeetingSummary }) {
       const res = await fetch(`/api/meetings/${meeting.id}/generate-comic`, {
         method: 'POST',
       });
+      const body = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        imageUrl?: string;
+      };
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
         setComicError(
           typeof body.error === 'string' ? body.error : `failed (HTTP ${res.status})`
         );
         return;
+      }
+      if (body.imageUrl) {
+        // Render the comic in place immediately. router.refresh() in
+        // parallel updates the rest of the page (costs, etc.) but we
+        // don't block on it.
+        setLocalComicUrl(body.imageUrl);
       }
       router.refresh();
     } catch (err) {
@@ -117,11 +132,11 @@ export function MeetingCard({ meeting }: { meeting: MeetingSummary }) {
         </div>
       </header>
 
-      {meeting.comicUrl ? (
+      {effectiveComicUrl ? (
         <div className="overflow-hidden rounded-lg border border-ink-700/60 bg-ink-900/40">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
-            src={meeting.comicUrl}
+            src={effectiveComicUrl}
             alt="Meeting comic"
             className="h-auto w-full"
             loading="lazy"
