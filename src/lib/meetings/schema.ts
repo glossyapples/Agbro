@@ -74,12 +74,20 @@ export type MeetingOutput = {
   // resolved. Referenced by the comic generator so the visual matches
   // the narrative beat that actually matters.
   comicFocus: {
-    // Short label for the scene (e.g. "Warren reconsiders the ORCL buy").
+    // Short label for the scene (e.g. "Buff-bot reconsiders the ORCL buy").
     title: string;
     // 2-4 sentence arc: setup → conflict → resolution.
     arc: string;
     // Roles on-stage for the scene, in appearance order.
     roles: Role[];
+  };
+  // Cast snapshot attached by the runner (NOT emitted by the model).
+  // Lets the display + comic generator know which strategy's cast
+  // was active when this meeting happened, even years later after
+  // cast definitions have evolved.
+  cast?: {
+    strategyKey: string;
+    characters: Record<Role, { name: string; personality: string; visual: string }>;
   };
 };
 

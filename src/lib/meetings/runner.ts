@@ -14,6 +14,7 @@ import { log } from '@/lib/logger';
 import { MEETING_SYSTEM_PROMPT, type MeetingOutput } from './schema';
 import { getCurrentRegime } from '@/lib/data/regime';
 import { getUserCredential } from '@/lib/credentials';
+import { castForStrategyName, type CastBundle } from './cast';
 
 const MEETING_MODEL = 'claude-opus-4-7';
 const MEETING_MAX_TOKENS = 16_000;
@@ -33,18 +34,21 @@ export async function runMeeting(params: {
 
   try {
     const briefing = await buildBriefing(userId, agendaOverride);
-    const userMessage = JSON.stringify(briefing, null, 2);
+    // Pick the cast for the user's active strategy. Characters'
+    // names + personalities get injected into the system prompt so
+    // Claude addresses them correctly in transcript turns.
+    const cast = castForStrategyName(briefing.activeStrategy?.name ?? null);
 
     const client = new Anthropic({ apiKey });
     const startedAt = Date.now();
     const resp = await client.messages.create({
       model: MEETING_MODEL,
       max_tokens: MEETING_MAX_TOKENS,
-      system: MEETING_SYSTEM_PROMPT,
+      system: buildMeetingSystemPrompt(cast),
       messages: [
         {
           role: 'user',
-          content: `Conduct this week's executive meeting using the following briefing. Respond with a single JSON object matching the schema in your instructions.\n\nBRIEFING:\n${userMessage}`,
+          content: `Conduct this week's executive meeting using the following briefing. Respond with a single JSON object matching the schema in your instructions.\n\nBRIEFING:\n${JSON.stringify(briefing, null, 2)}`,
         },
       ],
     });
@@ -53,6 +57,10 @@ export async function runMeeting(params: {
       .map((b) => (b.type === 'text' ? b.text : ''))
       .join('');
     const parsed = parseMeetingJson(rawText);
+    // Attach the cast snapshot so the display + comic generator know
+    // which characters were on stage, even if cast definitions
+    // evolve in the future.
+    parsed.cast = castSnapshot(cast);
     const elapsedMs = Date.now() - startedAt;
 
     // Crude but stable cost estimate. Opus pricing is public; we're
@@ -368,4 +376,34 @@ function parseMeetingJson(raw: string): MeetingOutput {
 // Keep local; env-driven override in future if Anthropic adjusts.
 function estimateCost(inTokens: number, outTokens: number): number {
   return (inTokens / 1_000_000) * 15 + (outTokens / 1_000_000) * 75;
+}
+
+// Build a strategy-aware system prompt by injecting the cast's names
+// + personalities into the base MEETING_SYSTEM_PROMPT. Claude then
+// writes the transcript with these specific characters in mind.
+function buildMeetingSystemPrompt(cast: CastBundle): string {
+  const roster = Object.values(cast.characters)
+    .map((c) => `  • role "${c.role}" → ${c.name}: ${c.personality}`)
+    .join('\n');
+  return `${MEETING_SYSTEM_PROMPT}
+
+The current meeting's cast is:
+${roster}
+
+When writing transcript turns, use the \`role\` keys above in the role field, but refer to characters by their names inside dialogue (e.g. "I think Mung-bot raised a fair point…"). Stay in character for each role's personality; these are satirical -bot variants, not real people.`;
+}
+
+// Minimal snapshot of the cast to persist on the Meeting row so the
+// display + comic generator can reconstruct which characters were
+// active, even years later.
+function castSnapshot(cast: CastBundle): MeetingOutput['cast'] {
+  return {
+    strategyKey: String(cast.strategyKey),
+    characters: Object.fromEntries(
+      Object.entries(cast.characters).map(([role, c]) => [
+        role,
+        { name: c.name, personality: c.personality, visual: c.visual },
+      ])
+    ) as NonNullable<MeetingOutput['cast']>['characters'],
+  };
 }

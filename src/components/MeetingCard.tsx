@@ -82,6 +82,16 @@ export function MeetingCard({ meeting }: { meeting: MeetingSummary }) {
       ?.transcript ?? [];
   const decisions =
     (meeting.transcriptJson as { decisions?: string[] } | null)?.decisions ?? [];
+  // Cast snapshot (new meetings). Lets us show the character's actual
+  // name (e.g. "Buff-bot") instead of the structural role key
+  // (e.g. "warren_buffbot") in the transcript.
+  const castSnapshot =
+    (meeting.transcriptJson as {
+      cast?: { characters?: Record<string, { name: string }> };
+    } | null)?.cast?.characters ?? null;
+  function roleLabel(role: string): string {
+    return castSnapshot?.[role]?.name ?? role.replace(/_/g, ' ');
+  }
 
   if (meeting.status === 'running') {
     return (
@@ -215,8 +225,8 @@ export function MeetingCard({ meeting }: { meeting: MeetingSummary }) {
             <ol className="mt-1 flex flex-col gap-2">
               {transcript.map((t, i) => (
                 <li key={i} className="text-[12px] leading-snug">
-                  <span className="mr-1.5 font-semibold capitalize text-brand-300">
-                    {t.role}:
+                  <span className="mr-1.5 font-semibold text-brand-300">
+                    {roleLabel(t.role)}:
                   </span>
                   <span className="text-ink-200">{t.text}</span>
                 </li>

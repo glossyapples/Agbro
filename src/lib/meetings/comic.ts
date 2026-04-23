@@ -15,7 +15,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { prisma } from '@/lib/db';
 import { log } from '@/lib/logger';
 import type { MeetingOutput } from './schema';
-import { CAST, castSheet } from './cast';
+import { castForStrategyKey, castSheet, type CastBundle } from './cast';
 
 const SCRIPT_MODEL = 'claude-opus-4-7';
 
@@ -37,11 +37,34 @@ export async function generateMeetingComic(params: {
     return { ok: false };
   }
   const output = meeting.transcriptJson as unknown as MeetingOutput;
+  // Resolve the cast from the meeting's snapshot if present (new
+  // meetings), else infer from the strategy key. Legacy meetings
+  // without either fall back to the default cast.
+  const cast = output.cast
+    ? ({
+        strategyKey: output.cast.strategyKey,
+        styleNote: '',
+        // Reconstruct from the snapshot — styleNote is regenerated
+        // from the live cast definition below if we can infer the key.
+        characters: Object.fromEntries(
+          Object.entries(output.cast.characters).map(([role, c]) => [
+            role,
+            { role, ...c },
+          ])
+        ),
+      } as unknown as CastBundle)
+    : castForStrategyKey(null);
+  // If the snapshot only had the bare minimum, backfill the styleNote
+  // from the live definition by strategy key.
+  const live = castForStrategyKey(
+    (output.cast?.strategyKey as Parameters<typeof castForStrategyKey>[0]) ?? null
+  );
+  if (!cast.styleNote) cast.styleNote = live.styleNote;
 
   // Step 1: Claude writes a comic script.
   let script: Awaited<ReturnType<typeof writeComicScript>>;
   try {
-    script = await writeComicScript({ anthropicKey, meeting: output });
+    script = await writeComicScript({ anthropicKey, meeting: output, cast });
   } catch (err) {
     const msg = (err as Error).message ?? String(err);
     log.error('comic.script_failed', err, { meetingId, userId });
@@ -109,48 +132,66 @@ export async function generateMeetingComic(params: {
 // across weeks. Speech bubbles use each character's name so the user
 // can follow who's speaking even if the render is rough.
 
-const SCRIPT_SYSTEM_PROMPT = `You are a comics writer turning executive meetings at AgBro (an agentic investment firm) into single-page dialogue-driven comic strips.
+// System prompt for the comic-script writer. Dynamic — per-meeting
+// cast is injected via buildScriptSystemPrompt() below so each
+// strategy gets its own principals.
 
-${castSheet()}
+function buildScriptSystemPrompt(cast: CastBundle): string {
+  return `You are a comics writer turning executive meetings at an agentic investment firm into single-page, dialogue-driven editorial comic strips.
 
-The comic must focus on the ONE turning-point scene the meeting has already identified (in \`comicFocus\`) — a beat with real emotional stakes where a decision flipped or a disagreement was settled. NOT a generic summary of the whole meeting.
+STYLE — non-negotiable:
+• Mad Magazine / CRACKED editorial-caricature tradition. Exaggerated features, bold ink linework, fine crosshatch shading.
+• Graphic novel consistency: clean panel grid, clear gutters, readable speech bubbles with the speaker's name prefixed.
+• Limited, cohesive palette per comic — 3-5 colours max, chosen for mood.
+• NEVER photoreal. NEVER cartoony/Saturday-morning-kids style either. The register is "smart satirical weekly" — think a 2024 New Yorker long-form graphic feature, or a CRACKED editorial 2-page spread.
+• Every character is clearly a satirical \`-bot\` variant — their names are botified for this reason. Do not mistake them for real people; visuals are exaggerated editorial caricature, dialogue is fictional extrapolation of publicly known investment philosophy.
 
-Write a crisp IMAGE GENERATION PROMPT for gpt-image-1. Rules:
+${castSheet(cast)}
 
-1. USE EACH CHARACTER'S FIXED VISUAL DESCRIPTION VERBATIM from the cast above — same chassis color, same props, same silhouette every meeting. This is how users recognise them.
+The comic must focus on the ONE turning-point scene the meeting has already identified (in \`comicFocus\`) — a beat with real emotional stakes where a decision flipped or a disagreement was settled. NOT a generic summary of the whole meeting. Real consequences should show up in the last panel (the action item, the decision, the policy change).
 
-2. EXPLICITLY NAME each character in every panel they appear in (e.g. "Panel 2: Warren Buffbot pauses…" — not "a robot thinks"). The image model needs the name so speech bubbles can be labelled.
+Write the IMAGE GENERATION PROMPT for gpt-image-2. Rules:
 
-3. Build a 4-6 panel narrative arc:
-   - Panel 1: setup — who's in the room, what's on the table (show the specific symbol / number / decision)
-   - Middle panels: the disagreement plays out as dialogue. Pull short quotes from the actual meeting transcript; don't invent new lines that contradict the transcript.
-   - Final panel: the resolution + the real-world consequence (referencing the actual action item or decision the meeting made)
+1. USE THE FIXED CAST VISUAL DESCRIPTIONS VERBATIM — the exact features, clothes, props, name badges listed above. Characters must be recognisable across meetings.
 
-4. DIALOGUE goes in speech bubbles, prefixed with the character's name (e.g. \`Warren Buffbot: "Shouldn't we consider buying this? They've got a moat."\`). Keep each bubble under ~15 words — the image model cramps when bubbles get long.
+2. Name each character explicitly in every panel they appear in so the model draws them correctly and labels speech bubbles with the right name.
 
-5. Art style is consistent within the comic: pick ONE from "vintage New Yorker cartoon", "1980s corporate comic strip", "modern minimalist line art with flat colour", "noir graphic novel", or "warm Sunday funnies" — matching the meeting's sentiment.
+3. 4-6 panels on one page, story arc:
+   - Panel 1: SETUP — who's in the room, what's on the table (show the specific symbol / number / decision in the background)
+   - Middle panels: the DISAGREEMENT plays out as dialogue. Pull short quotes from the actual meeting transcript; don't invent contradicting lines.
+   - Final panel: RESOLUTION — the outcome, with the specific action item or decision visible (e.g. on a whiteboard, sticky note, or caption).
 
-6. Overall mood visuals:
-   - bullish       → open framing, brighter palette
-   - cautious      → restrained, warm but muted
-   - defensive     → tighter framing, darker palette, cool tones
-   - opportunistic → energetic angles, pops of colour
+4. DIALOGUE goes in speech bubbles, each prefixed with the character's exact name (e.g. \`Buff-bot: "Shouldn't we consider buying this? They've got a moat."\`). Each bubble under ~15 words; longer bubbles cramp the render.
 
-7. Show specific numbers / tickers / ratios that were discussed — they should appear on whiteboards, HUDs, or captions in the background. Real stakes make the comic feel like the real firm.
+5. MOOD visuals (pick cues matching the meeting's sentiment):
+   - bullish       → open framing, warmer light, palette leans gold/amber
+   - cautious      → restrained composition, muted warm tones
+   - defensive     → tighter framing, darker palette, cool shadows
+   - opportunistic → energetic diagonals, a single pop of saturated colour
+
+6. Show SPECIFIC numbers / tickers / ratios from the meeting — on whiteboards, charts, sticky notes. The stakes should feel like the actual firm's actual week.
+
+GOAL — the comic must (in priority order):
+  #1 ACCURATE to the meeting's decisions and transcript
+  #2 highlight at least one specific action item or decision on-page
+  #3 ENTERTAINING — a real emotional beat, not a bland summary
+  #4 EDUCATIONAL — a noob scanning the comic should learn why the firm decided what it decided
 
 Respond with a single JSON object:
 {
   "title": "<5-8 word title for the comic>",
-  "style": "<short art style description>",
+  "style": "<short art style description, e.g. 'Mad Magazine editorial ink, muted gold palette'>",
   "mood": "<one-word mood>",
-  "prompt": "<the full image-gen prompt, ~400-700 words, panel-by-panel, naming every character in every panel they appear in>"
+  "prompt": "<the full image-gen prompt, 450-750 words, panel-by-panel, naming every character in every panel they appear in, specifying the style note once at the top, using character VISUAL DESCRIPTIONS verbatim from the cast above>"
 }
 
 No prose outside the JSON. No markdown fences.`;
+}
 
 async function writeComicScript(params: {
   anthropicKey: string;
   meeting: MeetingOutput;
+  cast: CastBundle;
 }): Promise<{ title: string; style: string; mood: string; prompt: string; costUsd: number }> {
   const client = new Anthropic({ apiKey: params.anthropicKey });
   // Feed only the parts the comic writer needs. comicFocus is the star —
@@ -172,11 +213,6 @@ async function writeComicScript(params: {
           (u) => `UPDATE ${u.status}${u.note ? ' — ' + u.note : ''}`
         ),
       ],
-      cast: Object.values(CAST).map((c) => ({
-        role: c.role,
-        name: c.name,
-        personality: c.personality,
-      })),
     },
     null,
     2
@@ -184,7 +220,7 @@ async function writeComicScript(params: {
   const resp = await client.messages.create({
     model: SCRIPT_MODEL,
     max_tokens: 4_000,
-    system: SCRIPT_SYSTEM_PROMPT,
+    system: buildScriptSystemPrompt(params.cast),
     messages: [
       {
         role: 'user',
