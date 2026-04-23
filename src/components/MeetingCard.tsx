@@ -144,15 +144,10 @@ export function MeetingCard({ meeting }: { meeting: MeetingSummary }) {
 
       {effectiveComicUrl ? (
         <div className="flex flex-col gap-2">
-          <div className="overflow-hidden rounded-lg border border-ink-700/60 bg-ink-900/40">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={effectiveComicUrl}
-              alt="Meeting comic"
-              className="h-auto w-full"
-              loading="lazy"
-            />
-          </div>
+          <ComicImage
+            src={effectiveComicUrl}
+            filename={`agbro-meeting-${meeting.startedAt.slice(0, 10)}.png`}
+          />
           <SaveComicButton
             imageUrl={effectiveComicUrl}
             filename={`agbro-meeting-${meeting.startedAt.slice(0, 10)}.png`}
@@ -245,6 +240,67 @@ export function MeetingCard({ meeting }: { meeting: MeetingSummary }) {
   );
 }
 
+// Image renderer with two reliability fixes for large data: URLs
+// (which our comics currently are, ~2-3MB):
+//
+//   1. onError retry — iOS Safari occasionally fails to decode a
+//      freshly-arrived data URL on first paint (RSC stream timing,
+//      React hydration weirdness, big-payload races). A single
+//      retry by remounting the <img> usually fixes it without the
+//      user having to refresh the page.
+//
+//   2. The image lives inside an <a href download> so native
+//      long-press / right-click "Save Image" works on every browser.
+//      The explicit Save button below is a supplementary path for
+//      iOS's Photos save (via Web Share).
+function ComicImage({ src, filename }: { src: string; filename: string }) {
+  const [errored, setErrored] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+
+  if (errored) {
+    return (
+      <div className="flex items-center justify-between gap-2 rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-[11px]">
+        <div className="min-w-0">
+          <p className="font-semibold text-amber-200">Comic failed to load</p>
+          <p className="mt-0.5 text-amber-100/80">
+            Mobile browsers sometimes choke on large inline images. Retry
+            usually fixes it.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            setErrored(false);
+            setAttempt((n) => n + 1);
+          }}
+          className="btn-primary shrink-0 text-[11px]"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <a
+      href={src}
+      download={filename}
+      className="block overflow-hidden rounded-lg border border-ink-700/60 bg-ink-900/40"
+      aria-label="Comic image. Long-press or right-click to save."
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        key={attempt}
+        src={src}
+        alt="Meeting comic"
+        className="h-auto w-full"
+        loading="lazy"
+        onError={() => setErrored(true)}
+      />
+    </a>
+  );
+}
+
 // Save / share the comic image. iOS Safari long-press-to-save is flaky
 // on data: URLs (which is what we store — inline base64). This button:
 //   • On mobile with Web Share API — opens the native share sheet (iOS
@@ -267,46 +323,68 @@ function SaveComicButton({
     setBusy(true);
     setError(null);
     setToast(null);
+    let stage = 'fetch';
     try {
       // Step 1: pull bytes into a Blob regardless of whether the src
       // is a data: URL or a hosted URL. Unified downstream path.
+      stage = 'fetch';
       const res = await fetch(imageUrl);
+      if (!res.ok && imageUrl.startsWith('http')) {
+        throw new Error(`fetch returned ${res.status}`);
+      }
+      stage = 'blob';
       const blob = await res.blob();
-      const file = new File([blob], filename, { type: blob.type || 'image/png' });
+      // Blob.type can come back empty on data: URLs after fetch — force
+      // png so the File + canShare check don't reject a typeless blob.
+      stage = 'file';
+      const type = blob.type || 'image/png';
+      const typed = blob.type ? blob : blob.slice(0, blob.size, type);
+      const file = new File([typed], filename, { type });
 
-      // Step 2: prefer Web Share on mobile if the browser can share
-      // files (iOS Safari ≥ 15, most Android). iOS share sheet has
-      // "Save Image" → Photos as the first action.
+      // Step 2: prefer Web Share on mobile if the browser advertises
+      // file-share support. iOS share sheet puts "Save Image" first.
+      // canShare can return false on large payloads (~8MB+) or on
+      // iOS when the call isn't in a direct user gesture — we just
+      // skip to download on those paths.
+      stage = 'share';
       const canShare =
         typeof navigator !== 'undefined' &&
         typeof navigator.canShare === 'function' &&
         navigator.canShare({ files: [file] });
       if (canShare) {
-        await navigator.share({
-          files: [file],
-          title: 'AgBro meeting comic',
-        });
-        setToast('Opened share sheet');
-        return;
+        try {
+          await navigator.share({
+            files: [file],
+            title: 'AgBro meeting comic',
+          });
+          setToast('Opened share sheet');
+          return;
+        } catch (shareErr) {
+          // AbortError = user cancelled. Any other share error falls
+          // through to download fallback instead of surfacing to user.
+          if ((shareErr as Error).name === 'AbortError') return;
+        }
       }
 
       // Step 3: fallback download via synthetic anchor. Uses an object
-      // URL rather than the raw data URL so the browser respects the
-      // `download` attribute and filename reliably.
+      // URL so the browser honours the `download` attribute reliably
+      // (some browsers ignore it on data: URLs).
+      stage = 'download';
       const objectUrl = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = objectUrl;
       a.download = filename;
+      a.rel = 'noopener';
+      a.target = '_blank';
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       setTimeout(() => URL.revokeObjectURL(objectUrl), 5_000);
       setToast('Downloaded');
     } catch (err) {
-      // AbortError fires when the user cancels the share sheet — not
-      // an error worth showing.
       if ((err as Error).name === 'AbortError') return;
-      setError((err as Error).message.slice(0, 160));
+      const msg = (err as Error).message.slice(0, 160);
+      setError(`${stage} step failed: ${msg}. Long-press the image instead to save.`);
     } finally {
       setBusy(false);
       if (toast) setTimeout(() => setToast(null), 2500);
