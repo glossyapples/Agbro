@@ -49,6 +49,7 @@ export async function GET(req: Request) {
       strategyKey: string;
       runId: string;
       points: Array<{ t: number; pct: number }>;
+      noData: boolean;
     }> = [];
     // We pick ONE run's benchmark as THE benchmark overlay — they should
     // all be identical since the benchmark is SPY for the same window
@@ -60,7 +61,25 @@ export async function GET(req: Request) {
       const series = Array.isArray(r.equitySeries)
         ? (r.equitySeries as unknown as EquityPoint[])
         : [];
-      if (series.length < 2) continue;
+
+      // Runs with <2 equity points happen when Alpaca's free IEX feed
+      // had no bars for the universe in the requested window (e.g.
+      // pre-2015 dates). The run completed, but there's nothing to
+      // chart. Previously we silently skipped these, which made the
+      // overlay show 'No completed runs for this window yet' even
+      // though the grid table right above it showed '+0.0%' cells —
+      // confusing. Now we include them with noData: true so the
+      // frontend can show an honest empty-for-data-reasons state.
+      if (series.length < 2) {
+        strategySeries.push({
+          strategyKey: r.strategyKey,
+          runId: r.id,
+          points: [],
+          noData: true,
+        });
+        continue;
+      }
+
       const basis = series[0].equity;
       const benchBasis = series[0].benchmark;
 
@@ -72,6 +91,7 @@ export async function GET(req: Request) {
         strategyKey: r.strategyKey,
         runId: r.id,
         points: pts,
+        noData: false,
       });
 
       if (!benchmarkTaken) {

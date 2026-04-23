@@ -98,6 +98,13 @@ export function BacktestGrid({
         const payload = await g.json();
         setCells(payload.cells);
       }
+      // Signal sibling components (StrategyOverlayChart) that fresh
+      // runs have landed so they can refetch without a full page
+      // reload. Window-event glue is intentionally loose — components
+      // that want to react just listen for 'agbro:grid-runs-updated'.
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('agbro:grid-runs-updated'));
+      }
       router.refresh();
     } catch (e) {
       setError(`Network error — ${(e as Error).message.slice(0, 120)}`);

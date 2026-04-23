@@ -21,6 +21,7 @@ type Payload = {
     strategyKey: string;
     runId: string;
     points: SeriesPoint[];
+    noData?: boolean;
   }>;
   benchmark: SeriesPoint[];
 };
@@ -45,6 +46,10 @@ export function StrategyOverlayChart({ windows }: { windows: BacktestWindow[] })
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hidden, setHidden] = useState<Set<string>>(new Set());
+  // Bumping this triggers the fetch effect to rerun — used so the
+  // chart refreshes when a "Run visible grid" completes without the
+  // user reloading the page.
+  const [refreshTick, setRefreshTick] = useState(0);
 
   useEffect(() => {
     if (!windowKey) return;
@@ -68,7 +73,18 @@ export function StrategyOverlayChart({ windows }: { windows: BacktestWindow[] })
     return () => {
       cancelled = true;
     };
-  }, [windowKey]);
+  }, [windowKey, refreshTick]);
+
+  // Listen for grid-run completions dispatched by BacktestGrid. When
+  // a new batch lands, refetch the series for the currently selected
+  // window so the overlay updates without a page reload.
+  useEffect(() => {
+    function onGridUpdated() {
+      setRefreshTick((n) => n + 1);
+    }
+    window.addEventListener('agbro:grid-runs-updated', onGridUpdated);
+    return () => window.removeEventListener('agbro:grid-runs-updated', onGridUpdated);
+  }, []);
 
   const chart = useMemo(() => renderChart(payload, hidden), [payload, hidden]);
   const windowMeta = windows.find((w) => w.key === windowKey);
@@ -160,6 +176,17 @@ export function StrategyOverlayChart({ windows }: { windows: BacktestWindow[] })
           No completed runs for this window yet. Click &quot;Run visible grid&quot;
           above to populate.
         </p>
+      ) : payload.strategies.every((s) => s.noData) ? (
+        <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-[11px] text-amber-100">
+          <p className="font-semibold">⚠ No usable data for this window</p>
+          <p className="mt-1 text-amber-100/80">
+            Every strategy&apos;s run completed but returned zero equity
+            points — Alpaca&apos;s free IEX feed doesn&apos;t cover the
+            universe back this far. Its history starts around 2015–2016.
+            Pick a more recent window (COVID 2020, Rate Cycle 2022, etc.)
+            to see trajectories.
+          </p>
+        </div>
       ) : (
         <svg viewBox={chart.viewBox} className="h-48 w-full" preserveAspectRatio="none">
           {chart.hasZero && (
