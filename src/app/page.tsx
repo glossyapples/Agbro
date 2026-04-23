@@ -7,8 +7,16 @@ import { RunAgentButton } from '@/components/RunAgentButton';
 import { PerformanceChart } from '@/components/PerformanceChart';
 import { UpcomingEventsCard } from '@/components/UpcomingEventsCard';
 import { LocalTime } from '@/components/LocalTime';
+import { MoodStrip } from '@/components/MoodStrip';
 import { getPortfolioHistory, getBars } from '@/lib/alpaca';
 import { getUpcomingEvents } from '@/lib/data/events';
+import {
+  classifyMarketMood,
+  classifyAgentMood,
+  type MarketMoodInput,
+  type AgentMoodInput,
+} from '@/lib/mood';
+import type { Regime } from '@/lib/data/regime';
 
 // Server-side fetch of the initial chart payload so the hero card paints
 // on first byte — no loading spinner on page load. Default range is 1M,
@@ -74,11 +82,100 @@ async function getInitialChartPayload(userId: string) {
   }
 }
 
+// Inputs for the home-page MoodStrip. Fetched in parallel with the
+// rest of the overview so it doesn't delay first paint. All failures
+// degrade gracefully — if we can't compute, classifyMarketMood and
+// classifyAgentMood fall back to 'Quiet' / 'Watching' defaults.
+async function getMoodInputs(userId: string): Promise<{
+  market: MarketMoodInput;
+  agent: AgentMoodInput;
+}> {
+  // Latest regime row; gives us the regime state + the daily move pct
+  // recorded at the last transition.
+  const latestRegime = await prisma.marketRegime
+    .findFirst({ orderBy: { enteredAt: 'desc' } })
+    .catch(() => null);
+
+  // 5-day SPY change for the "greedy vs. quiet" calm-regime split.
+  // Cheap — 7 daily bars from Alpaca's cached IEX feed.
+  const spy5Ms = 8 * 86_400_000;
+  let spy5dPct: number | null = null;
+  try {
+    const bars = await getBars('SPY', '1Day', Date.now() - spy5Ms, Date.now() - 20 * 60_000);
+    if (bars.length >= 2) {
+      const basis = bars[0].close;
+      const last = bars[bars.length - 1].close;
+      if (basis > 0) spy5dPct = ((last - basis) / basis) * 100;
+    }
+  } catch {
+    // ignore — null is handled by the classifier
+  }
+
+  // Daily move from the regime row's triggers if present — otherwise
+  // compute from the SPY bars we just loaded (caller bears the null).
+  const spyDailyMovePct = (() => {
+    const raw = latestRegime?.triggers;
+    const triggers = Array.isArray(raw) ? (raw as unknown[]).map((x) => String(x)) : [];
+    for (const t of triggers) {
+      const m = /SPY ([+-]?\d+\.?\d*)%/.exec(t);
+      if (m && m[1]) return Number(m[1]);
+    }
+    return null;
+  })();
+
+  // Recent agent runs for the agent mood. Grab 5 to catch short
+  // patterns without over-counting ancient history.
+  const recentRuns = await prisma.agentRun
+    .findMany({
+      where: { userId },
+      orderBy: { startedAt: 'desc' },
+      take: 5,
+      select: { decision: true, startedAt: true, status: true, trigger: true },
+    })
+    .catch(() => []);
+
+  // Is US stock market open right now? Cheap check — we're inside
+  // trading hours on a weekday. Doesn't need to be perfectly accurate;
+  // the mood only differentiates "agent off duty (weekend/closed)"
+  // vs. "agent should be running".
+  const nowEt = new Date();
+  const etDay = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    weekday: 'short',
+  }).format(nowEt);
+  const etHour = Number(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York',
+      hour: '2-digit',
+      hour12: false,
+    }).format(nowEt)
+  );
+  const isMarketOpen =
+    etDay !== 'Sat' && etDay !== 'Sun' && etHour >= 9 && etHour < 16;
+
+  return {
+    market: {
+      regime: (latestRegime?.regime as Regime | undefined) ?? 'calm',
+      spyDailyMovePct,
+      spy5dPct,
+    },
+    agent: {
+      recentDecisions: recentRuns.map((r) => ({
+        decision: r.decision,
+        startedAt: r.startedAt,
+        status: r.status,
+      })),
+      isMarketOpen,
+      currentRegime: (latestRegime?.regime as Regime | undefined) ?? 'calm',
+    },
+  };
+}
+
 async function getOverview() {
   const user = await maybeCurrentUser();
   if (!user || !user.account) return null;
 
-  const [recentTrades, lastRun, activeStrategy, notifications, brainLatest, watchlistCount, candidateCount, chart, upcomingEvents] =
+  const [recentTrades, lastRun, activeStrategy, notifications, brainLatest, watchlistCount, candidateCount, chart, upcomingEvents, moodInputs] =
     await Promise.all([
       prisma.trade.findMany({
         where: { userId: user.id },
@@ -99,6 +196,7 @@ async function getOverview() {
       prisma.stock.count({ where: { candidateSource: 'screener' } }),
       getInitialChartPayload(user.id),
       getUpcomingEvents({ horizonDays: 14 }),
+      getMoodInputs(user.id),
     ]);
 
   // Numeric target (invested principal × (1 + expectedAnnualPct / 100)) for
@@ -119,6 +217,7 @@ async function getOverview() {
     target,
     chart,
     upcomingEvents,
+    moodInputs,
   };
 }
 
@@ -146,11 +245,15 @@ export default async function OverviewPage() {
     candidateCount,
     chart,
     upcomingEvents,
+    moodInputs,
   } = data;
 
   const status = account.isStopped ? 'Stopped' : account.isPaused ? 'Paused' : 'Live';
   const statusPill =
     status === 'Live' ? 'pill-good' : status === 'Paused' ? 'pill-warn' : 'pill-bad';
+
+  const marketMood = classifyMarketMood(moodInputs.market);
+  const agentMood = classifyAgentMood(moodInputs.agent);
 
   return (
     <div className="flex flex-col gap-4 p-4">
@@ -161,6 +264,8 @@ export default async function OverviewPage() {
         </div>
         <span className={statusPill}>{status}</span>
       </header>
+
+      <MoodStrip marketMood={marketMood} agentMood={agentMood} />
 
       <PerformanceChart initial={chart} />
 
