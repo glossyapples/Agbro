@@ -147,10 +147,13 @@ export async function runMeeting(params: {
       sentiment: parsed.sentiment,
     });
 
-    // Comic generation (opt-in via user's OpenAI key). Fire-and-forget
-    // — a meeting is considered complete even if the comic fails —
-    // but every failure path persists to meeting.comicError so the UI
-    // can show what went wrong rather than staying stuck in 'no comic'.
+    // Comic generation (opt-in via user's OpenAI key). Awaited in-band
+    // — earlier we fired-and-forgot, but Next.js route handlers don't
+    // guarantee the event loop keeps draining after the response ships,
+    // so the comic intermittently never ran. Total path is meeting
+    // (~40s) + comic (~20-30s), well inside the route's 120s budget.
+    // Comic failures still don't fail the meeting — we persist the
+    // error to meeting.comicError and return status:'completed'.
     let openaiKey: string | null = null;
     try {
       openaiKey = await getUserCredential(userId, 'openai');
@@ -163,40 +166,31 @@ export async function runMeeting(params: {
     }
     if (openaiKey) {
       log.info('meeting.comic_trigger', { meetingId: meeting.id, userId });
-      const capturedKey = openaiKey;
-      const capturedMeetingId = meeting.id;
-      void (async () => {
-        try {
-          const { generateMeetingComic } = await import('./comic');
-          const result = await generateMeetingComic({
-            meetingId: capturedMeetingId,
-            userId,
-            openaiKey: capturedKey,
-          });
-          log.info('meeting.comic_result', {
-            meetingId: capturedMeetingId,
-            ok: result.ok,
-            costUsd: result.costUsd,
-          });
-        } catch (err) {
-          // Catches import errors, DB errors inside generate, anything
-          // the inner try/catches missed. Persist so the UI surfaces it.
-          log.error('meeting.comic_failed_trigger', err, {
-            meetingId: capturedMeetingId,
-          });
-          await prisma.meeting
-            .update({
-              where: { id: capturedMeetingId },
-              data: {
-                comicError: `trigger: ${(err as Error).message.slice(0, 400)}`,
-              },
-            })
-            .catch(() => {
-              // If even the error-persist fails, at least the log above
-              // captured it — the user will see 'no comic' but no worse.
-            });
-        }
-      })();
+      try {
+        const { generateMeetingComic } = await import('./comic');
+        const result = await generateMeetingComic({
+          meetingId: meeting.id,
+          userId,
+          openaiKey,
+        });
+        log.info('meeting.comic_result', {
+          meetingId: meeting.id,
+          ok: result.ok,
+          costUsd: result.costUsd,
+        });
+      } catch (err) {
+        log.error('meeting.comic_failed_trigger', err, {
+          meetingId: meeting.id,
+        });
+        await prisma.meeting
+          .update({
+            where: { id: meeting.id },
+            data: {
+              comicError: `trigger: ${(err as Error).message.slice(0, 400)}`,
+            },
+          })
+          .catch(() => {});
+      }
     } else {
       log.info('meeting.comic_skipped', {
         meetingId: meeting.id,

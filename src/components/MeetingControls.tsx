@@ -42,10 +42,12 @@ export function MeetingControls() {
       setShowAgenda(false);
       const payload = (await res.json().catch(() => ({}))) as { meetingId?: string };
       router.refresh();
-      // Comic generation runs fire-and-forget on the server AFTER the
-      // meeting response ships. Poll for comic completion so the card
-      // updates in place instead of the user sitting on "no comic".
-      // Cap at ~2 min to cover a slow OpenAI render.
+      // Comic generation is awaited server-side inside the meeting run
+      // now, so the refresh above already picks up the comic on the
+      // card. Poll as a safety net in case the server bailed early
+      // (process restart, OpenAI timeout beyond the route budget) —
+      // usually this sees the image already present and stops on the
+      // first tick.
       if (payload.meetingId) {
         pollForComic(payload.meetingId, router);
       }
@@ -115,8 +117,8 @@ export function MeetingControls() {
       {busy && (
         <div className="rounded-md border border-brand-500/40 bg-brand-500/5 p-2 text-[11px] text-brand-200">
           Meeting in session · {elapsed}s elapsed · briefing the model + four
-          executives arguing in one call. Usually 15–40s. Comics render after
-          the meeting finishes if you&apos;ve set an OpenAI key.
+          executives arguing in one call, plus comic if you&apos;ve set an
+          OpenAI key. Usually 40–80s end-to-end.
         </div>
       )}
       {error && <p className="text-[11px] text-red-300">{error}</p>}
