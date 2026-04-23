@@ -55,7 +55,11 @@ export async function generateMeetingComic(params: {
   let imageUrl: string | null = null;
   let imageCostUsd = 0;
   try {
-    const result = await renderComicImage({ openaiKey, script: script.prompt });
+    const result = await renderComicImage({
+      openaiKey,
+      script: script.prompt,
+      userId,
+    });
     imageUrl = result.imageUrl;
     imageCostUsd = result.costUsd;
   } catch (err) {
@@ -176,7 +180,12 @@ const IMAGE_SIZE: '1024x1024' | '1024x1536' | '1536x1024' = '1024x1536';
 async function renderComicImage(params: {
   openaiKey: string;
   script: string;
+  userId?: string;
 }): Promise<{ imageUrl: string; costUsd: number }> {
+  // gpt-image-1 request spec (verified against OpenAI docs, Apr 2026):
+  //   model, prompt (required), n, size, quality, output_format,
+  //   output_compression (jpeg/webp only), background, moderation, user.
+  //   response_format is NOT accepted — the model always returns b64_json.
   const res = await fetch(OPENAI_IMAGE_ENDPOINT, {
     method: 'POST',
     headers: {
@@ -188,9 +197,17 @@ async function renderComicImage(params: {
       prompt: params.script,
       n: 1,
       size: IMAGE_SIZE,
-      // gpt-image-1 always returns b64_json and does NOT accept the
-      // response_format parameter (unlike dall-e-2/3). Sending it
-      // throws 400 "Unknown parameter: 'response_format'".
+      // 'medium' is the right balance for a comic page — 'high' is
+      // slower + more expensive without a huge readability win on
+      // a 1024×1536 page; 'low' is too muddy for speech bubble text.
+      quality: 'medium' as const,
+      output_format: 'png' as const,
+      // Opaque background looks better for a comic page frame than
+      // transparent; 'auto' can surprise with a see-through result.
+      background: 'opaque' as const,
+      // Passed through for OpenAI's abuse detection — scoped per user
+      // so one user's issue doesn't rate-limit everyone.
+      ...(params.userId ? { user: params.userId } : {}),
     }),
   });
   if (!res.ok) {
@@ -213,9 +230,11 @@ async function renderComicImage(params: {
   } else {
     throw new Error('openai image returned neither b64_json nor url');
   }
-  // gpt-image-1 pricing varies by resolution — ~$0.04 for 1024×1536 at
-  // standard quality (Apr 2026). Treat as a ballpark; replace with
-  // usage-driven math when OpenAI surfaces it.
-  const costUsd = 0.04;
+  // gpt-image-1 token-based pricing (Apr 2026). At quality=medium,
+  // size=1024×1536, a single page lands around $0.06. Treat as a
+  // ballpark — real billing is per-token on input + output via
+  // OpenAI's usage endpoint. Replace with usage.output_tokens math
+  // once the response includes it reliably.
+  const costUsd = 0.06;
   return { imageUrl, costUsd };
 }
