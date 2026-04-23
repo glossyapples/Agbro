@@ -45,6 +45,34 @@ export function BacktestRunner({ initialRuns }: { initialRuns: Run[] }) {
   const [selectedId, setSelectedId] = useState<string | null>(
     initialRuns.find((r) => r.status === 'completed')?.id ?? null
   );
+
+  // Sync local state when the server re-renders with fresh data after
+  // router.refresh() (post-run). Without this, useState(initialRuns)
+  // only captures the first render, so a newly-completed run never
+  // appeared in the list until a manual page refresh.
+  //
+  // Also auto-select the newest completed run if the current selection
+  // is an optimistic 'pending-...' row whose real counterpart has just
+  // arrived. Matches by label as a heuristic — strategyKey + window
+  // dates would be more robust but label is reliable enough since we
+  // construct it deterministically at click time.
+  useEffect(() => {
+    setRuns(initialRuns);
+    setSelectedId((current) => {
+      if (current == null) {
+        return initialRuns.find((r) => r.status === 'completed')?.id ?? null;
+      }
+      if (current.startsWith('pending-')) {
+        // Our optimistic row just got replaced by a real one. Find the
+        // newest completed run and select it.
+        const newest = initialRuns.find((r) => r.status === 'completed');
+        return newest?.id ?? null;
+      }
+      // Keep current selection if the run still exists in the new list.
+      if (initialRuns.some((r) => r.id === current)) return current;
+      return initialRuns.find((r) => r.status === 'completed')?.id ?? null;
+    });
+  }, [initialRuns]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Belt-and-suspenders against double-submit: React's disabled attribute
