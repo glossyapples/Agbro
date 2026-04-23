@@ -15,6 +15,7 @@ import { MEETING_SYSTEM_PROMPT, type MeetingOutput } from './schema';
 import { getCurrentRegime } from '@/lib/data/regime';
 import { getUserCredential } from '@/lib/credentials';
 import { castForStrategyName, type CastBundle } from './cast';
+import { estimateCostUsd } from '@/lib/pricing';
 
 const MEETING_MODEL = 'claude-opus-4-7';
 const MEETING_MAX_TOKENS = 16_000;
@@ -63,10 +64,23 @@ export async function runMeeting(params: {
     parsed.cast = castSnapshot(cast);
     const elapsedMs = Date.now() - startedAt;
 
-    // Crude but stable cost estimate. Opus pricing is public; we're
-    // in the ballpark. Replace with tokens-usage math when the SDK
-    // surfaces both input + output counts.
-    const costUsd = estimateCost(resp.usage?.input_tokens ?? 0, resp.usage?.output_tokens ?? 0);
+    // Delegate to the shared pricing module so cache-read / cache-write
+    // tokens are credited at their real (lower) rates. The previous
+    // version counted everything at full input rate and overstated
+    // meetings by 15-30x — which then polluted policy-change rationales
+    // with phantom "$4-7 per run" figures.
+    const usage = resp.usage as unknown as {
+      input_tokens?: number;
+      output_tokens?: number;
+      cache_read_input_tokens?: number;
+      cache_creation_input_tokens?: number;
+    } | undefined;
+    const costUsd = estimateCostUsd(MEETING_MODEL, {
+      inputTokens: usage?.input_tokens ?? 0,
+      outputTokens: usage?.output_tokens ?? 0,
+      cacheReadTokens: usage?.cache_read_input_tokens ?? 0,
+      cacheWriteTokens: usage?.cache_creation_input_tokens ?? 0,
+    });
 
     await prisma.$transaction(async (tx) => {
       await tx.meeting.update({
@@ -417,6 +431,12 @@ async function buildBriefing(userId: string, agendaOverride?: string) {
       costUsd: r.costUsd,
       summary: r.summary?.slice(0, 240),
     })),
+    // Honest cost rollup so the partners don't have to eyeball per-run
+    // numbers (and, previously, invent them — rationales were quoting
+    // $4-7/run when the real number was $0.20). Source-of-truth math.
+    agentRunCostSummary: summariseAgentRunCosts(
+      recentRuns as Array<{ costUsd: number | null; startedAt: Date; status: string }>
+    ),
     // Doctrine: principles + playbooks the partners should always
     // reason from. Shorter body slice — these are reminders, not
     // refreshers. Agents read the full versions via read_brain.
@@ -518,10 +538,42 @@ function parseMeetingJson(raw: string): MeetingOutput {
   return parsed;
 }
 
-// Opus 4.7 public pricing (Apr 2026): $15 / $75 per 1M tokens in/out.
-// Keep local; env-driven override in future if Anthropic adjusts.
-function estimateCost(inTokens: number, outTokens: number): number {
-  return (inTokens / 1_000_000) * 15 + (outTokens / 1_000_000) * 75;
+// Summarise last-7-days agent-run cost into fields the model can read
+// without having to sum. Median + max make outliers visible without a
+// full histogram; weeklyTotal is the number the partners actually care
+// about when debating cadence.
+function summariseAgentRunCosts(
+  runs: Array<{ costUsd: number | null; startedAt: Date; status: string }>
+): {
+  runCount: number;
+  weeklyTotalUsd: number;
+  avgPerRunUsd: number;
+  medianPerRunUsd: number;
+  maxPerRunUsd: number;
+} {
+  const costs = runs
+    .map((r) => r.costUsd)
+    .filter((c): c is number => typeof c === 'number' && c >= 0);
+  if (costs.length === 0) {
+    return {
+      runCount: runs.length,
+      weeklyTotalUsd: 0,
+      avgPerRunUsd: 0,
+      medianPerRunUsd: 0,
+      maxPerRunUsd: 0,
+    };
+  }
+  const total = costs.reduce((a, b) => a + b, 0);
+  const sorted = [...costs].sort((a, b) => a - b);
+  const median = sorted[Math.floor(sorted.length / 2)];
+  const max = sorted[sorted.length - 1];
+  return {
+    runCount: runs.length,
+    weeklyTotalUsd: Number(total.toFixed(4)),
+    avgPerRunUsd: Number((total / costs.length).toFixed(4)),
+    medianPerRunUsd: Number(median.toFixed(4)),
+    maxPerRunUsd: Number(max.toFixed(4)),
+  };
 }
 
 // Build a strategy-aware system prompt by injecting the cast's names
