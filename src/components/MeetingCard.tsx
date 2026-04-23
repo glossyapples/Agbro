@@ -143,13 +143,19 @@ export function MeetingCard({ meeting }: { meeting: MeetingSummary }) {
       </header>
 
       {effectiveComicUrl ? (
-        <div className="overflow-hidden rounded-lg border border-ink-700/60 bg-ink-900/40">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={effectiveComicUrl}
-            alt="Meeting comic"
-            className="h-auto w-full"
-            loading="lazy"
+        <div className="flex flex-col gap-2">
+          <div className="overflow-hidden rounded-lg border border-ink-700/60 bg-ink-900/40">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={effectiveComicUrl}
+              alt="Meeting comic"
+              className="h-auto w-full"
+              loading="lazy"
+            />
+          </div>
+          <SaveComicButton
+            imageUrl={effectiveComicUrl}
+            filename={`agbro-meeting-${meeting.startedAt.slice(0, 10)}.png`}
           />
         </div>
       ) : (
@@ -236,5 +242,89 @@ export function MeetingCard({ meeting }: { meeting: MeetingSummary }) {
         </div>
       )}
     </article>
+  );
+}
+
+// Save / share the comic image. iOS Safari long-press-to-save is flaky
+// on data: URLs (which is what we store — inline base64). This button:
+//   • On mobile with Web Share API — opens the native share sheet (iOS
+//     surfaces "Save Image" → Photos). Also lets Android hand off to
+//     Messages / Gmail / Files / etc.
+//   • Fallback: trigger a direct file download via an <a download>. Works
+//     everywhere, including desktop.
+function SaveComicButton({
+  imageUrl,
+  filename,
+}: {
+  imageUrl: string;
+  filename: string;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+
+  async function save() {
+    setBusy(true);
+    setError(null);
+    setToast(null);
+    try {
+      // Step 1: pull bytes into a Blob regardless of whether the src
+      // is a data: URL or a hosted URL. Unified downstream path.
+      const res = await fetch(imageUrl);
+      const blob = await res.blob();
+      const file = new File([blob], filename, { type: blob.type || 'image/png' });
+
+      // Step 2: prefer Web Share on mobile if the browser can share
+      // files (iOS Safari ≥ 15, most Android). iOS share sheet has
+      // "Save Image" → Photos as the first action.
+      const canShare =
+        typeof navigator !== 'undefined' &&
+        typeof navigator.canShare === 'function' &&
+        navigator.canShare({ files: [file] });
+      if (canShare) {
+        await navigator.share({
+          files: [file],
+          title: 'AgBro meeting comic',
+        });
+        setToast('Opened share sheet');
+        return;
+      }
+
+      // Step 3: fallback download via synthetic anchor. Uses an object
+      // URL rather than the raw data URL so the browser respects the
+      // `download` attribute and filename reliably.
+      const objectUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = objectUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 5_000);
+      setToast('Downloaded');
+    } catch (err) {
+      // AbortError fires when the user cancels the share sheet — not
+      // an error worth showing.
+      if ((err as Error).name === 'AbortError') return;
+      setError((err as Error).message.slice(0, 160));
+    } finally {
+      setBusy(false);
+      if (toast) setTimeout(() => setToast(null), 2500);
+    }
+  }
+
+  return (
+    <div className="flex items-center gap-2">
+      <button
+        type="button"
+        onClick={save}
+        disabled={busy}
+        className={`btn-ghost text-[11px] ${busy ? 'cursor-not-allowed opacity-60' : ''}`}
+      >
+        {busy ? 'Saving…' : 'Save comic'}
+      </button>
+      {toast && <span className="text-[10px] text-brand-300">{toast}</span>}
+      {error && <span className="text-[10px] text-red-300">{error}</span>}
+    </div>
   );
 }
