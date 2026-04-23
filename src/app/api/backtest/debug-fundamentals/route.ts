@@ -19,15 +19,11 @@
 
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
+import { requireUser } from '@/lib/api';
 import { parseWithDiagnostics } from '@/lib/backtest/historical-fundamentals';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
-
-// TEMPORARY: auth disabled so the operator can hit this endpoint
-// directly during a diagnostic session. Read-only, no user data
-// surfaced (SEC EDGAR is fully public; DB summary is just counts +
-// last 5 rows for a named symbol). RE-ADD requireUser before merging.
 
 const TICKERS_URL = 'https://www.sec.gov/files/company_tickers.json';
 const FACTS_URL = (cik10: string) =>
@@ -60,6 +56,9 @@ function pickSample(arr: RawFactPreview[] | undefined): RawFactPreview[] {
 }
 
 export async function GET(req: Request) {
+  const user = await requireUser();
+  if (user instanceof NextResponse) return user;
+
   const url = new URL(req.url);
   const rawSymbol = (url.searchParams.get('symbol') ?? '').trim().toUpperCase();
   if (!rawSymbol || rawSymbol.length > 12) {
