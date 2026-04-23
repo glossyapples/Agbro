@@ -136,6 +136,11 @@ model Account {
   // banner (vs. a plain manual pause).
   killSwitchTriggeredAt DateTime?
   killSwitchReason    String?  @db.Text
+  // When false, the accept/reject buttons on meeting-proposed
+  // PolicyChange cards are hidden — proposals are still recorded
+  // for audit/history but can't be applied. Useful if the user
+  // wants meetings as pure advisory without any write path.
+  allowAgentPolicyProposals Boolean @default(true)
   // Separate ceiling for rule-based crypto trades (DCA legs + rebalance
   // legs). Keeps the crypto engine's mechanical activity from eating into
   // the LLM agent's stock trade budget. Each DCA of a 3-coin allowlist

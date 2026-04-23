@@ -127,7 +127,7 @@ async function StrategyTab({ userId }: { userId: string }) {
 }
 
 async function MeetingsTab({ userId }: { userId: string }) {
-  const [meetings, openItems, proposedChanges] = await Promise.all([
+  const [meetings, openItems, proposedChanges, account] = await Promise.all([
     prisma.meeting.findMany({
       where: { userId },
       orderBy: { startedAt: 'desc' },
@@ -155,6 +155,10 @@ async function MeetingsTab({ userId }: { userId: string }) {
         meeting: { select: { startedAt: true } },
       },
       take: 20,
+    }),
+    prisma.account.findUnique({
+      where: { userId },
+      select: { allowAgentPolicyProposals: true },
     }),
   ]);
 
@@ -222,7 +226,10 @@ async function MeetingsTab({ userId }: { userId: string }) {
         )}
       </section>
 
-      <PolicyChangesList proposed={serializedProposed} />
+      <PolicyChangesList
+        proposed={serializedProposed}
+        allowProposals={account?.allowAgentPolicyProposals ?? true}
+      />
 
       <section className="card flex flex-col gap-3">
         <div>

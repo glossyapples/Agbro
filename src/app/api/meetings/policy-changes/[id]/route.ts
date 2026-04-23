@@ -40,6 +40,25 @@ export async function PATCH(
       );
     }
 
+    if (parsed.data.action === 'accept') {
+      // Respect the user-level toggle — when off, proposals can be
+      // rejected but not applied. Rejections are always allowed so
+      // the user can clear noise.
+      const account = await prisma.account.findUnique({
+        where: { userId: user.id },
+        select: { allowAgentPolicyProposals: true },
+      });
+      if (account && !account.allowAgentPolicyProposals) {
+        return NextResponse.json(
+          {
+            error:
+              'Agent policy proposals are disabled in Settings → Safety rails. Enable the toggle first if you want to apply this change.',
+          },
+          { status: 403 }
+        );
+      }
+    }
+
     if (parsed.data.action === 'reject') {
       await prisma.policyChange.update({
         where: { id: params.id },

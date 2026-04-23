@@ -20,7 +20,13 @@ type Proposed = {
   meetingAt: string;
 };
 
-export function PolicyChangesList({ proposed }: { proposed: Proposed[] }) {
+export function PolicyChangesList({
+  proposed,
+  allowProposals = true,
+}: {
+  proposed: Proposed[];
+  allowProposals?: boolean;
+}) {
   const router = useRouter();
   const [busyId, setBusyId] = useState<string | null>(null);
   const [errorFor, setErrorFor] = useState<{ id: string; msg: string } | null>(null);
@@ -60,6 +66,12 @@ export function PolicyChangesList({ proposed }: { proposed: Proposed[] }) {
           The partners have suggested these tweaks to your settings or strategy.
           Nothing is applied until you accept.
         </p>
+        {!allowProposals && (
+          <p className="mt-1 rounded border border-amber-500/40 bg-amber-500/10 p-1.5 text-[10px] text-amber-200">
+            Meeting-proposed changes are disabled in Settings → Safety rails.
+            Toggle on if you want to accept any of these.
+          </p>
+        )}
       </div>
       <ul className="flex flex-col gap-2">
         {proposed.map((p) => {
@@ -93,8 +105,9 @@ export function PolicyChangesList({ proposed }: { proposed: Proposed[] }) {
                   <button
                     type="button"
                     onClick={() => decide(p.id, 'accept')}
-                    disabled={busy}
-                    className="btn-primary text-[10px]"
+                    disabled={busy || !allowProposals}
+                    title={!allowProposals ? 'Enable in Settings → Safety rails' : undefined}
+                    className={`btn-primary text-[10px] ${!allowProposals ? 'cursor-not-allowed opacity-40' : ''}`}
                   >
                     {busy ? '…' : 'Accept'}
                   </button>

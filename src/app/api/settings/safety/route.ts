@@ -16,6 +16,7 @@ const Body = z.object({
   drawdownPauseThresholdPct: z.number().min(-80).max(0),
   // $100 minimum keeps the rail meaningful; $5M upper bound is sanity.
   maxTradeNotionalCents: z.number().int().min(10_000).max(500_000_000),
+  allowAgentPolicyProposals: z.boolean().optional(),
 });
 
 export async function POST(req: Request) {
@@ -32,6 +33,9 @@ export async function POST(req: Request) {
         dailyLossKillPct: parsed.data.dailyLossKillPct,
         drawdownPauseThresholdPct: parsed.data.drawdownPauseThresholdPct,
         maxTradeNotionalCents: BigInt(parsed.data.maxTradeNotionalCents),
+        ...(parsed.data.allowAgentPolicyProposals !== undefined
+          ? { allowAgentPolicyProposals: parsed.data.allowAgentPolicyProposals }
+          : {}),
       },
     });
     return NextResponse.json({ ok: true });

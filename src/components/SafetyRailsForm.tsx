@@ -15,6 +15,7 @@ export type SafetyRailsInitial = {
   maxTradeNotionalCents: string; // bigint serialised
   killSwitchTriggeredAt: string | null;
   killSwitchReason: string | null;
+  allowAgentPolicyProposals: boolean;
 };
 
 export function SafetyRailsForm({ initial }: { initial: SafetyRailsInitial }) {
@@ -24,6 +25,7 @@ export function SafetyRailsForm({ initial }: { initial: SafetyRailsInitial }) {
   const [maxTradeUsd, setMaxTradeUsd] = useState(
     String(Number(initial.maxTradeNotionalCents) / 100)
   );
+  const [allowProposals, setAllowProposals] = useState(initial.allowAgentPolicyProposals);
   const [busy, setBusy] = useState(false);
   const [clearBusy, setClearBusy] = useState(false);
   const [savedAt, setSavedAt] = useState<string | null>(null);
@@ -40,6 +42,7 @@ export function SafetyRailsForm({ initial }: { initial: SafetyRailsInitial }) {
           dailyLossKillPct: Number(dailyLoss),
           drawdownPauseThresholdPct: Number(drawdown),
           maxTradeNotionalCents: Math.round(Number(maxTradeUsd) * 100),
+          allowAgentPolicyProposals: allowProposals,
         }),
       });
       if (!res.ok) {
@@ -154,6 +157,27 @@ export function SafetyRailsForm({ initial }: { initial: SafetyRailsInitial }) {
           <span className="text-[10px] text-ink-500">
             No single buy may exceed this dollar amount. Complements the
             per-position % cap — protects against a bad price fetch.
+          </span>
+        </label>
+
+        <label className="mt-2 flex items-start gap-2 rounded-md border border-ink-700/60 bg-ink-900/40 p-2 text-[11px]">
+          <input
+            type="checkbox"
+            checked={allowProposals}
+            onChange={(e) => setAllowProposals(e.target.checked)}
+            className="mt-0.5 shrink-0"
+          />
+          <span className="flex flex-col gap-0.5">
+            <span className="font-semibold text-ink-200">
+              Allow meeting-proposed setting changes
+            </span>
+            <span className="text-ink-500">
+              When on, meetings can propose tweaks to these thresholds +
+              cadence + expected return; you still click Accept to apply.
+              When off, proposals are recorded for audit but can&apos;t be
+              applied. API keys, identity, and deposits are always
+              off-limits regardless.
+            </span>
           </span>
         </label>
       </div>

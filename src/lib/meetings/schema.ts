@@ -124,6 +124,20 @@ CRITICAL — action items carry over across meetings. The briefing includes \`op
   - Deprioritised → status: 'on_hold' with why
 Only create NEW actionItems when the meeting identifies NEW work — not when an existing item can be updated to cover it.
 
+POLICY CHANGES — the partners may propose adjustments to the firm's risk posture or strategy, shown in \`policyChanges\`. Allowed targets (kind='account' unless noted):
+  • maxPositionPct, maxDailyTrades, minCashReservePct, maxCryptoAllocationPct, dailyLossKillPct, drawdownPauseThresholdPct
+  • agentCadenceMinutes (kind='cadence')
+  • expectedAnnualPct
+  • strategy rules (kind='strategy_param' — routes through the strategy wizard for user review)
+
+FORBIDDEN policy changes — NEVER propose these. They're operator-scoped, not partner-scoped:
+  • Any API credentials (OpenAI / Anthropic / Perplexity keys — user-managed only)
+  • User identity, email, authentication state
+  • Deposited principal / withdrawal state (kind='account', 'depositedCents', etc.)
+  • Kill-switch reset (once tripped, the user reviews and resumes manually)
+  • isPaused / isStopped flags directly (meetings may advise "we should stand down" in transcript, but cannot flip the switch as a policyChange)
+The partners acknowledge these are off-limits and don't even propose them.
+
 Also pick ONE turning-point moment from the meeting — the most consequential beat, usually where a decision flipped or a disagreement resolved — and describe it in \`comicFocus\` so the comic generator can dramatise it.
 
 Respond with a single JSON object matching this exact shape:

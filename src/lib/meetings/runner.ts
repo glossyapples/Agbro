@@ -227,7 +227,7 @@ export async function runMeeting(params: {
 async function buildBriefing(userId: string, agendaOverride?: string) {
   const sevenDaysAgo = new Date(Date.now() - 7 * 86_400_000);
 
-  const [account, activeStrategy, recentTrades, recentRuns, brainEntries, regime, positions, priorMeeting, openActionItems] =
+  const [account, activeStrategy, recentTrades, recentRuns, brainEntries, regime, positions, priorMeeting, openActionItems, cryptoConfig] =
     await Promise.all([
       prisma.account.findUnique({ where: { userId } }),
       prisma.strategy.findFirst({ where: { userId, isActive: true } }),
@@ -274,6 +274,10 @@ async function buildBriefing(userId: string, agendaOverride?: string) {
           createdAt: true,
         },
       }),
+      // Crypto config so meetings can reason about DCA cadence vs.
+      // the allocation cap — the pair matters together, neither
+      // alone.
+      prisma.cryptoConfig.findUnique({ where: { userId } }),
     ]);
 
   return {
@@ -288,6 +292,37 @@ async function buildBriefing(userId: string, agendaOverride?: string) {
           agentCadenceMinutes: account.agentCadenceMinutes,
           isPaused: account.isPaused,
           isStopped: account.isStopped,
+          // Full risk posture — meetings used to see only the first
+          // six fields, which led to comics saying "no cap" about
+          // caps that existed. These are all policyChange-able
+          // targets so the partners should see them to reason well.
+          safetyRails: {
+            maxPositionPct: account.maxPositionPct,
+            maxDailyTrades: account.maxDailyTrades,
+            minCashReservePct: account.minCashReservePct,
+            maxCryptoAllocationPct: account.maxCryptoAllocationPct,
+            maxDailyCryptoTrades: account.maxDailyCryptoTrades,
+            dailyLossKillPct: account.dailyLossKillPct,
+            drawdownPauseThresholdPct: account.drawdownPauseThresholdPct,
+            maxTradeNotionalCents: account.maxTradeNotionalCents.toString(),
+            tradingHoursStart: account.tradingHoursStart,
+            tradingHoursEnd: account.tradingHoursEnd,
+            allowDayTrades: account.allowDayTrades,
+            cryptoEnabled: account.cryptoEnabled,
+            optionsEnabled: account.optionsEnabled,
+            killSwitchActive: !!account.killSwitchTriggeredAt,
+            killSwitchReason: account.killSwitchReason ?? null,
+          },
+          walletBalanceCents: account.walletBalanceCents.toString(),
+        }
+      : null,
+    cryptoConfig: cryptoConfig
+      ? {
+          dcaAmountCents: cryptoConfig.dcaAmountCents.toString(),
+          dcaCadenceDays: cryptoConfig.dcaCadenceDays,
+          presetKey: cryptoConfig.presetKey,
+          targetAllocations: cryptoConfig.targetAllocations,
+          lastDcaAt: cryptoConfig.lastDcaAt?.toISOString() ?? null,
         }
       : null,
     activeStrategy: activeStrategy

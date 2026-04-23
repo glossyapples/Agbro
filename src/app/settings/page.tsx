@@ -60,6 +60,7 @@ export default async function SettingsPage() {
           maxTradeNotionalCents: a.maxTradeNotionalCents.toString(),
           killSwitchTriggeredAt: a.killSwitchTriggeredAt?.toISOString() ?? null,
           killSwitchReason: a.killSwitchReason,
+          allowAgentPolicyProposals: a.allowAgentPolicyProposals,
         }}
       />
 
