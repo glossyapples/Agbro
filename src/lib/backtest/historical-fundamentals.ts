@@ -171,28 +171,125 @@ type RowAtFiled = {
   dividendYield: number | null; // not derivable from companyfacts alone; null for now
 };
 
-function buildRows(factsJson: FactsJson): RowAtFiled[] {
+export type TagDiagnostic = {
+  tagsTried: string[];
+  tagUsed: string | null;
+  factCount: number;
+  unit: string;
+};
+
+export type DurationBreakdown = {
+  total: number;
+  withStartDate: number;
+  threeMonth: number; // 80-100 day duration
+  annual: number; // 350-380 day duration
+  sixMonthYTD: number; // 170-200 days (Q2 YTD)
+  nineMonthYTD: number; // 260-290 days (Q3 YTD)
+  other: number;
+};
+
+export type ParseDiagnostics = {
+  tags: {
+    netIncome: TagDiagnostic;
+    equity: TagDiagnostic;
+    revenue: TagDiagnostic;
+    costOfRevenue: TagDiagnostic;
+    eps: TagDiagnostic;
+    longTermDebt: TagDiagnostic;
+    shortTermDebt: TagDiagnostic;
+    sharesOutstanding: TagDiagnostic;
+  };
+  durationBreakdown: {
+    netIncome: DurationBreakdown;
+    revenue: DurationBreakdown;
+    costOfRevenue: DurationBreakdown;
+    eps: DurationBreakdown;
+  };
+  ttmComputed: {
+    netIncome: number;
+    revenue: number;
+    costOfRevenue: number;
+    eps: number;
+  };
+  rows: {
+    total: number;
+    withNetIncomeTTM: number;
+    withEquity: number;
+    withROE: number;
+    withDE: number;
+    withMargin: number;
+    withBookValue: number;
+  };
+};
+
+function classifyDuration(facts: Fact[]): DurationBreakdown {
+  const b: DurationBreakdown = {
+    total: facts.length,
+    withStartDate: 0,
+    threeMonth: 0,
+    annual: 0,
+    sixMonthYTD: 0,
+    nineMonthYTD: 0,
+    other: 0,
+  };
+  for (const f of facts) {
+    const d = durationDays(f);
+    if (d == null) continue;
+    b.withStartDate += 1;
+    if (d >= 80 && d <= 100) b.threeMonth += 1;
+    else if (d >= 350 && d <= 380) b.annual += 1;
+    else if (d >= 170 && d <= 200) b.sixMonthYTD += 1;
+    else if (d >= 260 && d <= 290) b.nineMonthYTD += 1;
+    else b.other += 1;
+  }
+  return b;
+}
+
+function firstAvailableWithDiag(
+  facts: FactsJson['facts'],
+  tags: string[],
+  unit: string
+): { arr: Fact[]; diag: TagDiagnostic } {
+  const diag: TagDiagnostic = { tagsTried: tags, tagUsed: null, factCount: 0, unit };
+  if (!facts?.['us-gaap']) return { arr: [], diag };
+  for (const tag of tags) {
+    const node = facts['us-gaap'][tag];
+    const arr = node?.units?.[unit];
+    if (arr && arr.length > 0) {
+      diag.tagUsed = tag;
+      diag.factCount = arr.length;
+      return { arr, diag };
+    }
+  }
+  return { arr: [], diag };
+}
+
+// Parse the EDGAR companyfacts JSON into per-filing rows AND a
+// step-by-step diagnostic so we can see exactly where a symbol drops
+// data (missing tag / wrong unit / no 3-month slices / etc).
+export function parseWithDiagnostics(
+  factsJson: FactsJson
+): { rows: RowAtFiled[]; diagnostics: ParseDiagnostics } {
   const facts = factsJson.facts;
-  const epsFacts = firstAvailable(facts, TAGS.eps, 'USD/shares');
-  const netIncomeFacts = firstAvailable(facts, TAGS.netIncome, 'USD');
-  const equityFacts = firstAvailable(facts, TAGS.equity, 'USD');
-  const longTermDebtFacts = firstAvailable(facts, TAGS.longTermDebt, 'USD');
-  const shortTermDebtFacts = firstAvailable(facts, TAGS.shortTermDebt, 'USD');
-  const revenueFacts = firstAvailable(facts, TAGS.revenues, 'USD');
-  const costFacts = firstAvailable(facts, TAGS.costOfRevenue, 'USD');
-  const sharesFacts = firstAvailable(facts, TAGS.sharesOutstanding, 'shares');
+  const niRes = firstAvailableWithDiag(facts, TAGS.netIncome, 'USD');
+  const eqRes = firstAvailableWithDiag(facts, TAGS.equity, 'USD');
+  const revRes = firstAvailableWithDiag(facts, TAGS.revenues, 'USD');
+  const costRes = firstAvailableWithDiag(facts, TAGS.costOfRevenue, 'USD');
+  const epsRes = firstAvailableWithDiag(facts, TAGS.eps, 'USD/shares');
+  const ltRes = firstAvailableWithDiag(facts, TAGS.longTermDebt, 'USD');
+  const stRes = firstAvailableWithDiag(facts, TAGS.shortTermDebt, 'USD');
+  const shRes = firstAvailableWithDiag(facts, TAGS.sharesOutstanding, 'shares');
 
-  const ttmEps = rollingTTM(epsFacts);
-  const ttmNetIncome = rollingTTM(netIncomeFacts);
-  const ttmRevenue = rollingTTM(revenueFacts);
-  const ttmCost = rollingTTM(costFacts);
+  const ttmEps = rollingTTM(epsRes.arr);
+  const ttmNetIncome = rollingTTM(niRes.arr);
+  const ttmRevenue = rollingTTM(revRes.arr);
+  const ttmCost = rollingTTM(costRes.arr);
 
-  const equityByFiled = groupByFiled(equityFacts);
-  const ltByFiled = groupByFiled(longTermDebtFacts);
-  const stByFiled = groupByFiled(shortTermDebtFacts);
-  const sharesByFiled = groupByFiled(sharesFacts);
+  const equityByFiled = groupByFiled(eqRes.arr);
+  const ltByFiled = groupByFiled(ltRes.arr);
+  const stByFiled = groupByFiled(stRes.arr);
+  const sharesByFiled = groupByFiled(shRes.arr);
 
-  // Union of all filing dates we have any data for.
   const allFiled = new Set<string>([
     ...ttmEps.keys(),
     ...ttmNetIncome.keys(),
@@ -222,7 +319,54 @@ function buildRows(factsJson: FactsJson): RowAtFiled[] {
       dividendYield: null,
     });
   }
-  return rows.sort((a, b) => a.asOfDate.getTime() - b.asOfDate.getTime());
+  rows.sort((a, b) => a.asOfDate.getTime() - b.asOfDate.getTime());
+
+  const diagnostics: ParseDiagnostics = {
+    tags: {
+      netIncome: niRes.diag,
+      equity: eqRes.diag,
+      revenue: revRes.diag,
+      costOfRevenue: costRes.diag,
+      eps: epsRes.diag,
+      longTermDebt: ltRes.diag,
+      shortTermDebt: stRes.diag,
+      sharesOutstanding: shRes.diag,
+    },
+    durationBreakdown: {
+      netIncome: classifyDuration(niRes.arr),
+      revenue: classifyDuration(revRes.arr),
+      costOfRevenue: classifyDuration(costRes.arr),
+      eps: classifyDuration(epsRes.arr),
+    },
+    ttmComputed: {
+      netIncome: ttmNetIncome.size,
+      revenue: ttmRevenue.size,
+      costOfRevenue: ttmCost.size,
+      eps: ttmEps.size,
+    },
+    rows: {
+      total: rows.length,
+      withNetIncomeTTM: rows.filter((r) => r.netIncomeTTM != null).length,
+      withEquity: rows.filter((r) => r.equity != null).length,
+      withROE: rows.filter(
+        (r) => r.netIncomeTTM != null && r.equity != null && r.equity > 0
+      ).length,
+      withDE: rows.filter((r) => r.totalDebt != null && r.equity != null && r.equity > 0)
+        .length,
+      withMargin: rows.filter(
+        (r) => r.revenueTTM != null && r.costTTM != null && r.revenueTTM > 0
+      ).length,
+      withBookValue: rows.filter(
+        (r) => r.equity != null && r.sharesOutstanding != null && r.sharesOutstanding > 0
+      ).length,
+    },
+  };
+
+  return { rows, diagnostics };
+}
+
+function buildRows(factsJson: FactsJson): RowAtFiled[] {
+  return parseWithDiagnostics(factsJson).rows;
 }
 
 // TTM for any flow-item series (net income, revenue, cost, EPS).
@@ -294,28 +438,33 @@ export async function backfillHistoricalFundamentals(
     return { symbol, rowsWritten: 0, skippedReason: `EDGAR ${res.status}` };
   }
   const json = (await res.json()) as FactsJson;
-  const rows = buildRows(json);
+  const { rows, diagnostics } = parseWithDiagnostics(json);
+
+  // Rich diagnostic so we can see WHERE a symbol drops data. Split
+  // into sub-logs so Railway's log viewer doesn't truncate.
+  log.info('historical_fundamentals.parsed_tags', {
+    symbol,
+    netIncome: diagnostics.tags.netIncome,
+    equity: diagnostics.tags.equity,
+    revenue: diagnostics.tags.revenue,
+    costOfRevenue: diagnostics.tags.costOfRevenue,
+    eps: diagnostics.tags.eps,
+  });
+  log.info('historical_fundamentals.parsed_durations', {
+    symbol,
+    netIncome: diagnostics.durationBreakdown.netIncome,
+    revenue: diagnostics.durationBreakdown.revenue,
+    eps: diagnostics.durationBreakdown.eps,
+  });
+  log.info('historical_fundamentals.parsed_rows', {
+    symbol,
+    ttm: diagnostics.ttmComputed,
+    ...diagnostics.rows,
+  });
+
   if (rows.length === 0) {
     return { symbol, rowsWritten: 0, skippedReason: 'no facts parsed' };
   }
-
-  // Diagnostic: did we actually compute the ratios we need? On a healthy
-  // large-cap filer we should see most rows with ROE + D/E + margin. If
-  // these are zero the filter will silently reject everything downstream.
-  log.info('historical_fundamentals.parsed', {
-    symbol,
-    rowsTotal: rows.length,
-    rowsWithNetIncomeTTM: rows.filter((r) => r.netIncomeTTM != null).length,
-    rowsWithEquity: rows.filter((r) => r.equity != null).length,
-    rowsWithROE: rows.filter(
-      (r) => r.netIncomeTTM != null && r.equity != null && r.equity > 0
-    ).length,
-    rowsWithDE: rows.filter((r) => r.totalDebt != null && r.equity != null && r.equity > 0)
-      .length,
-    rowsWithMargin: rows.filter(
-      (r) => r.revenueTTM != null && r.costTTM != null && r.revenueTTM > 0
-    ).length,
-  });
 
   let written = 0;
   for (const row of rows) {
