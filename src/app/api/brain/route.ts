@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { prisma } from '@/lib/db';
 import { apiError, requireUser } from '@/lib/api';
+import { BRAIN_KIND_TAXONOMY } from '@/lib/brain/taxonomy';
 
 export const runtime = 'nodejs';
 
@@ -9,6 +10,7 @@ const BRAIN_KINDS = [
   'principle',
   'checklist',
   'pitfall',
+  'crisis_playbook',
   'sector_primer',
   'case_study',
   'lesson',
@@ -16,6 +18,8 @@ const BRAIN_KINDS = [
   'post_mortem',
   'weekly_update',
   'agent_run_summary',
+  'hypothesis',
+  'note',
 ] as const;
 
 const CreateBrainEntry = z.object({
@@ -24,6 +28,10 @@ const CreateBrainEntry = z.object({
   body: z.string().min(1).max(20_000),
   tags: z.array(z.string().max(64)).max(20).optional(),
   relatedSymbols: z.array(z.string().max(16)).max(50).optional(),
+  category: z
+    .enum(['principle', 'playbook', 'reference', 'memory', 'hypothesis', 'note'])
+    .optional(),
+  confidence: z.enum(['canonical', 'high', 'medium', 'low']).optional(),
 });
 
 export async function GET(req: Request) {
@@ -57,10 +65,22 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
     }
     const { kind, title, body, tags, relatedSymbols } = parsed.data;
+    // If the user supplied category/confidence explicitly, trust them.
+    // Otherwise derive from the kind's canonical mapping so the row
+    // lands in the correct bucket without forcing the client to know
+    // the taxonomy.
+    const fallback = BRAIN_KIND_TAXONOMY[kind] ?? {
+      category: 'note' as const,
+      confidence: 'medium' as const,
+    };
+    const category = parsed.data.category ?? fallback.category;
+    const confidence = parsed.data.confidence ?? fallback.confidence;
     const entry = await prisma.brainEntry.create({
       data: {
         userId: user.id,
         kind,
+        category,
+        confidence,
         title,
         body,
         tags: tags ?? [],

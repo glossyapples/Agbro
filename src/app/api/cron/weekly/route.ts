@@ -134,6 +134,8 @@ Return plain markdown. No preamble.`;
           data: {
             userId: user.id,
             kind: 'weekly_update',
+            category: 'memory',
+            confidence: 'medium',
             title: `Weekly update — ${new Date().toISOString().slice(0, 10)}`,
             body: text,
             tags: ['weekly'],

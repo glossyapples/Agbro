@@ -25,6 +25,7 @@ type Summary = {
 type SyncResult = {
   brainEntries: { inserted: number; updated: number; unchanged: number; total: number };
   strategies: { inserted: number; updated: number; unchanged: number; total: number };
+  backfilled?: number;
 };
 
 export function BrainSeedButton({
@@ -124,7 +125,8 @@ export function BrainSeedButton({
 function summarize(r: SyncResult): string {
   const brainChanges = r.brainEntries.inserted + r.brainEntries.updated;
   const stratChanges = r.strategies.inserted + r.strategies.updated;
-  if (brainChanges === 0 && stratChanges === 0) {
+  const backfilled = r.backfilled ?? 0;
+  if (brainChanges === 0 && stratChanges === 0 && backfilled === 0) {
     return '✓ Already up to date.';
   }
   const parts: string[] = [];
@@ -133,5 +135,6 @@ function summarize(r: SyncResult): string {
   if (stratChanges > 0) {
     parts.push(`${stratChanges} ${stratChanges === 1 ? 'strategy' : 'strategies'}`);
   }
+  if (backfilled > 0) parts.push(`${backfilled} re-labelled`);
   return `✓ ${parts.join(' · ')}`;
 }

@@ -221,8 +221,19 @@ export async function runMeeting(params: {
 async function buildBriefing(userId: string, agendaOverride?: string) {
   const sevenDaysAgo = new Date(Date.now() - 7 * 86_400_000);
 
-  const [account, activeStrategy, recentTrades, recentRuns, brainEntries, regime, positions, priorMeeting, openActionItems, cryptoConfig] =
-    await Promise.all([
+  const [
+    account,
+    activeStrategy,
+    recentTrades,
+    recentRuns,
+    brainDoctrine,
+    brainRecent,
+    regime,
+    positions,
+    priorMeeting,
+    openActionItems,
+    cryptoConfig,
+  ] = await Promise.all([
       prisma.account.findUnique({ where: { userId } }),
       prisma.strategy.findFirst({ where: { userId, isActive: true } }),
       prisma.trade.findMany({
@@ -236,11 +247,49 @@ async function buildBriefing(userId: string, agendaOverride?: string) {
         take: 30,
         select: { startedAt: true, decision: true, summary: true, status: true, costUsd: true },
       }),
+      // Brain split into two slices so the partners reason from doctrine
+      // AND recent experience, not just the noisy last-7-days memory:
+      //   (1) canonical doctrine — principles + firm charter — always
+      //       in the briefing, bounded tight so it doesn't swamp the
+      //       budget.
+      //   (2) recent memory — last 7 days of run summaries, post-mortems,
+      //       weekly updates, lessons — the concrete things to discuss.
+      // Both skip superseded entries so contradictions don't leak in.
       prisma.brainEntry.findMany({
-        where: { userId, createdAt: { gte: sevenDaysAgo } },
+        where: {
+          userId,
+          supersededById: null,
+          category: { in: ['principle', 'playbook'] },
+          confidence: { in: ['canonical', 'high'] },
+        },
+        orderBy: [{ confidence: 'asc' }, { updatedAt: 'desc' }],
+        take: 12,
+        select: {
+          kind: true,
+          category: true,
+          confidence: true,
+          title: true,
+          body: true,
+          createdAt: true,
+        },
+      }),
+      prisma.brainEntry.findMany({
+        where: {
+          userId,
+          supersededById: null,
+          category: { in: ['memory', 'hypothesis'] },
+          createdAt: { gte: sevenDaysAgo },
+        },
         orderBy: { createdAt: 'desc' },
         take: 20,
-        select: { kind: true, title: true, body: true, createdAt: true },
+        select: {
+          kind: true,
+          category: true,
+          confidence: true,
+          title: true,
+          body: true,
+          createdAt: true,
+        },
       }),
       getCurrentRegime().catch(() => null),
       prisma.position.findMany({ where: { userId } }),
@@ -368,13 +417,34 @@ async function buildBriefing(userId: string, agendaOverride?: string) {
       costUsd: r.costUsd,
       summary: r.summary?.slice(0, 240),
     })),
-    pastWeekBrainEntries: (brainEntries as Array<{
+    // Doctrine: principles + playbooks the partners should always
+    // reason from. Shorter body slice — these are reminders, not
+    // refreshers. Agents read the full versions via read_brain.
+    brainDoctrine: (brainDoctrine as Array<{
       kind: string;
+      category: string;
+      confidence: string;
       title: string;
       body: string;
       createdAt: Date;
     }>).map((e) => ({
       kind: e.kind,
+      category: e.category,
+      confidence: e.confidence,
+      title: e.title,
+      body: e.body.slice(0, 300),
+    })),
+    pastWeekBrainEntries: (brainRecent as Array<{
+      kind: string;
+      category: string;
+      confidence: string;
+      title: string;
+      body: string;
+      createdAt: Date;
+    }>).map((e) => ({
+      kind: e.kind,
+      category: e.category,
+      confidence: e.confidence,
       title: e.title,
       body: e.body.slice(0, 800),
       at: e.createdAt.toISOString(),

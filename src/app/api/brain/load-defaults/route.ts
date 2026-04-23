@@ -5,7 +5,7 @@
 import { NextResponse } from 'next/server';
 import { revalidatePath } from 'next/cache';
 import { apiError, requireUser } from '@/lib/api';
-import { seedBrainForUser } from '@/lib/brain/seed-brain';
+import { seedBrainForUser, backfillBrainTaxonomy } from '@/lib/brain/seed-brain';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -16,12 +16,18 @@ export async function POST() {
 
   try {
     const result = await seedBrainForUser(user.id);
+    // After the schema added category + confidence with memory/medium
+    // defaults, any pre-existing hand-written entries whose kind
+    // unambiguously belongs elsewhere get re-labelled. Seed upserts
+    // cover the canonical 30+ rows; this catches the rest.
+    const backfilled = await backfillBrainTaxonomy(user.id);
     revalidatePath('/brain');
     revalidatePath('/strategy');
     return NextResponse.json({
       ok: true,
       brainEntries: result.brainEntries,
       strategies: result.strategies,
+      backfilled,
       summary: result.summary,
     });
   } catch (err) {

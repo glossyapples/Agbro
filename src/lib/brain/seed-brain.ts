@@ -12,6 +12,7 @@ import {
   STARTER_BRAIN_SUMMARY,
   STARTER_BRAIN_MARKER_SLUG,
 } from './starter-library';
+import { BRAIN_KIND_TAXONOMY } from './taxonomy';
 
 function brainRowId(userId: string, kind: string, slug: string): string {
   return `${userId}-seed-brain-${kind}-${slug}`;
@@ -48,9 +49,26 @@ export async function seedBrainForUser(userId: string): Promise<SeedBrainResult>
 
   for (const entry of STARTER_BRAIN) {
     const id = brainRowId(userId, entry.kind, entry.slug);
+    const taxonomy = BRAIN_KIND_TAXONOMY[entry.kind] ?? {
+      category: 'reference' as const,
+      confidence: 'high' as const,
+    };
+    const category = entry.category ?? taxonomy.category;
+    const confidence = entry.confidence ?? taxonomy.confidence;
+    // Stable library key independent of userId — lets us recognise the
+    // same canonical entry across users and library versions without
+    // depending on the row id's user prefix.
+    const seedKey = `${entry.kind}:${entry.slug}`;
     const existing = await prisma.brainEntry.findUnique({
       where: { id },
-      select: { title: true, body: true, tags: true },
+      select: {
+        title: true,
+        body: true,
+        tags: true,
+        category: true,
+        confidence: true,
+        seedKey: true,
+      },
     });
     await prisma.brainEntry.upsert({
       where: { id },
@@ -58,17 +76,24 @@ export async function seedBrainForUser(userId: string): Promise<SeedBrainResult>
         id,
         userId,
         kind: entry.kind,
+        category,
+        confidence,
+        seedKey,
         title: entry.title,
         body: entry.body,
         tags: entry.tags,
         relatedSymbols: [],
       },
       update: {
-        // Deliberately do NOT reset userId/kind/id — just refresh content so
-        // library improvements flow to existing users on the next seed run.
+        // Deliberately do NOT reset userId/kind/id — just refresh content
+        // + taxonomy so library improvements flow to existing users on
+        // the next seed run.
         title: entry.title,
         body: entry.body,
         tags: entry.tags,
+        category,
+        confidence,
+        seedKey,
       },
     });
     if (!existing) {
@@ -76,7 +101,10 @@ export async function seedBrainForUser(userId: string): Promise<SeedBrainResult>
     } else if (
       existing.title !== entry.title ||
       existing.body !== entry.body ||
-      existing.tags.join('|') !== entry.tags.join('|')
+      existing.tags.join('|') !== entry.tags.join('|') ||
+      existing.category !== category ||
+      existing.confidence !== confidence ||
+      existing.seedKey !== seedKey
     ) {
       brainUpdated += 1;
     } else {
@@ -176,3 +204,33 @@ export async function isBrainSeeded(userId: string): Promise<boolean> {
 }
 
 export { STARTER_BRAIN_SUMMARY };
+
+// One-shot taxonomy backfill. After the schema added category +
+// confidence with defaults of memory/medium, any pre-existing row whose
+// kind unambiguously belongs to a different bucket (principle,
+// checklist, pitfall, crisis_playbook, sector_primer, case_study) is
+// sitting on the wrong label. The seed re-sync fixes the 30+ canonical
+// rows; this helper catches hand-written or legacy entries the user may
+// have with a matching kind. Safe to run on every sync — it only
+// touches rows whose category is still the default AND whose kind has
+// a non-default mapping.
+export async function backfillBrainTaxonomy(userId: string): Promise<number> {
+  const rows = await prisma.brainEntry.findMany({
+    where: { userId, category: 'memory' },
+    select: { id: true, kind: true },
+  });
+  let fixed = 0;
+  for (const row of rows) {
+    const taxonomy = BRAIN_KIND_TAXONOMY[row.kind];
+    if (!taxonomy || taxonomy.category === 'memory') continue;
+    await prisma.brainEntry.update({
+      where: { id: row.id },
+      data: {
+        category: taxonomy.category,
+        confidence: taxonomy.confidence,
+      },
+    });
+    fixed += 1;
+  }
+  return fixed;
+}

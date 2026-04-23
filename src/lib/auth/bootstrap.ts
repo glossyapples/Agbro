@@ -58,6 +58,9 @@ export async function bootstrapNewUser(userId: string): Promise<void> {
       data: {
         userId,
         kind: 'principle',
+        category: 'principle',
+        confidence: 'canonical',
+        seedKey: 'principle:day-0-charter',
         title: 'Day 0 — The Charter',
         body:
           'AgBro exists to preserve principal first, and grow it second. ' +

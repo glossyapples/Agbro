@@ -78,16 +78,35 @@ export const TOOL_DEFS: Anthropic.Tool[] = [
   {
     name: 'read_brain',
     description:
-      "Fetch brain entries. ALWAYS pass `kinds` — pulling everything is wasteful.\n\n" +
+      "Fetch brain entries. ALWAYS filter — pulling everything is wasteful.\n\n" +
+      "Brain is organised on two axes:\n" +
+      "  category: principle | playbook | reference | memory | hypothesis | note\n" +
+      "  confidence: canonical | high | medium | low\n\n" +
+      "You can also filter by the finer-grained `kinds` label (e.g. `checklist` inside category=playbook).\n\n" +
       "Recommended usage by phase:\n" +
-      "  - At wake-up (orient): kinds=[\"principle\",\"pitfall\",\"weekly_update\",\"agent_run_summary\"] — the rules, the biases to resist, and where the last agent left off.\n" +
-      "  - Before researching a candidate: kinds=[\"sector_primer\",\"case_study\"] — what 'good' looks like in this sector + any historical pattern match. Optionally include \"lesson\".\n" +
-      "  - Before a trade: kinds=[\"checklist\"] (esp. pre-trade) + any symbol-scoped post_mortem.\n" +
-      "  - For retros / summaries: kinds=[\"post_mortem\",\"weekly_update\"].\n\n" +
-      "Available kinds: principle, checklist, pitfall, sector_primer, case_study, lesson, market_memo, post_mortem, weekly_update, agent_run_summary. Default limit=20.",
+      "  - At wake-up (orient): categories=[\"principle\",\"playbook\"] + kinds=[\"weekly_update\",\"agent_run_summary\"] — the rules + where the last agent left off.\n" +
+      "  - Before researching a candidate: categories=[\"reference\"] — sector primers + case studies for pattern-match.\n" +
+      "  - Before a trade: kinds=[\"checklist\"] + any symbol-scoped post_mortem (categories=[\"memory\"], filter by tag/symbol client-side).\n" +
+      "  - In a crisis: kinds=[\"crisis_playbook\"] — the 5 historical case studies.\n" +
+      "  - Auditing a past call: categories=[\"memory\"], includeSuperseded=true.\n\n" +
+      "Superseded entries are hidden by default (replaced by a corrected version). Pass includeSuperseded=true only when explicitly auditing history. Default limit=20.",
     input_schema: {
       type: 'object',
       properties: {
+        categories: {
+          type: 'array',
+          items: {
+            type: 'string',
+            enum: ['principle', 'playbook', 'reference', 'memory', 'hypothesis', 'note'],
+          },
+        },
+        confidence: {
+          type: 'array',
+          items: {
+            type: 'string',
+            enum: ['canonical', 'high', 'medium', 'low'],
+          },
+        },
         kinds: {
           type: 'array',
           items: {
@@ -96,6 +115,7 @@ export const TOOL_DEFS: Anthropic.Tool[] = [
               'principle',
               'checklist',
               'pitfall',
+              'crisis_playbook',
               'sector_primer',
               'case_study',
               'lesson',
@@ -103,12 +123,61 @@ export const TOOL_DEFS: Anthropic.Tool[] = [
               'post_mortem',
               'weekly_update',
               'agent_run_summary',
+              'hypothesis',
+              'note',
             ],
           },
         },
+        tags: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional tag filter — rows must have ALL listed tags.',
+        },
+        includeSuperseded: { type: 'boolean' },
         limit: { type: 'number' },
       },
       required: [],
+    },
+  },
+  {
+    name: 'write_brain',
+    description:
+      "Record a NEW brain entry so the next agent benefits. Use for lessons, post-mortems, market memos, hypotheses, or corrections.\n\n" +
+      "Fields:\n" +
+      "  category — principle | playbook | reference | memory | hypothesis | note. Agents write `memory` or `hypothesis`. NEVER `principle` (reserved for firm doctrine).\n" +
+      "  confidence — high | medium | low. Default medium. Only claim high for a lesson you've seen confirmed multiple times.\n" +
+      "  kind — finer label: lesson | post_mortem | market_memo | hypothesis | weekly_update.\n" +
+      "  supersedesId — (optional) if this entry CORRECTS a prior entry that turned out wrong, pass its id. The old entry is kept for audit but hidden from default reads.\n" +
+      "  tags + relatedSymbols — keep these consistent so future agents can find them.\n\n" +
+      "Do NOT call write_brain at the END of the run for the run summary — finalize_run records that automatically. Use this during the run for in-flight observations you want the NEXT agent to inherit (e.g. 'AAPL buyback thesis looks weaker after Q2 — revisit next quarter').",
+    input_schema: {
+      type: 'object',
+      properties: {
+        category: {
+          type: 'string',
+          enum: ['memory', 'hypothesis', 'note'],
+        },
+        confidence: {
+          type: 'string',
+          enum: ['high', 'medium', 'low'],
+        },
+        kind: {
+          type: 'string',
+          enum: [
+            'lesson',
+            'post_mortem',
+            'market_memo',
+            'hypothesis',
+            'weekly_update',
+          ],
+        },
+        title: { type: 'string' },
+        body: { type: 'string' },
+        tags: { type: 'array', items: { type: 'string' } },
+        relatedSymbols: { type: 'array', items: { type: 'string' } },
+        supersedesId: { type: 'string' },
+      },
+      required: ['kind', 'title', 'body'],
     },
   },
   {
@@ -404,12 +473,43 @@ export async function runTool(
     case 'read_brain': {
       const limit = typeof input.limit === 'number' ? input.limit : 20;
       const kinds = Array.isArray(input.kinds) ? (input.kinds as string[]) : undefined;
+      const categories = Array.isArray(input.categories)
+        ? (input.categories as Array<
+            'principle' | 'playbook' | 'reference' | 'memory' | 'hypothesis' | 'note'
+          >)
+        : undefined;
+      const confidence = Array.isArray(input.confidence)
+        ? (input.confidence as Array<'canonical' | 'high' | 'medium' | 'low'>)
+        : undefined;
+      const tags = Array.isArray(input.tags) ? (input.tags as string[]) : undefined;
+      const includeSuperseded = input.includeSuperseded === true;
       return prisma.brainEntry.findMany({
-        where: { userId: ctx.userId, ...(kinds ? { kind: { in: kinds } } : {}) },
+        where: {
+          userId: ctx.userId,
+          ...(kinds ? { kind: { in: kinds } } : {}),
+          ...(categories ? { category: { in: categories } } : {}),
+          ...(confidence ? { confidence: { in: confidence } } : {}),
+          ...(tags && tags.length > 0 ? { tags: { hasEvery: tags } } : {}),
+          ...(includeSuperseded ? {} : { supersededById: null }),
+        },
         orderBy: { createdAt: 'desc' },
         take: limit,
+        select: {
+          id: true,
+          kind: true,
+          category: true,
+          confidence: true,
+          title: true,
+          body: true,
+          tags: true,
+          relatedSymbols: true,
+          supersededById: true,
+          createdAt: true,
+        },
       });
     }
+    case 'write_brain':
+      return writeBrainTool(ctx, input);
     case 'run_analyzer':
       return analyze(input as unknown as AnalyzerInput);
     case 'research_perplexity':
@@ -933,11 +1033,86 @@ async function finalizeRunTool(ctx: ToolContext, input: Record<string, unknown>)
     data: {
       userId: ctx.userId,
       kind: 'agent_run_summary',
+      // Run summaries are "this is what happened" — memory, medium
+      // confidence. Principles get upgraded only via the slow
+      // brain-writer path (weekly cron, or user).
+      category: 'memory',
+      confidence: 'medium',
+      sourceRunId: ctx.agentRunId,
       title: `Agent run ${ctx.agentRunId.slice(0, 8)} — ${decision}`,
       body: summary,
     },
   });
   return { finalized: true };
+}
+
+// In-flight brain write. Called during a run when the agent wants to
+// stash a lesson, post-mortem, or hypothesis for the NEXT agent to
+// pick up. finalize_run covers the overall run summary; this is for
+// specific durable observations the agent wants to persist separately.
+async function writeBrainTool(ctx: ToolContext, input: Record<string, unknown>) {
+  const kind = String(input.kind);
+  const title = String(input.title).slice(0, 240);
+  const body = String(input.body).slice(0, 8_000);
+  if (!title || !body) {
+    throw new Error('write_brain: title and body are required');
+  }
+  // Map category/confidence, falling back to the legacy-kind taxonomy
+  // if the agent supplied only `kind`. Agents are NEVER allowed to
+  // write `principle` or `canonical` — those are reserved for the
+  // seeded firm charter.
+  const { BRAIN_KIND_TAXONOMY, DEFAULT_AGENT_TAXONOMY } = await import(
+    '@/lib/brain/taxonomy'
+  );
+  const fallback = BRAIN_KIND_TAXONOMY[kind] ?? DEFAULT_AGENT_TAXONOMY;
+  let category = (input.category as string | undefined) ?? fallback.category;
+  let confidence =
+    (input.confidence as string | undefined) ?? fallback.confidence;
+  if (category === 'principle') category = 'memory';
+  if (confidence === 'canonical') confidence = 'high';
+  // Supersession: if the agent is correcting a prior entry, mark the
+  // old one superseded so default reads skip it. Scope to this user so
+  // an agent can't accidentally (or maliciously) touch someone else's
+  // memory.
+  const supersedesId =
+    typeof input.supersedesId === 'string' ? input.supersedesId : undefined;
+  const entry = await prisma.brainEntry.create({
+    data: {
+      userId: ctx.userId,
+      kind,
+      category: category as
+        | 'principle'
+        | 'playbook'
+        | 'reference'
+        | 'memory'
+        | 'hypothesis'
+        | 'note',
+      confidence: confidence as 'canonical' | 'high' | 'medium' | 'low',
+      title,
+      body,
+      tags: Array.isArray(input.tags) ? (input.tags as string[]).slice(0, 20) : [],
+      relatedSymbols: Array.isArray(input.relatedSymbols)
+        ? (input.relatedSymbols as string[]).map((s) => s.toUpperCase()).slice(0, 20)
+        : [],
+      sourceRunId: ctx.agentRunId,
+    },
+  });
+  if (supersedesId) {
+    // Only supersede a row owned by the same user. Silent no-op on
+    // mismatch — we don't want the agent's hallucinated ids to error
+    // out the tool call.
+    await prisma.brainEntry.updateMany({
+      where: { id: supersedesId, userId: ctx.userId },
+      data: { supersededById: entry.id },
+    });
+  }
+  return {
+    id: entry.id,
+    kind: entry.kind,
+    category: entry.category,
+    confidence: entry.confidence,
+    supersededPriorEntry: !!supersedesId,
+  };
 }
 
 // ─── Thesis review acknowledgement ───────────────────────────────────────

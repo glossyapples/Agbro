@@ -370,6 +370,7 @@ model AgentRun {
   trades        Trade[]
   decisions     AgentDecision[]
   researchNotes ResearchNote[]
+  brainEntries  BrainEntry[]
 
   @@index([userId, startedAt])
 }
@@ -403,15 +404,60 @@ model ResearchNote {
 
 // -------------------- Company "Brain" --------------------
 
+// Brain entries are the firm's long-term memory. Organised on two axes:
+//   category — what kind of knowledge this is (doctrine, procedure,
+//              reference material, lived experience, active test, note)
+//   confidence — how much weight the agent should give it
+// Plus supersession (replace a wrong lesson with a corrected one) and
+// provenance (which agent run or meeting produced it). See
+// src/lib/brain/taxonomy.ts for the human-readable explanation that
+// drives the agent prompt + UI badges.
+
+enum BrainCategory {
+  principle    // immutable doctrine — Buffett rules, firm charter
+  playbook     // reusable procedures — checklists, crisis playbooks, pitfalls-to-avoid
+  reference    // domain knowledge — sector primers, case studies
+  memory       // our lived experience — run summaries, post-mortems, weekly updates, lessons
+  hypothesis   // active bets on unknown truths — theories under test
+  note         // user-written freeform
+}
+
+enum BrainConfidence {
+  canonical    // axiomatic — never changes (Buffett rules, charter)
+  high         // well-established, battle-tested
+  medium       // working theory or recent observation (agent default)
+  low          // hunch, unverified
+}
+
 model BrainEntry {
   id        String   @id @default(cuid())
   userId    String
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  kind      String   // "weekly_update" | "post_mortem" | "lesson" | "principle" | "market_memo"
+  // Retained for back-compat. Kind is a finer-grained label inside
+  // category (e.g. category=playbook, kind=checklist vs crisis_playbook).
+  kind      String
+  category   BrainCategory   @default(memory)
+  confidence BrainConfidence @default(medium)
   title     String
   body      String   @db.Text
   tags      String[] @default([])
   relatedSymbols String[] @default([])
+  // Supersession — when a lesson turns out wrong or outdated, write a
+  // new entry and point the old one's supersededById at it. read_brain
+  // filters superseded entries out by default so the agent doesn't pull
+  // contradictory memories.
+  supersededById String?
+  supersededBy   BrainEntry?  @relation("BrainSupersession", fields: [supersededById], references: [id], onDelete: SetNull)
+  supersedes     BrainEntry[] @relation("BrainSupersession")
+  // Provenance — which run or meeting created this entry. Null for
+  // seeded and user-created rows.
+  sourceRunId     String?
+  sourceRun       AgentRun? @relation(fields: [sourceRunId], references: [id], onDelete: SetNull)
+  sourceMeetingId String?
+  sourceMeeting   Meeting?  @relation(fields: [sourceMeetingId], references: [id], onDelete: SetNull)
+  // Canonical library key — stable across STARTER_BRAIN_VERSION bumps
+  // so sync can upsert by key. Null for non-seed entries.
+  seedKey   String?
   createdAt DateTime @default(now())
   // Tracked so the /brain page can show "last synced X ago" for starter
   // entries. Prisma auto-bumps on any field change via @updatedAt.
@@ -420,7 +466,13 @@ model BrainEntry {
   updatedAt DateTime @default(now()) @updatedAt
 
   @@index([userId, createdAt])
+  @@index([userId, category])
+  @@index([userId, confidence])
   @@index([kind])
+  @@index([supersededById])
+  @@index([sourceRunId])
+  @@index([sourceMeetingId])
+  @@index([userId, seedKey])
 }
 
 model UserNote {
@@ -770,6 +822,7 @@ model Meeting {
 
   actionItems   MeetingActionItem[]
   policyChanges PolicyChange[]
+  brainEntries  BrainEntry[]
 
   @@index([userId, startedAt])
 }
