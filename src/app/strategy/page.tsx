@@ -2,26 +2,80 @@ import Link from 'next/link';
 import { prisma } from '@/lib/db';
 import { requirePageUser } from '@/lib/auth';
 import { LocalTime } from '@/components/LocalTime';
+import { MeetingControls } from '@/components/MeetingControls';
+import { MeetingCard } from '@/components/MeetingCard';
+import { ActionItemsList } from '@/components/ActionItemsList';
 
-export default async function StrategyIndex() {
+export const dynamic = 'force-dynamic';
+
+type Tab = 'strategy' | 'meetings' | 'backtesting';
+
+export default async function StrategyIndex({
+  searchParams,
+}: {
+  searchParams: { tab?: string };
+}) {
   const user = await requirePageUser('/strategy');
-  const strategies = await prisma.strategy.findMany({
-    where: { userId: user.id },
-    orderBy: [{ isActive: 'desc' }, { createdAt: 'desc' }],
-  });
+  const tab: Tab = searchParams.tab === 'meetings'
+    ? 'meetings'
+    : searchParams.tab === 'backtesting'
+      ? 'backtesting'
+      : 'strategy';
 
   return (
     <div className="flex flex-col gap-4 p-4">
-      <header className="flex items-center justify-between pt-2">
-        <div>
-          <h1 className="text-2xl font-semibold">Strategy</h1>
-          <p className="text-xs text-ink-400">Current + historical strategies. Compare, edit, collaborate.</p>
-        </div>
-        <Link href="/backtest" className="text-xs text-brand-400">
-          Backtest →
-        </Link>
+      <header className="pt-2">
+        <h1 className="text-2xl font-semibold">Strategy</h1>
+        <p className="text-xs text-ink-400">
+          Current strategies, executive meetings, and historical backtests.
+        </p>
       </header>
 
+      <Tabs active={tab} />
+
+      {tab === 'strategy' && <StrategyTab userId={user.id} />}
+      {tab === 'meetings' && <MeetingsTab userId={user.id} />}
+      {tab === 'backtesting' && <BacktestingTab />}
+    </div>
+  );
+}
+
+function Tabs({ active }: { active: Tab }) {
+  const tabs: Array<{ key: Tab; label: string }> = [
+    { key: 'strategy', label: 'Strategy' },
+    { key: 'meetings', label: 'Meetings' },
+    { key: 'backtesting', label: 'Back-testing' },
+  ];
+  return (
+    <nav className="flex gap-1 border-b border-ink-700/60">
+      {tabs.map((t) => {
+        const isActive = t.key === active;
+        return (
+          <Link
+            key={t.key}
+            href={`/strategy${t.key === 'strategy' ? '' : `?tab=${t.key}`}`}
+            className={`relative px-3 py-2 text-sm transition-colors ${
+              isActive ? 'text-ink-50' : 'text-ink-400 hover:text-ink-200'
+            }`}
+          >
+            {t.label}
+            {isActive && (
+              <span className="absolute inset-x-0 -bottom-px h-0.5 bg-brand-400" />
+            )}
+          </Link>
+        );
+      })}
+    </nav>
+  );
+}
+
+async function StrategyTab({ userId }: { userId: string }) {
+  const strategies = await prisma.strategy.findMany({
+    where: { userId },
+    orderBy: [{ isActive: 'desc' }, { createdAt: 'desc' }],
+  });
+  return (
+    <>
       <ul className="flex flex-col gap-3">
         {strategies.map((s) => (
           <li key={s.id} className="card">
@@ -31,17 +85,26 @@ export default async function StrategyIndex() {
                   {s.name} <span className="text-ink-400">v{s.version}</span>
                 </p>
                 <p className="text-[11px] text-ink-400">
-                  Buffett-fit: {s.buffettScore}/100 · Updated <LocalTime value={s.updatedAt} format="date" />
+                  Buffett-fit: {s.buffettScore}/100 · Updated{' '}
+                  <LocalTime value={s.updatedAt} format="date" />
                 </p>
               </div>
-              {s.isActive ? <span className="pill-good">Active</span> : <span className="pill">Archived</span>}
+              {s.isActive ? (
+                <span className="pill-good">Active</span>
+              ) : (
+                <span className="pill">Archived</span>
+              )}
             </div>
             <p className="mt-2 text-sm text-ink-200 line-clamp-3">{s.summary}</p>
             <div className="mt-3 flex gap-2">
-              <Link href={`/strategy/${s.id}`} className="btn-secondary">Open wizard</Link>
+              <Link href={`/strategy/${s.id}`} className="btn-secondary">
+                Open wizard
+              </Link>
               {!s.isActive && (
                 <form action={`/api/strategy/${s.id}/activate`} method="POST">
-                  <button type="submit" className="btn-ghost">Activate</button>
+                  <button type="submit" className="btn-ghost">
+                    Activate
+                  </button>
                 </form>
               )}
             </div>
@@ -58,6 +121,131 @@ export default async function StrategyIndex() {
       <Link href="/watchlist" className="card text-center text-sm text-brand-400">
         Manage watchlist →
       </Link>
-    </div>
+    </>
+  );
+}
+
+async function MeetingsTab({ userId }: { userId: string }) {
+  const [meetings, openItems] = await Promise.all([
+    prisma.meeting.findMany({
+      where: { userId },
+      orderBy: { startedAt: 'desc' },
+      take: 20,
+      include: {
+        actionItems: {
+          orderBy: { createdAt: 'desc' },
+        },
+      },
+    }),
+    prisma.meetingActionItem.findMany({
+      where: { userId, status: { in: ['started', 'on_hold', 'blocked'] } },
+      orderBy: { createdAt: 'desc' },
+      include: {
+        meeting: {
+          select: { id: true, startedAt: true, kind: true },
+        },
+      },
+      take: 30,
+    }),
+  ]);
+
+  // Serialize for client components (Date → string, Buffer → string).
+  const serializedItems = openItems.map((i) => ({
+    id: i.id,
+    kind: i.kind,
+    description: i.description,
+    status: i.status,
+    createdAt: i.createdAt.toISOString(),
+    meetingId: i.meeting.id,
+    meetingAt: i.meeting.startedAt.toISOString(),
+  }));
+
+  const serializedMeetings = meetings.map((m) => ({
+    id: m.id,
+    kind: m.kind,
+    status: m.status,
+    startedAt: m.startedAt.toISOString(),
+    completedAt: m.completedAt?.toISOString() ?? null,
+    summary: m.summary,
+    comicUrl: m.comicUrl,
+    costUsd: m.costUsd,
+    errorMessage: m.errorMessage,
+    transcriptJson: m.transcriptJson,
+    actionItemCount: m.actionItems.length,
+    sentiment:
+      (m.transcriptJson as { sentiment?: string } | null)?.sentiment ?? null,
+  }));
+
+  return (
+    <>
+      <MeetingControls />
+
+      <section className="card flex flex-col gap-3">
+        <div>
+          <h2 className="text-sm font-semibold">Action items</h2>
+          <p className="mt-0.5 text-[11px] text-ink-400">
+            Open items from recent meetings. Research items can be forced to
+            execute on the agent&apos;s next wake.
+          </p>
+        </div>
+        <ActionItemsList items={serializedItems} />
+      </section>
+
+      <section className="flex flex-col gap-3">
+        <h2 className="text-sm font-semibold">History</h2>
+        {serializedMeetings.length === 0 ? (
+          <p className="card text-center text-sm text-ink-400">
+            No meetings yet. Run an impromptu one above — or wait for the next
+            scheduled weekly meeting.
+          </p>
+        ) : (
+          <ul className="flex flex-col gap-3">
+            {serializedMeetings.map((m) => (
+              <li key={m.id}>
+                <MeetingCard meeting={m} />
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+    </>
+  );
+}
+
+function BacktestingTab() {
+  return (
+    <section className="card flex flex-col gap-3">
+      <div>
+        <h2 className="text-sm font-semibold">Back-testing</h2>
+        <p className="mt-0.5 text-[11px] text-ink-400">
+          Historical strategy simulations — see how each preset would have
+          performed across real market windows.
+        </p>
+      </div>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <Link
+          href="/backtest"
+          className="card border border-ink-700/60 p-3 text-sm text-ink-100 transition-colors hover:border-brand-500/50"
+        >
+          <p className="font-semibold">Single run</p>
+          <p className="mt-1 text-[11px] text-ink-400">
+            Pick a strategy + date range + universe. Classic or
+            fundamentals-aware mode.
+          </p>
+          <p className="mt-2 text-[11px] text-brand-400">Open →</p>
+        </Link>
+        <Link
+          href="/backtest/grid"
+          className="card border border-ink-700/60 p-3 text-sm text-ink-100 transition-colors hover:border-brand-500/50"
+        >
+          <p className="font-semibold">Robustness grid</p>
+          <p className="mt-1 text-[11px] text-ink-400">
+            Every strategy × every historical window. Overlay chart
+            included. Guards against curve-fitting with held-out windows.
+          </p>
+          <p className="mt-2 text-[11px] text-brand-400">Open →</p>
+        </Link>
+      </div>
+    </section>
   );
 }

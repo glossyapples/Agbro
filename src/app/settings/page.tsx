@@ -4,6 +4,7 @@ import { formatPct, formatUsd } from '@/lib/money';
 import { SettingsForm } from '@/components/SettingsForm';
 import { DepositForm } from '@/components/DepositForm';
 import { SignOutButton } from '@/components/SignOutButton';
+import { CredentialManager } from '@/components/CredentialManager';
 
 export default async function SettingsPage() {
   const user = await requirePageUser('/settings');
@@ -50,6 +51,8 @@ export default async function SettingsPage() {
           maxCryptoAllocationPct: a.maxCryptoAllocationPct,
         }}
       />
+
+      <CredentialManager />
 
       <Link href="/disclaimer" className="card text-center text-sm text-brand-400">
         Read the full disclaimer →

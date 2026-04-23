@@ -39,6 +39,27 @@ model User {
   optionPositions OptionPosition[]
   cryptoConfig  CryptoConfig?
   backtestRuns  BacktestRun[]
+  apiCredentials UserApiCredential[]
+  meetings      Meeting[]
+}
+
+// BYOK — per-user API keys for third-party providers. The raw key is
+// NEVER stored; we encrypt it with AES-256-GCM (key derived from
+// AGBRO_CREDENTIAL_ENCRYPTION_KEY env var) and store only the ciphertext
+// + the last four chars for UI display. Unique on (userId, provider)
+// so saving a new key for the same provider overwrites the old one.
+model UserApiCredential {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider     String   // 'openai' | 'anthropic' | 'perplexity' | future: 'alpaca' etc
+  encryptedKey String   @db.Text
+  lastFour     String   // last 4 chars of the plaintext key, for masked UI display
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([userId, provider])
+  @@index([userId])
 }
 
 // Auth.js: OAuth provider links (used if/when OAuth added; magic-link flow alone doesn't populate this).
@@ -674,4 +695,95 @@ model AuditLog {
   createdAt DateTime @default(now())
 
   @@index([userId, createdAt])
+}
+
+// -------------------- Executive Meetings --------------------
+//
+// Weekly (or impromptu) meetings where "the firm" reviews the past
+// week's trades, market regime, brain entries, and decides next-week
+// priorities. One Claude call plays all the executive roles
+// (Proposer / Skeptic / Validator / Meta) in a single multi-turn
+// conversation → emits structured JSON with transcript + summary +
+// action items + policy changes. Optionally a second step generates
+// a comic-strip visual of the meeting via OpenAI image API using
+// the user's own key.
+
+model Meeting {
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // 'weekly' | 'impromptu' | 'monthly' (future). Users trigger
+  // impromptu ones from the UI; weeklies come from the cron.
+  kind          String   @default("weekly")
+  // Agenda the meeting was given. Mostly the same each week but can
+  // be customised per-run (e.g. an impromptu meeting on a specific topic).
+  agendaJson    Json?
+  // The full meeting output from Claude — transcript (turns by each
+  // executive role), summary, decisions, sentiment. Shape documented
+  // in src/lib/meetings/schema.ts.
+  transcriptJson Json?
+  summary       String?  @db.Text
+  // Comic strip: URL stored remotely (OpenAI images are permanent URLs
+  // but we should eventually mirror to our own storage). scriptJson
+  // captures the screenplay we sent to OpenAI so the user can see the
+  // full creative brief behind the comic.
+  comicUrl      String?  @db.Text
+  comicScriptJson Json?
+  comicCostUsd  Float?
+  costUsd       Float?   // total (meeting LLM + comic script LLM + image)
+  status        String   @default("running") // running | completed | errored
+  errorMessage  String?  @db.Text
+  startedAt     DateTime @default(now())
+  completedAt   DateTime?
+
+  actionItems   MeetingActionItem[]
+  policyChanges PolicyChange[]
+
+  @@index([userId, startedAt])
+}
+
+model MeetingActionItem {
+  id           String   @id @default(cuid())
+  meetingId    String
+  meeting      Meeting  @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  userId       String   // denormalised for direct user queries
+  // What kind of action this is — drives how / whether the agent
+  // picks it up automatically on its next wake.
+  //   'research'           — agent should research this symbol/topic
+  //   'adjust_strategy'    — suggested param tweak, needs user to accept
+  //   'review_position'    — flag a held position for the next evaluator pass
+  //   'wait_for_data'      — agent should wait for earnings / filing / etc
+  //   'note'               — informational; no executor
+  kind         String
+  description  String   @db.Text
+  status       String   @default("started") // started | on_hold | completed | blocked
+  // Link back to agent runs that executed this item (for 'research' etc).
+  executedBy   String?  // AgentRun.id
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  completedAt  DateTime?
+
+  @@index([userId, status])
+  @@index([meetingId])
+}
+
+// Meetings can propose changes to strategy parameters, universes,
+// cadences, etc. Users accept/reject these from the UI; on acceptance
+// the change is applied to the live Strategy / CryptoConfig / Account
+// rows. We keep the before/after so it's reversible.
+model PolicyChange {
+  id           String   @id @default(cuid())
+  meetingId    String
+  meeting      Meeting  @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  userId       String
+  kind         String   // 'strategy_param' | 'crypto_config' | 'account' | 'cadence' | 'universe'
+  targetKey    String   // free-form identifier (e.g. 'strategy.buffett_core.minROE')
+  before       Json?
+  after        Json
+  rationale    String   @db.Text
+  status       String   @default("proposed") // proposed | accepted | rejected | applied
+  decidedAt    DateTime?
+  createdAt    DateTime @default(now())
+
+  @@index([userId, status])
 }

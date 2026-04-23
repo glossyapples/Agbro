@@ -14,6 +14,7 @@ import { prisma } from '@/lib/db';
 import { runAgent, AgentRunInflightError } from '@/lib/agents/orchestrator';
 import { runCryptoCycleAllUsers } from '@/lib/crypto/engine';
 import { detectAndPersistRegime } from '@/lib/data/regime';
+import { runMeeting } from '@/lib/meetings/runner';
 import { log } from '@/lib/logger';
 
 const PER_USER_BUDGET_MS = 90_000;
@@ -196,6 +197,47 @@ export async function runScheduledTick(): Promise<TickResult> {
   const failed = outcomes.filter((o) => 'failed' in o).length;
   const ran = outcomes.filter((o) => 'ran' in o).length;
   const skipped = outcomes.filter((o) => 'skipped' in o).length;
+
+  // Weekly executive meetings. Fires during the Friday afternoon ET
+  // window (16:00-18:00) for any active account that hasn't had a
+  // weekly meeting in the last 6 days. One chance per account per
+  // week; if we miss the window we skip and catch it next week.
+  // (User can still trigger impromptu meetings from the UI.)
+  try {
+    const etHour = Number(
+      new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/New_York',
+        hour: '2-digit',
+        hour12: false,
+      }).format(now)
+    );
+    const isFridayAfternoonET = dow === 'Fri' && etHour >= 16 && etHour < 18;
+    if (isFridayAfternoonET) {
+      const sixDaysAgo = new Date(now.getTime() - 6 * 86_400_000);
+      for (const account of accounts) {
+        const recentMeeting = await prisma.meeting.findFirst({
+          where: {
+            userId: account.userId,
+            kind: 'weekly',
+            startedAt: { gte: sixDaysAgo },
+          },
+          orderBy: { startedAt: 'desc' },
+        });
+        if (recentMeeting) continue;
+        runMeeting({ userId: account.userId, kind: 'weekly' })
+          .then((r) =>
+            log.info('tick.weekly_meeting_done', { userId: account.userId, ...r })
+          )
+          .catch((err) =>
+            log.error('tick.weekly_meeting_failed', err, { userId: account.userId })
+          );
+        // Fire-and-forget: meetings can take 30s+. We don't want to
+        // block the tick on them. The DB row tracks status.
+      }
+    }
+  } catch (err) {
+    log.error('tick.weekly_meeting_gate_failed', err);
+  }
 
   return {
     total: outcomes.length,
