@@ -165,9 +165,9 @@ export function SafetyRailsForm({ initial }: { initial: SafetyRailsInitial }) {
             type="checkbox"
             checked={allowProposals}
             onChange={(e) => setAllowProposals(e.target.checked)}
-            className="mt-0.5 shrink-0"
+            className="mt-0.5 h-4 w-4 shrink-0"
           />
-          <span className="flex flex-col gap-0.5">
+          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
             <span className="font-semibold text-ink-200">
               Allow meeting-proposed setting changes
             </span>
@@ -178,7 +178,7 @@ export function SafetyRailsForm({ initial }: { initial: SafetyRailsInitial }) {
               applied. API keys, identity, and deposits are always
               off-limits regardless.
             </span>
-          </span>
+          </div>
         </label>
       </div>
 
