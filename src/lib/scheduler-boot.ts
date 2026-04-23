@@ -11,6 +11,8 @@
 // route sidesteps the whole problem — the scheduler only ever lives
 // on the Node server, and the build graph proves that at compile time.
 
+import { startScheduler } from './scheduler';
+
 let booted = false;
 
 export function bootSchedulerOnce(): void {
@@ -21,12 +23,10 @@ export function bootSchedulerOnce(): void {
     return;
   }
   console.log('[scheduler-boot] booting scheduler from first /api/health hit');
-  // Dynamic import so the scheduler module (and its Alpaca-dependent
-  // chain) stays out of the cold-start critical path until we
-  // actually need it.
-  void import('./scheduler').then(({ startScheduler }) => {
-    startScheduler();
-  }).catch((err) => {
-    console.error('[scheduler-boot] failed to import scheduler', err);
-  });
+  // Static import is safe here: scheduler.ts itself has no top-level
+  // dependency on the Alpaca SDK — the runner (which transitively
+  // imports Alpaca) is loaded via dynamic import inside tickOnce(),
+  // only after the scheduler is running on the Node server. So the
+  // webpack bundle graph stays clean through compile time.
+  startScheduler();
 }
