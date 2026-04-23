@@ -285,14 +285,16 @@ export function BacktestRunner({ initialRuns }: { initialRuns: Run[] }) {
           </p>
         </div>
 
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-2">
           <p className="text-[11px] text-ink-400">
-            Tier 1 backtest: deterministic rules only (no LLM reasoning).
+            {mode === 'tier1'
+              ? 'Classic: deterministic strategy rules only (rebalance, target-sell, time-stop). No LLM, no fundamentals screen.'
+              : 'Fundamentals-aware: layers EDGAR point-in-time ROE / P/E / D/E screens on top of the deterministic rules.'}
           </p>
           <button
             onClick={run}
             disabled={busy}
-            className={`btn-primary ${busy ? 'cursor-not-allowed opacity-50' : ''}`}
+            className={`btn-primary whitespace-nowrap ${busy ? 'cursor-not-allowed opacity-50' : ''}`}
           >
             {busy ? (
               <span className="flex items-center gap-1.5">
@@ -431,6 +433,9 @@ function SelectedRun({ run }: { run: Run }) {
     <section className="card flex flex-col gap-3">
       <h2 className="text-sm font-semibold">
         Results — {STRATEGY_LABELS[run.strategyKey] ?? run.strategyKey}
+        <span className="ml-2 text-[10px] font-normal text-ink-400">
+          {run.mode === 'tier2' ? 'fundamentals-aware' : 'classic'}
+        </span>
       </h2>
 
       <svg viewBox={viewBox} className="h-32 w-full" preserveAspectRatio="none">

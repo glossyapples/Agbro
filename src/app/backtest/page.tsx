@@ -71,16 +71,22 @@ export default async function BacktestPage() {
         <p className="font-semibold text-ink-100">What this does + doesn&apos;t test</p>
         <ul className="mt-1 list-inside list-disc space-y-0.5">
           <li>
-            <strong>Does test:</strong> rebalance mechanics, target-sell +
-            time-stop exits (Graham), buy-and-hold through crashes, regime
-            detection vs. historical crises, strategy comparison across the
-            same window.
+            <strong>Classic mode:</strong> deterministic strategy rules only —
+            equal-weight day-zero deploy, rebalance on drift, target-sell,
+            time-stop, regime detection. Same path that&apos;s been proven
+            working. No LLM, no fundamentals screen.
           </li>
           <li>
-            <strong>Does not test:</strong> LLM stock-picking quality (too
-            expensive to run Opus historically). Day-zero universe is either
-            an equal-weight of what you supply or Boglehead&apos;s fixed
-            target weights — not the agent&apos;s picks.
+            <strong>Fundamentals-aware mode:</strong> Classic plus a
+            point-in-time EDGAR screen (ROE, P/E, D/E, gross margin, yield) at
+            the decision date — no look-ahead. Symbols with no fundamentals
+            data pass through unscreened (flagged in the audit) so partial
+            coverage doesn&apos;t flatline a run.
+          </li>
+          <li>
+            <strong>Does not test:</strong> LLM stock-picking (too expensive
+            to run Opus historically). Neither mode uses the agent&apos;s
+            picks — day-zero universe is what you supply.
           </li>
           <li>
             <strong>Suggested windows:</strong> 2008-01-01 → 2010-01-01 (GFC),
