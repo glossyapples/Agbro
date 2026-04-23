@@ -1,0 +1,210 @@
+// Scheduled agent tick — the core autonomous loop, extracted so it can be
+// called either via HTTP (/api/cron/tick, for debugging / manual trigger)
+// or directly in-process by the scheduler (src/lib/scheduler.ts).
+//
+// Responsibilities per invocation:
+//   1. Run the crypto cycle for everyone (24/7, self-rate-limits internally).
+//   2. Run the market-regime tripwire (cheap SPY fetch).
+//   3. For every active user: check weekend / trading-hours / cadence
+//      gates; if passed, run the agent with a per-user timeout budget.
+//   4. A regime transition out of "calm" bypasses all gates so the agent
+//      can react immediately.
+
+import { prisma } from '@/lib/db';
+import { runAgent, AgentRunInflightError } from '@/lib/agents/orchestrator';
+import { runCryptoCycleAllUsers } from '@/lib/crypto/engine';
+import { detectAndPersistRegime } from '@/lib/data/regime';
+import { log } from '@/lib/logger';
+
+const PER_USER_BUDGET_MS = 90_000;
+
+export type TickOutcome =
+  | { userId: string; skipped: true; reason: string }
+  | { userId: string; ran: true; agentRunId: string; decision: string | null; status: string }
+  | { userId: string; failed: true; reason: string };
+
+export type TickResult = {
+  total: number;
+  ran: number;
+  skipped: number;
+  failed: number;
+  outcomes: TickOutcome[];
+  crypto: Awaited<ReturnType<typeof runCryptoCycleAllUsers>>;
+  regime: Awaited<ReturnType<typeof detectAndPersistRegime>> | null;
+  regimeChanged: boolean;
+};
+
+function withinTradingHours(now: Date, start: string, end: string): boolean {
+  const fmt = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+  const parts = fmt.formatToParts(now);
+  const hh = parts.find((p) => p.type === 'hour')?.value ?? '00';
+  const mm = parts.find((p) => p.type === 'minute')?.value ?? '00';
+  const current = `${hh}:${mm}`;
+  return current >= start && current <= end;
+}
+
+function isSameEtDay(a: Date, b: Date): boolean {
+  const fmt = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  return fmt.format(a) === fmt.format(b);
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, tag: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${tag} timed out after ${ms}ms`)), ms);
+    promise.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      }
+    );
+  });
+}
+
+export async function runScheduledTick(): Promise<TickResult> {
+  // Crypto runs 24/7 — fire it on every tick regardless of weekend /
+  // market hours. The engine self-rate-limits via
+  // CryptoConfig.dcaCadenceDays so calling it frequently is a no-op
+  // when nothing is due.
+  const cryptoResults = await runCryptoCycleAllUsers().catch((err) => {
+    log.error('tick.crypto_cycle_failed', err);
+    return [] as Awaited<ReturnType<typeof runCryptoCycleAllUsers>>;
+  });
+
+  // Market-regime tripwire. On a transition away from 'calm' we'll
+  // bypass the cadence + market-hours gates below so the agent can't
+  // sleep through a flash crash.
+  const regimeResult = await detectAndPersistRegime().catch((err) => {
+    log.error('tick.regime_detect_failed', err);
+    return null;
+  });
+  const regimeChanged = regimeResult?.changed ?? false;
+  const currentRegime = regimeResult?.assessment.regime ?? 'calm';
+  const forceWakeFromRegime = regimeChanged && currentRegime !== 'calm';
+
+  const now = new Date();
+  const dow = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    weekday: 'short',
+  }).format(now);
+
+  // Weekend short-circuit applies to the stock agent ONLY when the
+  // market regime is calm. A regime transition (e.g. crisis triggered
+  // by Friday's close) MUST wake the agent over the weekend so it can
+  // research before Monday open. Crypto ran above regardless.
+  if ((dow === 'Sat' || dow === 'Sun') && !forceWakeFromRegime) {
+    return {
+      total: 0,
+      ran: 0,
+      skipped: 0,
+      failed: 0,
+      outcomes: [],
+      crypto: cryptoResults,
+      regime: regimeResult,
+      regimeChanged,
+    };
+  }
+
+  const accounts = await prisma.account.findMany({
+    where: { isStopped: false, isPaused: false },
+    include: { user: true },
+  });
+
+  const outcomes: TickOutcome[] = [];
+  for (const account of accounts) {
+    if (
+      !forceWakeFromRegime &&
+      !withinTradingHours(now, account.tradingHoursStart, account.tradingHoursEnd)
+    ) {
+      outcomes.push({ userId: account.userId, skipped: true, reason: 'outside_trading_hours' });
+      continue;
+    }
+    const lastRun = await prisma.agentRun.findFirst({
+      where: { userId: account.userId },
+      orderBy: { startedAt: 'desc' },
+    });
+
+    const lastRunWasToday = lastRun != null && isSameEtDay(lastRun.startedAt, now);
+
+    if (forceWakeFromRegime) {
+      log.info('tick.regime_wake', {
+        userId: account.userId,
+        regime: currentRegime,
+        triggers: regimeResult?.assessment.triggers ?? [],
+      });
+    } else if (lastRun && lastRunWasToday) {
+      const mins = (now.getTime() - lastRun.startedAt.getTime()) / 60_000;
+      if (mins < account.agentCadenceMinutes) {
+        outcomes.push({
+          userId: account.userId,
+          skipped: true,
+          reason: `cadence_not_elapsed:${Math.round(mins)}m`,
+        });
+        continue;
+      }
+    } else if (lastRun) {
+      log.info('tick.market_open_wake', {
+        userId: account.userId,
+        lastRunAt: lastRun.startedAt.toISOString(),
+      });
+    }
+
+    try {
+      const result = await withTimeout(
+        runAgent({ userId: account.userId, trigger: 'schedule' }),
+        PER_USER_BUDGET_MS,
+        `agent(${account.userId})`
+      );
+      outcomes.push({
+        userId: account.userId,
+        ran: true,
+        agentRunId: result.agentRunId,
+        decision: result.decision,
+        status: result.status,
+      });
+    } catch (err) {
+      if (err instanceof AgentRunInflightError) {
+        outcomes.push({
+          userId: account.userId,
+          skipped: true,
+          reason: `inflight:${err.inflightRunId.slice(0, 8)}`,
+        });
+        continue;
+      }
+      log.error('tick.agent_failed', err, { userId: account.userId });
+      outcomes.push({
+        userId: account.userId,
+        failed: true,
+        reason: (err as Error).message.slice(0, 200),
+      });
+    }
+  }
+
+  const failed = outcomes.filter((o) => 'failed' in o).length;
+  const ran = outcomes.filter((o) => 'ran' in o).length;
+  const skipped = outcomes.filter((o) => 'skipped' in o).length;
+
+  return {
+    total: outcomes.length,
+    ran,
+    skipped,
+    failed,
+    outcomes,
+    crypto: cryptoResults,
+    regime: regimeResult,
+    regimeChanged,
+  };
+}

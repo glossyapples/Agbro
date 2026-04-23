@@ -118,33 +118,19 @@ curl -X POST http://localhost:3000/api/agents/run -b cookies.txt
    Note: `db push` will **refuse** destructive schema changes without an
    explicit `--accept-data-loss` flag; if a deploy fails on a rename, you
    need to handle it by hand or switch to `prisma migrate`.
-5. **Schedule the agent** — two pre-built GitHub Actions workflows ship
-   with the repo (`.github/workflows/agent-tick.yml` and
-   `agent-weekly.yml`). The cadence is tuned for the strategy: ~7 real
-   runs per trading day (the outer workflow fires every 30 min during
-   market hours; the app throttles actual runs to your
-   `agentCadenceMinutes` setting) plus one weekly brain writeup on
-   Friday evening. Total API spend: ~$10-15/week on Opus 4.7.
+5. **Scheduling is automatic.** The Next.js server includes an
+   in-process scheduler that wakes the agent every 2 minutes and
+   respects each account's `agentCadenceMinutes`, trading hours, and
+   weekend / regime-transition rules. No GitHub Actions setup, no
+   Railway cron to configure — deploy and it runs. The weekly Brain
+   writeup can still be triggered by Railway cron (`0 22 * * 5` →
+   `POST /api/cron/weekly` with `x-agbro-cron-secret`), or manually
+   from the CLI (`scripts/weekly-brain.ts`).
 
-   To enable, in GitHub → your repo → **Settings**:
-   - **Secrets and variables** → **Actions** → **New repository secret**:
-     `AGBRO_CRON_SECRET` = the same value you set in Railway.
-   - **Secrets and variables** → **Actions** → **Variables** tab →
-     **New repository variable**: `AGBRO_URL` =
-     `https://agbro-production.up.railway.app` (your Railway URL, no
-     trailing slash).
-   - **Actions** tab → enable Actions if this is a freshly-forked repo.
-
-   The workflows will start firing on the next scheduled slot.
-   `workflow_dispatch` is enabled so you can also trigger either
-   manually from the Actions tab to test.
-
-   **If you prefer Railway's own cron** (e.g. the repo is private and
-   you're on the GitHub free tier's scheduled-workflow limits), disable
-   these two workflows in Actions and add in Railway instead:
-   - `0,30 13-20 * * 1-5` → `POST /api/cron/tick`
-   - `0 22 * * 5` → `POST /api/cron/weekly`
-   Each request must include `x-agbro-cron-secret: $AGBRO_CRON_SECRET`.
+   `POST /api/cron/tick` remains available as a manual trigger for
+   debugging / ops (same cron-secret header). Set
+   `AGBRO_DISABLE_SCHEDULER=true` to turn the internal loop off (e.g.
+   during a maintenance window).
 6. **Health check.** Point your uptime monitor at `GET /api/health` (public,
    returns 200 with `{ok:true, db:{ok, latencyMs}}` when healthy, 503 otherwise).
 7. **Sign in.** Visit your URL, `/login`, enter your email. Auth.js emails a
