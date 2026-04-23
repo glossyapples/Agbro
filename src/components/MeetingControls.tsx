@@ -112,6 +112,77 @@ export function MeetingControls() {
         </div>
       )}
       {error && <p className="text-[11px] text-red-300">{error}</p>}
+
+      <ResetHistoryButton />
     </section>
+  );
+}
+
+// Subtle "danger zone" action — wipes all meetings + action items +
+// policy changes for the user so they can start fresh after major
+// prompt / cast changes. Two-step: first click asks for confirmation,
+// second click within 6 seconds actually deletes.
+function ResetHistoryButton() {
+  const router = useRouter();
+  const [armed, setArmed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+
+  async function fire() {
+    setBusy(true);
+    try {
+      const res = await fetch('/api/meetings/history', { method: 'DELETE' });
+      if (res.ok) {
+        const body = (await res.json().catch(() => ({}))) as {
+          meetings?: number;
+          actionItems?: number;
+          policyChanges?: number;
+        };
+        setToast(
+          `Cleared ${body.meetings ?? 0} meetings, ${body.actionItems ?? 0} action items, ${body.policyChanges ?? 0} policy changes.`
+        );
+        setArmed(false);
+        router.refresh();
+        setTimeout(() => setToast(null), 4000);
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="flex items-center gap-2 border-t border-ink-700/40 pt-2">
+      {!armed ? (
+        <button
+          type="button"
+          onClick={() => {
+            setArmed(true);
+            setTimeout(() => setArmed(false), 6000);
+          }}
+          className="text-[10px] text-ink-500 hover:text-red-300"
+        >
+          Reset meeting history…
+        </button>
+      ) : (
+        <>
+          <button
+            type="button"
+            onClick={fire}
+            disabled={busy}
+            className="text-[10px] font-semibold text-red-300 hover:underline"
+          >
+            {busy ? 'Clearing…' : 'Confirm: delete all meetings, items, and proposed changes'}
+          </button>
+          <button
+            type="button"
+            onClick={() => setArmed(false)}
+            className="text-[10px] text-ink-400"
+          >
+            cancel
+          </button>
+        </>
+      )}
+      {toast && <span className="text-[10px] text-brand-300">{toast}</span>}
+    </div>
   );
 }

@@ -201,19 +201,9 @@ async function MeetingsTab({ userId }: { userId: string }) {
     <>
       <MeetingControls />
 
-      <PolicyChangesList proposed={serializedProposed} />
-
-      <section className="card flex flex-col gap-3">
-        <div>
-          <h2 className="text-sm font-semibold">Action items</h2>
-          <p className="mt-0.5 text-[11px] text-ink-400">
-            Open items from recent meetings. Research items can be forced to
-            execute on the agent&apos;s next wake.
-          </p>
-        </div>
-        <ActionItemsList items={serializedItems} />
-      </section>
-
+      {/* Comics + summaries first — it's the thing a user opens the
+          tab to look at. Policy changes + action items live below so
+          scanning the firm's narrative isn't interrupted by chores. */}
       <section className="flex flex-col gap-3">
         <h2 className="text-sm font-semibold">History</h2>
         {serializedMeetings.length === 0 ? (
@@ -230,6 +220,19 @@ async function MeetingsTab({ userId }: { userId: string }) {
             ))}
           </ul>
         )}
+      </section>
+
+      <PolicyChangesList proposed={serializedProposed} />
+
+      <section className="card flex flex-col gap-3">
+        <div>
+          <h2 className="text-sm font-semibold">Action items</h2>
+          <p className="mt-0.5 text-[11px] text-ink-400">
+            Open items from recent meetings. Research items can be forced to
+            execute on the agent&apos;s next wake.
+          </p>
+        </div>
+        <ActionItemsList items={serializedItems} />
       </section>
     </>
   );
