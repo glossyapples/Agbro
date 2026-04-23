@@ -3,6 +3,7 @@ import { prisma } from '@/lib/db';
 import { requirePageUser } from '@/lib/auth';
 import { BACKTEST_WINDOWS } from '@/lib/backtest/windows';
 import { BacktestGrid } from '@/components/BacktestGrid';
+import { StrategyOverlayChart } from '@/components/StrategyOverlayChart';
 
 export const runtime = 'nodejs';
 
@@ -71,6 +72,8 @@ export default async function BacktestGridPage() {
       </section>
 
       <BacktestGrid initialCells={cells} windows={BACKTEST_WINDOWS} />
+
+      <StrategyOverlayChart windows={BACKTEST_WINDOWS} />
     </div>
   );
 }
