@@ -148,14 +148,61 @@ export async function runMeeting(params: {
     });
 
     // Comic generation (opt-in via user's OpenAI key). Fire-and-forget
-    // — a meeting is considered complete even if the comic fails.
-    const openaiKey = await getUserCredential(userId, 'openai').catch(() => null);
+    // — a meeting is considered complete even if the comic fails —
+    // but every failure path persists to meeting.comicError so the UI
+    // can show what went wrong rather than staying stuck in 'no comic'.
+    let openaiKey: string | null = null;
+    try {
+      openaiKey = await getUserCredential(userId, 'openai');
+    } catch (err) {
+      log.warn('meeting.comic_credential_read_failed', {
+        meetingId: meeting.id,
+        userId,
+        err: (err as Error).message,
+      });
+    }
     if (openaiKey) {
-      void import('./comic').then(({ generateMeetingComic }) =>
-        generateMeetingComic({ meetingId: meeting.id, userId, openaiKey }).catch((err) => {
-          log.error('meeting.comic_failed', err, { meetingId: meeting.id });
-        })
-      );
+      log.info('meeting.comic_trigger', { meetingId: meeting.id, userId });
+      const capturedKey = openaiKey;
+      const capturedMeetingId = meeting.id;
+      void (async () => {
+        try {
+          const { generateMeetingComic } = await import('./comic');
+          const result = await generateMeetingComic({
+            meetingId: capturedMeetingId,
+            userId,
+            openaiKey: capturedKey,
+          });
+          log.info('meeting.comic_result', {
+            meetingId: capturedMeetingId,
+            ok: result.ok,
+            costUsd: result.costUsd,
+          });
+        } catch (err) {
+          // Catches import errors, DB errors inside generate, anything
+          // the inner try/catches missed. Persist so the UI surfaces it.
+          log.error('meeting.comic_failed_trigger', err, {
+            meetingId: capturedMeetingId,
+          });
+          await prisma.meeting
+            .update({
+              where: { id: capturedMeetingId },
+              data: {
+                comicError: `trigger: ${(err as Error).message.slice(0, 400)}`,
+              },
+            })
+            .catch(() => {
+              // If even the error-persist fails, at least the log above
+              // captured it — the user will see 'no comic' but no worse.
+            });
+        }
+      })();
+    } else {
+      log.info('meeting.comic_skipped', {
+        meetingId: meeting.id,
+        userId,
+        reason: 'no_openai_key',
+      });
     }
 
     return { meetingId: meeting.id, status: 'completed' };

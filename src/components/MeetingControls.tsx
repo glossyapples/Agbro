@@ -40,7 +40,15 @@ export function MeetingControls() {
       }
       setAgenda('');
       setShowAgenda(false);
+      const payload = (await res.json().catch(() => ({}))) as { meetingId?: string };
       router.refresh();
+      // Comic generation runs fire-and-forget on the server AFTER the
+      // meeting response ships. Poll for comic completion so the card
+      // updates in place instead of the user sitting on "no comic".
+      // Cap at ~2 min to cover a slow OpenAI render.
+      if (payload.meetingId) {
+        pollForComic(payload.meetingId, router);
+      }
     } catch (e) {
       setError(`Network error: ${(e as Error).message.slice(0, 120)}`);
     } finally {
@@ -116,6 +124,45 @@ export function MeetingControls() {
       <ResetHistoryButton />
     </section>
   );
+}
+
+// Polls the comic status endpoint after a meeting run. Stops when the
+// comic lands, errors, or we hit the 2-minute timeout. On resolution
+// fires router.refresh() so the meeting card picks up the new image /
+// error inline — the user doesn't have to reload.
+function pollForComic(meetingId: string, router: ReturnType<typeof useRouter>) {
+  const start = Date.now();
+  const MAX_MS = 120_000;
+  const INTERVAL_MS = 4_000;
+  const poll = async () => {
+    try {
+      const res = await fetch(`/api/meetings/${meetingId}/comic-status`, {
+        cache: 'no-store',
+      });
+      if (!res.ok) return;
+      const body = (await res.json()) as {
+        comicUrl?: string | null;
+        comicError?: string | null;
+      };
+      if (body.comicUrl || body.comicError) {
+        router.refresh();
+        return; // done
+      }
+      if (Date.now() - start > MAX_MS) {
+        // Give up polling — user can hit Generate comic manually if
+        // the fire-and-forget silently died.
+        return;
+      }
+      setTimeout(poll, INTERVAL_MS);
+    } catch {
+      // Network blip — try again next interval.
+      if (Date.now() - start < MAX_MS) {
+        setTimeout(poll, INTERVAL_MS);
+      }
+    }
+  };
+  // First poll after a short delay; comic gen typically takes 15-60s.
+  setTimeout(poll, 8_000);
 }
 
 // Subtle "danger zone" action — wipes all meetings + action items +
