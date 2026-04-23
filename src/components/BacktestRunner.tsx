@@ -437,11 +437,20 @@ function FilterSummary({
 }) {
   if (!eventLog || eventLog.length === 0) return null;
   const passes = eventLog.filter((e) => e.event === 'filter_pass');
+  const passesNoData = eventLog.filter((e) => e.event === 'filter_pass_no_data');
   const rejects = eventLog.filter((e) => e.event === 'filter_reject');
   const ejections = eventLog.filter((e) => e.event === 'filter_rebalance_sell');
-  if (passes.length === 0 && rejects.length === 0 && ejections.length === 0) {
+  if (
+    passes.length === 0 &&
+    passesNoData.length === 0 &&
+    rejects.length === 0 &&
+    ejections.length === 0
+  ) {
     return null;
   }
+  const passesNoDataSyms = Array.from(
+    new Set(passesNoData.map((e) => String(e.details.symbol ?? '')))
+  );
 
   // Collapse per-symbol reject reasons so the UI isn't noisy when the
   // same name fails at every quarterly re-check.
@@ -469,6 +478,11 @@ function FilterSummary({
         <span className="text-brand-300">
           {passes.length} pass{passes.length === 1 ? '' : 'es'}
         </span>
+        {passesNoDataSyms.length > 0 && (
+          <span className="text-ink-300">
+            {passesNoDataSyms.length} pass (no data)
+          </span>
+        )}
         <span className="text-amber-300">
           {rejectsFirstReason.size} day-0 reject
           {rejectsFirstReason.size === 1 ? '' : 's'}
@@ -478,6 +492,12 @@ function FilterSummary({
           {ejectionsFirstReason.size === 1 ? '' : 's'}
         </span>
       </div>
+      {passesNoDataSyms.length > 0 && (
+        <p className="mt-1 text-[10px] text-ink-500">
+          Pipeline couldn&apos;t evaluate: {passesNoDataSyms.join(', ')}.
+          These entered the portfolio unscreened (Tier 1 fallback).
+        </p>
+      )}
       {rejectsFirstReason.size > 0 && (
         <div className="mt-2">
           <p className="text-ink-400">Rejected at day zero:</p>

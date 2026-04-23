@@ -86,16 +86,24 @@ export type FilterResult = {
   pass: boolean;
   reason?: string; // which filter blocked, if any
   fundamentals: PointInTimeFundamentals | null;
+  // True when the symbol passed only because we had no fundamentals at
+  // all to evaluate it against. Caller should surface this distinctly
+  // so the audit shows "passed filter" vs. "pipeline couldn't screen".
+  passedWithoutData?: boolean;
 };
 
 // Apply a strategy's filter spec to a single symbol at a decision date.
-// Returns pass=false if ANY filter is defined and the symbol doesn't
-// meet it, OR if we have no fundamentals for the symbol (fail-safe:
-// unknown fundamentals shouldn't slip through a filter).
 //
-// EXCEPTION: if the filter spec is empty (no rules defined), pass=true
-// regardless of fundamentals — strategies with no filter requirements
-// just hold the whole universe.
+// Fail-safe behaviour (backtest-specific):
+//   - If the filter spec is empty, pass automatically.
+//   - If we have NO fundamentals snapshot at all, pass with
+//     passedWithoutData=true. The symbol enters the book as it would
+//     under Tier 1; the audit trail flags that we couldn't actually
+//     screen it. This is deliberately permissive for backtests: a
+//     partial EDGAR feed shouldn't flatline an entire run. Strict
+//     rejection is the right call for live trading, not historical sim.
+//   - If we have fundamentals BUT a specific required metric is null,
+//     reject (strict on known-bad data).
 export async function evaluateFilter(
   symbol: string,
   decisionDate: Date,
@@ -120,8 +128,9 @@ export async function evaluateFilter(
   if (!f) {
     return {
       symbol,
-      pass: false,
-      reason: 'no fundamentals available at decision date',
+      pass: true,
+      passedWithoutData: true,
+      reason: 'no fundamentals available — passed through as Tier 1',
       fundamentals: null,
     };
   }

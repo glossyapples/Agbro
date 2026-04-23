@@ -52,6 +52,7 @@ export type SimulatorEvent = {
     | 'time_stop_sell'
     | 'regime_transition'
     | 'filter_pass'
+    | 'filter_pass_no_data'
     | 'filter_reject'
     | 'filter_rebalance_sell'
     | 'fundamentals_backfill'
@@ -185,13 +186,14 @@ export async function runSimulation(config: SimulatorConfig): Promise<SimulatorR
         passed.push(sym);
         eventLog.push({
           date: day0,
-          event: 'filter_pass',
+          event: result.passedWithoutData ? 'filter_pass_no_data' : 'filter_pass',
           details: {
             symbol: sym,
             price,
             roe: result.fundamentals?.returnOnEquity?.toFixed(1),
             pe: result.fundamentals?.peRatio?.toFixed(1),
             de: result.fundamentals?.debtToEquity?.toFixed(2),
+            reason: result.passedWithoutData ? result.reason : undefined,
           },
         });
       } else {
@@ -268,7 +270,10 @@ export async function runSimulation(config: SimulatorConfig): Promise<SimulatorR
           const price = symbolPrice(sym, date, symbolBars);
           if (price == null) continue;
           const result = await evaluateFilter(sym, decisionDate, price, filterSpec);
-          if (!result.pass) {
+          // Don't eject a held position just because fundamentals data
+          // went missing — that's a pipeline gap, not a strategy signal.
+          // Only sell on explicit rejects (specific metric out of bounds).
+          if (!result.pass && !result.passedWithoutData) {
             toSell.push({ symbol: sym, qty: pos.qty, price, reason: result.reason ?? 'no longer qualifies' });
           }
         }
