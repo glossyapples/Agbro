@@ -32,6 +32,10 @@ const nextConfig = {
   // server.js`). Dropping to the default server build so `next start
   // -p $PORT` works out of the box on Railway.
   experimental: {
+    // Required in Next 14.x for src/instrumentation.ts to actually run
+    // on server boot. Stable / default-on in Next 15; remove this line
+    // on upgrade. Without it the autonomous agent scheduler never starts.
+    instrumentationHook: true,
     serverComponentsExternalPackages: ['@prisma/client', '@alpacahq/alpaca-trade-api'],
   },
   async headers() {
