@@ -257,22 +257,52 @@ export default async function OverviewPage() {
             </p>
             {(() => {
               // Diagnostic: compute when the next wake is due so the user
-              // can verify cadence is honoured at a glance. "Overdue" only
-              // fires when the lateness exceeds one full cadence cycle —
-              // small overages are normal jitter between the wake ETA and
-              // the next Railway cron tick.
+              // can verify cadence is honoured at a glance. Never show
+              // a past time as "Next wake" — once the ETA passes, reframe
+              // as "due now" (within one cadence cycle) or "overdue by X"
+              // (past that). Saying "Next wake: 25m ago" is confusing
+              // because the literal next wake, by definition, can't be
+              // in the past.
               const cadenceMs = account.agentCadenceMinutes * 60_000;
               const nextWakeMs = new Date(lastRun.startedAt).getTime() + cadenceMs;
-              const overageMs = Date.now() - nextWakeMs;
-              const overdue = overageMs > cadenceMs; // a full cycle late
+              const now = Date.now();
+              const remainingMs = nextWakeMs - now;
+              const overageMs = -remainingMs;
+              const overdue = overageMs > cadenceMs; // more than one full cycle late
+              const pastDue = remainingMs <= 0;
+
+              function formatMs(ms: number): string {
+                const mins = Math.round(ms / 60_000);
+                if (mins < 1) return '<1m';
+                if (mins < 60) return `${mins}m`;
+                const hours = Math.floor(mins / 60);
+                const rem = mins % 60;
+                return rem === 0 ? `${hours}h` : `${hours}h ${rem}m`;
+              }
+
+              let label: React.ReactNode;
+              if (!pastDue) {
+                label = (
+                  <>
+                    Next wake in {formatMs(remainingMs)} ·{' '}
+                    <LocalTime value={nextWakeMs} />
+                  </>
+                );
+              } else if (!overdue) {
+                label = <>Due now (scheduler runs every ~2 min)</>;
+              } else {
+                label = <>Overdue by {formatMs(overageMs)}</>;
+              }
+
               return (
                 <p className={`text-[11px] ${overdue ? 'text-amber-300' : 'text-ink-400'}`}>
-                  Next wake: <LocalTime value={nextWakeMs} format="relative" />
+                  {label}
                   {overdue && (
                     <>
                       {' '}
-                      · overdue — cron may not be firing. Check Railway
-                      schedule + logs for <code>cron.tick.*</code>.
+                      · check <code>/api/scheduler/status</code> — if
+                      tickCount isn&apos;t incrementing, the in-process
+                      scheduler isn&apos;t firing.
                     </>
                   )}
                 </p>
