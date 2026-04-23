@@ -34,10 +34,9 @@ export function middleware(req: NextRequest) {
 }
 
 // Exclude: Auth.js routes, cron routes (secret-gated), health (public liveness),
-// debug-run (TEMPORARY for symmetric re-check verification),
 // Next.js internals, static assets.
 export const config = {
   matcher: [
-    '/((?!api/auth|api/cron|api/health|api/backtest/debug-run|_next/static|_next/image|favicon.ico|manifest.webmanifest|.*\\.(?:png|jpg|jpeg|svg|webp|ico)$).*)',
+    '/((?!api/auth|api/cron|api/health|_next/static|_next/image|favicon.ico|manifest.webmanifest|.*\\.(?:png|jpg|jpeg|svg|webp|ico)$).*)',
   ],
 };
