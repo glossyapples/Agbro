@@ -36,6 +36,14 @@ export default async function BacktestPage() {
       r.equitySeries && Array.isArray(r.equitySeries)
         ? (r.equitySeries as Array<{ t: number; equity: number; benchmark: number }>)
         : null,
+    eventLog:
+      r.eventLog && Array.isArray(r.eventLog)
+        ? (r.eventLog as Array<{
+            date: string;
+            event: string;
+            details: Record<string, unknown>;
+          }>)
+        : null,
     runAt: r.runAt.toISOString(),
     errorMessage: r.errorMessage,
   }));

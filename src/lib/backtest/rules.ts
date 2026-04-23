@@ -30,6 +30,16 @@ export type BacktestRuleset = {
   // Graham's 2-year rule: sell any position held longer than this
   // regardless of outcome.
   timeStopDays?: number;
+  // Tier 2 filters — applied at initial buy and each rebalance. Only
+  // symbols that clear ALL non-null filters as of the decision date
+  // are eligible. Requires StockFundamentalsSnapshot rows to be
+  // populated for the symbol. Matches the live-strategy rule shape
+  // so backtest + paper behaviour stay aligned.
+  minROE?: number;
+  maxPE?: number;
+  maxDE?: number;
+  minGrossMarginPct?: number;
+  minDividendYieldPct?: number;
 };
 
 // Boglehead reference portfolio — used when strategy is Boglehead AND
@@ -44,25 +54,45 @@ const BOGLEHEAD_WEIGHTS: Record<string, number> = {
 export function resolveRuleset(key: StrategyKey): BacktestRuleset {
   switch (key) {
     case 'buffett_core':
+      // Fundamentals-aware buy-and-hold. Filter the universe to names
+      // that meet Buffett Core's live rules at the decision date.
+      return {
+        minROE: 15,
+        maxPE: 22,
+        maxDE: 1.5,
+      };
     case 'quality_compounders':
+      // Stricter bar per the live strategy — wide moat, 20%+ ROE,
+      // accept higher P/E.
+      return {
+        minROE: 20,
+        maxPE: 30,
+        maxDE: 1.5,
+      };
     case 'dividend_growth':
-      // Deterministic buy-and-hold of the caller's universe. No
-      // price-based exits (these schools don't sell on price). No
-      // rebalance (live strategies don't rebalance either — they
-      // hold). Simulator walks the window, exit-framework-lite is
-      // effectively a no-op, metrics reflect market exposure only.
-      return {};
+      // Aristocrats-style bar — moderate ROE, modest leverage, meaningful
+      // yield. The live strategy's 25-year-streak requirement can't be
+      // evaluated from EDGAR alone (requires dividend history data);
+      // we approximate via minDividendYieldPct.
+      return {
+        minROE: 12,
+        maxPE: 25,
+        maxDE: 2,
+        minDividendYieldPct: 2,
+      };
     case 'deep_value_graham':
       // Target sell at +30% from cost, hard time stop at 730 days.
-      // These are the ONLY exit triggers; no rebalance.
+      // Graham-style cheapness filters: low P/E, low leverage.
       return {
         targetSellPct: 30,
         timeStopDays: 730,
+        maxPE: 15,
+        maxDE: 1,
+        minROE: 5,
       };
     case 'boglehead_index':
-      // Quarterly rebalance within 5pt band. No DCA by default in the
-      // backtest (lump-sum on day zero); users can override universe
-      // to point at different symbols if VTI/VXUS/BND history is thin.
+      // Quarterly rebalance within 5pt band. No fundamentals filter —
+      // Boglehead doesn't filter; it holds the market.
       return {
         targetWeights: BOGLEHEAD_WEIGHTS,
         rebalanceBandPct: 5,

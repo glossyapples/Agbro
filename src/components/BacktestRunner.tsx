@@ -35,6 +35,11 @@ type Run = {
   tradeCount: number | null;
   endingEquityCents: string | null;
   equitySeries: Array<{ t: number; equity: number; benchmark: number }> | null;
+  eventLog: Array<{
+    date: string;
+    event: string;
+    details: Record<string, unknown>;
+  }> | null;
   runAt: string;
   errorMessage: string | null;
 };
@@ -137,6 +142,7 @@ export function BacktestRunner({ initialRuns }: { initialRuns: Run[] }) {
       tradeCount: null,
       endingEquityCents: null,
       equitySeries: null,
+      eventLog: null,
       runAt: new Date().toISOString(),
       errorMessage: null,
     };
@@ -415,7 +421,90 @@ function SelectedRun({ run }: { run: Run }) {
         <Stat label="Trades" value={String(run.tradeCount ?? '—')} />
         <Stat label="Universe" value={`${run.universe.length} syms`} />
       </div>
+
+      <FilterSummary eventLog={run.eventLog} />
     </section>
+  );
+}
+
+// Condensed point-in-time filter audit. Shows how many names survived
+// day-zero screening, which ones were cut (with the first reason), and
+// any rebalance-time ejections when fundamentals deteriorated.
+function FilterSummary({
+  eventLog,
+}: {
+  eventLog: Run['eventLog'];
+}) {
+  if (!eventLog || eventLog.length === 0) return null;
+  const passes = eventLog.filter((e) => e.event === 'filter_pass');
+  const rejects = eventLog.filter((e) => e.event === 'filter_reject');
+  const ejections = eventLog.filter((e) => e.event === 'filter_rebalance_sell');
+  if (passes.length === 0 && rejects.length === 0 && ejections.length === 0) {
+    return null;
+  }
+
+  // Collapse per-symbol reject reasons so the UI isn't noisy when the
+  // same name fails at every quarterly re-check.
+  const rejectsFirstReason = new Map<string, string>();
+  for (const e of rejects) {
+    const sym = String(e.details.symbol ?? '');
+    if (!rejectsFirstReason.has(sym)) {
+      rejectsFirstReason.set(sym, String(e.details.reason ?? 'n/a'));
+    }
+  }
+  const ejectionsFirstReason = new Map<string, string>();
+  for (const e of ejections) {
+    const sym = String(e.details.symbol ?? '');
+    if (!ejectionsFirstReason.has(sym)) {
+      ejectionsFirstReason.set(sym, String(e.details.reason ?? 'n/a'));
+    }
+  }
+
+  return (
+    <div className="rounded-md border border-ink-700/60 bg-ink-800/30 p-3 text-[11px]">
+      <p className="font-semibold text-ink-100">
+        Point-in-time filter audit
+      </p>
+      <div className="mt-1 flex flex-wrap gap-3 text-ink-300">
+        <span className="text-brand-300">
+          {passes.length} pass{passes.length === 1 ? '' : 'es'}
+        </span>
+        <span className="text-amber-300">
+          {rejectsFirstReason.size} day-0 reject
+          {rejectsFirstReason.size === 1 ? '' : 's'}
+        </span>
+        <span className="text-red-300">
+          {ejectionsFirstReason.size} rebalance ejection
+          {ejectionsFirstReason.size === 1 ? '' : 's'}
+        </span>
+      </div>
+      {rejectsFirstReason.size > 0 && (
+        <div className="mt-2">
+          <p className="text-ink-400">Rejected at day zero:</p>
+          <ul className="mt-0.5 space-y-0.5">
+            {Array.from(rejectsFirstReason.entries()).map(([sym, reason]) => (
+              <li key={sym} className="text-ink-300">
+                <span className="font-mono font-semibold text-ink-100">{sym}</span>
+                <span className="ml-2 text-ink-400">— {reason}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {ejectionsFirstReason.size > 0 && (
+        <div className="mt-2">
+          <p className="text-ink-400">Ejected mid-run:</p>
+          <ul className="mt-0.5 space-y-0.5">
+            {Array.from(ejectionsFirstReason.entries()).map(([sym, reason]) => (
+              <li key={sym} className="text-ink-300">
+                <span className="font-mono font-semibold text-ink-100">{sym}</span>
+                <span className="ml-2 text-ink-400">— {reason}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
   );
 }
 

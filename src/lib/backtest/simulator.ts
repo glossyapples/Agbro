@@ -26,6 +26,12 @@
 import type { Bar } from '@/lib/alpaca';
 import { loadDailyBars, indexByDate, unionDates } from './data';
 import { resolveRuleset, type StrategyKey, type BacktestRuleset } from './rules';
+import { backfillMany } from './historical-fundamentals';
+import {
+  evaluateFilter,
+  resetPointInTimeCache,
+  type FilterSpec,
+} from './point-in-time';
 
 export type SimulatorConfig = {
   strategyKey: StrategyKey;
@@ -45,9 +51,33 @@ export type SimulatorEvent = {
     | 'target_sell'
     | 'time_stop_sell'
     | 'regime_transition'
+    | 'filter_pass'
+    | 'filter_reject'
+    | 'filter_rebalance_sell'
+    | 'fundamentals_backfill'
     | 'end_of_run';
   details: Record<string, unknown>;
 };
+
+function filterSpecFrom(rules: BacktestRuleset): FilterSpec {
+  return {
+    minROE: rules.minROE,
+    maxPE: rules.maxPE,
+    maxDE: rules.maxDE,
+    minGrossMarginPct: rules.minGrossMarginPct,
+    minDividendYieldPct: rules.minDividendYieldPct,
+  };
+}
+
+function hasAnyFilter(spec: FilterSpec): boolean {
+  return (
+    spec.minROE != null ||
+    spec.maxPE != null ||
+    spec.maxDE != null ||
+    spec.minGrossMarginPct != null ||
+    spec.minDividendYieldPct != null
+  );
+}
 
 export type SimulatorResult = {
   equitySeries: { t: number; equity: number; benchmark: number }[];
@@ -65,8 +95,25 @@ const ONE_DAY_MS = 86_400_000;
 
 export async function runSimulation(config: SimulatorConfig): Promise<SimulatorResult> {
   const rules = resolveRuleset(config.strategyKey);
+  const filterSpec = filterSpecFrom(rules);
+  const filtersActive = hasAnyFilter(filterSpec);
   const startMs = config.startDate.getTime();
   const endMs = config.endDate.getTime();
+  // Fresh cache per run — previous runs may have queried different
+  // (symbol, price) combinations that no longer apply.
+  resetPointInTimeCache();
+
+  // Backfill EDGAR historical fundamentals for every universe symbol
+  // before we need them. Idempotent: returns immediately if already
+  // populated. Skipped when the strategy has no filters (Boglehead).
+  let backfillSummary: Array<{
+    symbol: string;
+    rowsWritten: number;
+    skippedReason?: string;
+  }> = [];
+  if (filtersActive) {
+    backfillSummary = await backfillMany(config.universe);
+  }
 
   // Load bars. We use a 10-day pad on the start so we have prior
   // prices for regime detection and rebalance computation on day one.
@@ -113,10 +160,61 @@ export async function runSimulation(config: SimulatorConfig): Promise<SimulatorR
   // Rebalance / DCA timestamps (tracked as indices into the calendar).
   let lastRebalanceDay: string | null = null;
   let lastDcaDay: string | null = null;
+  let lastFilterCheckDay: string | null = null;
   let regime: RegimeState = 'calm';
+  // Filter re-check runs quarterly when the strategy has filters. EDGAR
+  // facts advance at most once per quarter so more frequent checks would
+  // just hit the cache.
+  const filterCheckCadenceDays = 90;
 
   // ── Day 0: initial deployment ────────────────────────────────────────
-  deployInitial(calendar[0], rules, cash, config.universe, symbolBars, positions, trades);
+  // When filters are active, evaluate each universe symbol against the
+  // point-in-time filter spec. Only names that pass enter the deployed
+  // portfolio. Names that reject get a filter_reject event so the UI
+  // can show why the book is smaller than the universe.
+  let deployUniverse = config.universe;
+  if (filtersActive) {
+    const day0 = calendar[0];
+    const decisionDate = new Date(`${day0}T00:00:00Z`);
+    const passed: string[] = [];
+    for (const sym of config.universe) {
+      const price = symbolPrice(sym, day0, symbolBars);
+      if (price == null) continue;
+      const result = await evaluateFilter(sym, decisionDate, price, filterSpec);
+      if (result.pass) {
+        passed.push(sym);
+        eventLog.push({
+          date: day0,
+          event: 'filter_pass',
+          details: {
+            symbol: sym,
+            price,
+            roe: result.fundamentals?.returnOnEquity?.toFixed(1),
+            pe: result.fundamentals?.peRatio?.toFixed(1),
+            de: result.fundamentals?.debtToEquity?.toFixed(2),
+          },
+        });
+      } else {
+        eventLog.push({
+          date: day0,
+          event: 'filter_reject',
+          details: { symbol: sym, reason: result.reason },
+        });
+      }
+    }
+    deployUniverse = passed;
+    eventLog.push({
+      date: day0,
+      event: 'fundamentals_backfill',
+      details: {
+        universeSize: config.universe.length,
+        passed: passed.length,
+        backfillResults: backfillSummary,
+      },
+    });
+  }
+
+  deployInitial(calendar[0], rules, cash, deployUniverse, symbolBars, positions, trades);
   cash = sumCashFromInitial(cash, positions);
 
   for (const date of calendar) {
@@ -154,6 +252,41 @@ export async function runSimulation(config: SimulatorConfig): Promise<SimulatorR
           });
           lastRebalanceDay = date;
         }
+      }
+    }
+
+    // Filter re-check — evaluate held positions against the current
+    // filter spec using point-in-time fundamentals. Names that no longer
+    // qualify (ROE collapsed, P/E too rich, D/E blew out) get sold; the
+    // proceeds sit in cash until the next rebalance redeploys them.
+    if (filtersActive) {
+      const daysSince = lastFilterCheckDay ? daysBetween(lastFilterCheckDay, date) : Infinity;
+      if (daysSince >= filterCheckCadenceDays) {
+        const decisionDate = new Date(`${date}T00:00:00Z`);
+        const toSell: Array<{ symbol: string; qty: number; price: number; reason: string }> = [];
+        for (const [sym, pos] of positions) {
+          const price = symbolPrice(sym, date, symbolBars);
+          if (price == null) continue;
+          const result = await evaluateFilter(sym, decisionDate, price, filterSpec);
+          if (!result.pass) {
+            toSell.push({ symbol: sym, qty: pos.qty, price, reason: result.reason ?? 'no longer qualifies' });
+          }
+        }
+        for (const s of toSell) {
+          cash += s.qty * s.price;
+          positions.delete(s.symbol);
+          trades.push({
+            date,
+            event: 'filter_rebalance_sell',
+            details: { symbol: s.symbol, qty: s.qty, price: s.price, reason: s.reason },
+          });
+          eventLog.push({
+            date,
+            event: 'filter_rebalance_sell',
+            details: { symbol: s.symbol, reason: s.reason },
+          });
+        }
+        lastFilterCheckDay = date;
       }
     }
 

@@ -530,6 +530,40 @@ model MarketEvent {
 
 // -------------------- Backtesting --------------------
 
+// Point-in-time fundamentals for a symbol. Each row is "these were the
+// numbers publicly known about this company AS OF `asOfDate`." Populated
+// from SEC EDGAR's companyfacts feed quarter-by-quarter. Used by the
+// backtester to evaluate strategy filters (P/E ≤ 22, ROE ≥ 15%, etc.)
+// at historical decision dates WITHOUT look-ahead bias — i.e. a
+// 2008-06-30 decision only sees fundamentals that were public by that
+// date, not what the company reported months later.
+model StockFundamentalsSnapshot {
+  id              String   @id @default(cuid())
+  symbol          String
+  // "As of" is the date the fundamentals were publicly known. For
+  // quarterly filings, we use the filing acceptance timestamp (when the
+  // 10-Q hit EDGAR) rather than the period-end date.
+  asOfDate        DateTime
+  // Key metrics a strategy might filter on. All nullable — not every
+  // company reports every concept every quarter, and XBRL tagging
+  // coverage was spotty pre-2009.
+  peRatio         Float?
+  epsTTM          Float?
+  returnOnEquity  Float?
+  debtToEquity    Float?
+  grossMarginPct  Float?
+  dividendYield   Float?
+  bookValuePerShare Float?
+  sharesOutstanding Float?
+  // Data source + when we fetched the row, so we can spot staleness
+  // and target re-fetches if EDGAR adds historical data.
+  source          String   @default("edgar")
+  fetchedAt       DateTime @default(now())
+
+  @@unique([symbol, asOfDate])
+  @@index([symbol, asOfDate])
+}
+
 // A single backtest invocation. Captures the config that was run +
 // the full results so the user can browse historical runs on /backtest
 // and compare strategies side-by-side. Ephemeral-ish — we don't delete
