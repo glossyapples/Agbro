@@ -13,11 +13,12 @@ import { LocalTime } from '@/components/LocalTime';
 export const runtime = 'nodejs';
 
 async function loadInitialChart(userId: string) {
-  // Server-side equivalent of /api/crypto/performance with range=1M, so the
+  // Server-side equivalent of /api/crypto/performance with range=1D, so the
   // chart paints on first byte. Mirrors the stocks-side PerformanceChart
-  // loading pattern.
+  // loading pattern. 1D default matches what most users want on first
+  // open — "what happened today" — and is the cheapest range to load.
   const start = new Date();
-  start.setMonth(start.getMonth() - 1);
+  start.setDate(start.getDate() - 1);
   const snapshots = await prisma.cryptoBookSnapshot.findMany({
     where: { userId, takenAt: { gte: start } },
     orderBy: { takenAt: 'asc' },
@@ -34,7 +35,9 @@ async function loadInitialChart(userId: string) {
   });
   let btc: Array<{ t: number; pct: number }> = [];
   if (book.length >= 2) {
-    const bars = await getCryptoBars('BTC/USD', '1Day', book[0].t, book[book.length - 1].t).catch(
+    // 1-hour bars for the 1D range — '1Day' bars would produce 1-2
+    // points total and make the BTC overlay useless.
+    const bars = await getCryptoBars('BTC/USD', '1Hour', book[0].t, book[book.length - 1].t).catch(
       () => []
     );
     const basis = bars[0]?.close ?? null;
@@ -52,7 +55,7 @@ async function loadInitialChart(userId: string) {
           rangePnlPct: basisValue > 0 ? ((last.v - basisValue) / basisValue) * 100 : 0,
         }
       : null;
-  return { range: '1M' as const, summary, book, btc };
+  return { range: '1D' as const, summary, book, btc };
 }
 
 async function loadDashboard(userId: string) {

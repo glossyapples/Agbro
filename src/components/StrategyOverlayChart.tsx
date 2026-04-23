@@ -39,9 +39,16 @@ const STRATEGY_COLORS: Record<StrategyKey, string> = {
 
 export function StrategyOverlayChart({ windows }: { windows: BacktestWindow[] }) {
   const visible = useMemo(() => windows.filter((w) => !w.heldOut), [windows]);
-  const [windowKey, setWindowKey] = useState<string>(
-    visible[0]?.key ?? windows[0]?.key ?? ''
-  );
+  // Default to the first visible window whose start date is inside
+  // Alpaca's free-tier data coverage (~2016+). Picking the very first
+  // visible window defaulted us to GFC 2008-09, which always shows
+  // the 'no usable data' banner — confusing first impression.
+  const defaultWindow = useMemo(() => {
+    const ALPACA_DATA_EPOCH = '2016-01-01';
+    const withData = visible.find((w) => w.startDate >= ALPACA_DATA_EPOCH);
+    return withData?.key ?? visible[0]?.key ?? windows[0]?.key ?? '';
+  }, [visible, windows]);
+  const [windowKey, setWindowKey] = useState<string>(defaultWindow);
   const [payload, setPayload] = useState<Payload | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);

@@ -17,9 +17,9 @@ import { getUpcomingEvents } from '@/lib/data/events';
 // handles that with a "waiting for data" state.
 async function getInitialChartPayload(userId: string) {
   try {
-    const portfolio = await getPortfolioHistory('1M').catch(() => []);
+    const portfolio = await getPortfolioHistory('1D').catch(() => []);
     if (portfolio.length === 0) {
-      return { range: '1M' as const, summary: null, portfolio: [], spy: [] };
+      return { range: '1D' as const, summary: null, portfolio: [], spy: [] };
     }
     // Subtract crypto from each point so the stocks-tab chart excludes
     // crypto book value. See /api/performance for the full rationale.
@@ -59,7 +59,7 @@ async function getInitialChartPayload(userId: string) {
     }));
     const last = stocksPortfolio[stocksPortfolio.length - 1];
     return {
-      range: '1M' as const,
+      range: '1D' as const,
       summary: {
         currentEquity: last.v,
         rangePnl: last.v - basis,
@@ -70,7 +70,7 @@ async function getInitialChartPayload(userId: string) {
       spy: spySeries,
     };
   } catch {
-    return { range: '1M' as const, summary: null, portfolio: [], spy: [] };
+    return { range: '1D' as const, summary: null, portfolio: [], spy: [] };
   }
 }
 
