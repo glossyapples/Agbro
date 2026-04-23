@@ -730,6 +730,10 @@ model Meeting {
   comicUrl      String?  @db.Text
   comicScriptJson Json?
   comicCostUsd  Float?
+  // Populated when comic generation was attempted and failed. Null
+  // while unattempted OR after a successful retry. Surfaced on the
+  // meeting card so the user can see the actual failure reason.
+  comicError    String?  @db.Text
   costUsd       Float?   // total (meeting LLM + comic script LLM + image)
   status        String   @default("running") // running | completed | errored
   errorMessage  String?  @db.Text

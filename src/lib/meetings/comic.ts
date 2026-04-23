@@ -38,10 +38,18 @@ export async function generateMeetingComic(params: {
   const output = meeting.transcriptJson as unknown as MeetingOutput;
 
   // Step 1: Claude writes a comic script.
-  const script = await writeComicScript({
-    anthropicKey,
-    meeting: output,
-  });
+  let script: Awaited<ReturnType<typeof writeComicScript>>;
+  try {
+    script = await writeComicScript({ anthropicKey, meeting: output });
+  } catch (err) {
+    const msg = (err as Error).message ?? String(err);
+    log.error('comic.script_failed', err, { meetingId, userId });
+    await prisma.meeting.update({
+      where: { id: meetingId },
+      data: { comicError: `script step: ${msg.slice(0, 450)}` },
+    });
+    return { ok: false };
+  }
 
   // Step 2: OpenAI renders the comic page.
   let imageUrl: string | null = null;
@@ -51,11 +59,17 @@ export async function generateMeetingComic(params: {
     imageUrl = result.imageUrl;
     imageCostUsd = result.costUsd;
   } catch (err) {
+    const msg = (err as Error).message ?? String(err);
     log.error('comic.image_failed', err, { meetingId, userId });
-    // Still save the script so the user can see what we tried to render.
+    // Persist the error + script so the UI can show WHY it failed
+    // instead of a generic fallback. User sees 'OpenAI returned 401:
+    // Invalid API key' or whatever the real cause is.
     await prisma.meeting.update({
       where: { id: meetingId },
-      data: { comicScriptJson: script as unknown as object },
+      data: {
+        comicScriptJson: script as unknown as object,
+        comicError: msg.slice(0, 500),
+      },
     });
     return { ok: false };
   }
@@ -67,6 +81,7 @@ export async function generateMeetingComic(params: {
       comicUrl: imageUrl,
       comicScriptJson: script as unknown as object,
       comicCostUsd: totalCostUsd,
+      comicError: null, // clear any prior error on successful retry
     },
   });
 

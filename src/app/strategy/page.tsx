@@ -168,6 +168,7 @@ async function MeetingsTab({ userId }: { userId: string }) {
     completedAt: m.completedAt?.toISOString() ?? null,
     summary: m.summary,
     comicUrl: m.comicUrl,
+    comicError: m.comicError,
     costUsd: m.costUsd,
     errorMessage: m.errorMessage,
     transcriptJson: m.transcriptJson,

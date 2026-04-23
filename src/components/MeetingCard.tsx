@@ -19,6 +19,7 @@ type MeetingSummary = {
   completedAt: string | null;
   summary: string | null;
   comicUrl: string | null;
+  comicError: string | null;
   costUsd: number | null;
   errorMessage: string | null;
   transcriptJson: unknown;
@@ -128,14 +129,21 @@ export function MeetingCard({ meeting }: { meeting: MeetingSummary }) {
         </div>
       ) : (
         <div className="flex flex-col gap-2 rounded-md border border-dashed border-ink-700/60 p-3 text-[11px] text-ink-400">
-          <p>
-            No comic yet for this meeting. Generate one on demand — costs
-            ~$0.05, billed to your OpenAI account. Add a key in{' '}
-            <a href="/settings" className="text-brand-400">
-              Settings
-            </a>{' '}
-            first if you haven&apos;t.
-          </p>
+          {meeting.comicError ? (
+            <div className="rounded border border-red-500/40 bg-red-500/5 p-2 text-red-300">
+              <p className="font-semibold">Previous comic attempt failed:</p>
+              <p className="mt-0.5 break-words">{meeting.comicError}</p>
+            </div>
+          ) : (
+            <p>
+              No comic yet for this meeting. Generate one on demand — costs
+              ~$0.05, billed to your OpenAI account. Add a key in{' '}
+              <a href="/settings" className="text-brand-400">
+                Settings
+              </a>{' '}
+              first if you haven&apos;t.
+            </p>
+          )}
           <button
             type="button"
             onClick={generateComic}
