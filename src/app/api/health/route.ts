@@ -1,9 +1,17 @@
 // Liveness + shallow readiness check for Railway / any uptime monitor.
 // Returns 200 if the process is up and the DB responds to a trivial query.
 // Intentionally public — gated by the middleware allowlist.
+//
+// Side effect: the first request per container also starts the
+// autonomous agent scheduler. This replaces the old instrumentation.ts
+// hook (which couldn't be used because Next 14's edge-runtime bundling
+// of that file failed on the Alpaca SDK's Node-only transitive deps).
+// Railway's health probe hits this endpoint within seconds of boot,
+// so the scheduler starts reliably without any user action.
 
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
+import { bootSchedulerOnce } from '@/lib/scheduler-boot';
 
 export const runtime = 'nodejs';
 // Disable all caching — health responses must be fresh.
@@ -11,6 +19,10 @@ export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
 export async function GET() {
+  // Start the scheduler the first time this handler runs per process.
+  // Idempotent — subsequent requests no-op.
+  bootSchedulerOnce();
+
   const startedAt = Date.now();
   let dbOk = false;
   let dbLatencyMs: number | null = null;

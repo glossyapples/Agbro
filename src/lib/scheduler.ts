@@ -9,7 +9,12 @@
 // out our JSON lines, which made it look like the scheduler wasn't
 // firing when in fact it was.
 
-import { runScheduledTick } from './cron/runner';
+// NOTE: runner is loaded via dynamic import inside tickOnce(). The
+// static import chain (scheduler → runner → orchestrator → alpaca)
+// pulled the Alpaca SDK's dotenv/fs dependencies into the webpack
+// bundle for instrumentation.ts, which Next's build rejects because
+// instrumentation is compiled for both node and edge runtimes. Going
+// dynamic here keeps the scheduler's top-level bundle Node-API-free.
 
 const INTERVAL_MS = 2 * 60 * 1000; // 2 minutes
 const BOOT_DELAY_MS = 20 * 1000;
@@ -66,6 +71,11 @@ async function tickOnce(): Promise<void> {
   status.lastTickStartedAt = new Date().toISOString();
   const start = Date.now();
   try {
+    // Dynamic import keeps Alpaca SDK (+ its dotenv/fs transitive
+    // dependency) out of the instrumentation bundle. Safe at this
+    // point because tickOnce only runs on Node after the scheduler
+    // boots, never during build or edge compilation.
+    const { runScheduledTick } = await import('./cron/runner');
     const result = await runScheduledTick();
     const elapsed = Date.now() - start;
     status.lastTickCompletedAt = new Date().toISOString();
