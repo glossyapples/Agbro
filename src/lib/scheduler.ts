@@ -1,82 +1,115 @@
-// In-process scheduler. Replaces the external GitHub Actions / Railway
-// cron setup — the agent now wakes autonomously as part of the Next.js
-// server process, with no user-facing configuration.
+// In-process scheduler. Replaces external GitHub Actions / Railway
+// cron — the agent wakes autonomously as part of the Next.js server
+// process, with no user-facing configuration.
 //
 // Started from src/instrumentation.ts on Node.js server boot.
 //
-// Design:
-//   - setInterval fires every INTERVAL_MS (default 2 minutes). That's
-//     fine-grained enough to respect a user's 5-minute cadence setting
-//     without wasting cycles.
-//   - An in-memory flag prevents overlapping ticks within the same
-//     replica. Cross-replica overlap is handled downstream by
-//     AgentRunInflightError in the per-user agent runner.
-//   - On SIGTERM we clear the interval so Railway's rolling restarts
-//     don't leave ticks in limbo.
-//
-// Multi-replica safety: this scheduler will fire on every replica
-// concurrently. The per-user agent runner's inflight check makes the
-// duplicate work harmless, but if/when we scale past 1 replica we
-// should add a Postgres-lease-based leader election to halve the load
-// during rolling deploys.
+// Logging note: uses console.log with plain text (not the structured
+// JSON logger) because Railway's log viewer silently strips or blanks
+// out our JSON lines, which made it look like the scheduler wasn't
+// firing when in fact it was.
 
-import { log } from './logger';
 import { runScheduledTick } from './cron/runner';
 
-// How often the scheduler wakes up to check whether anyone's agent
-// needs to run. The per-user cadence (agentCadenceMinutes on Account)
-// still gates actual agent runs — this is just the outer heartbeat.
 const INTERVAL_MS = 2 * 60 * 1000; // 2 minutes
-// Delay after boot before the first tick. Gives Prisma time to connect
-// and the web server time to be healthy before we start pounding the
-// DB with an agent run.
 const BOOT_DELAY_MS = 20 * 1000;
 
-let running = false;
+// Module-level state so /api/scheduler/status can report definitively
+// whether the scheduler is up without having to dig through Railway logs.
+export type SchedulerStatus = {
+  started: boolean;
+  startedAt: string | null;
+  tickCount: number;
+  lastTickStartedAt: string | null;
+  lastTickCompletedAt: string | null;
+  lastTickElapsedMs: number | null;
+  lastTickSummary: {
+    total: number;
+    ran: number;
+    skipped: number;
+    failed: number;
+    regimeChanged: boolean;
+  } | null;
+  lastTickError: string | null;
+  running: boolean;
+  intervalMs: number;
+  bootDelayMs: number;
+};
+
+const status: SchedulerStatus = {
+  started: false,
+  startedAt: null,
+  tickCount: 0,
+  lastTickStartedAt: null,
+  lastTickCompletedAt: null,
+  lastTickElapsedMs: null,
+  lastTickSummary: null,
+  lastTickError: null,
+  running: false,
+  intervalMs: INTERVAL_MS,
+  bootDelayMs: BOOT_DELAY_MS,
+};
+
 let timer: NodeJS.Timeout | null = null;
 let bootTimer: NodeJS.Timeout | null = null;
 
+export function getSchedulerStatus(): SchedulerStatus {
+  return { ...status };
+}
+
 async function tickOnce(): Promise<void> {
-  if (running) {
-    log.info('scheduler.skipped_inflight');
+  if (status.running) {
+    console.log('[scheduler] skipped tick — previous still running');
     return;
   }
-  running = true;
+  status.running = true;
+  status.lastTickStartedAt = new Date().toISOString();
   const start = Date.now();
   try {
     const result = await runScheduledTick();
-    log.info('scheduler.tick_done', {
-      elapsedMs: Date.now() - start,
+    const elapsed = Date.now() - start;
+    status.lastTickCompletedAt = new Date().toISOString();
+    status.lastTickElapsedMs = elapsed;
+    status.lastTickSummary = {
       total: result.total,
       ran: result.ran,
       skipped: result.skipped,
       failed: result.failed,
       regimeChanged: result.regimeChanged,
-    });
+    };
+    status.lastTickError = null;
+    status.tickCount += 1;
+    console.log(
+      `[scheduler] tick #${status.tickCount} done in ${elapsed}ms — total=${result.total} ran=${result.ran} skipped=${result.skipped} failed=${result.failed} regimeChanged=${result.regimeChanged}`
+    );
   } catch (err) {
-    log.error('scheduler.tick_failed', err);
+    const msg = (err as Error).message ?? String(err);
+    status.lastTickError = msg.slice(0, 500);
+    console.error(`[scheduler] tick #${status.tickCount + 1} FAILED: ${msg}`);
   } finally {
-    running = false;
+    status.running = false;
   }
 }
 
 export function startScheduler(): void {
   if (timer != null || bootTimer != null) {
-    log.info('scheduler.already_started');
+    console.log('[scheduler] already started — ignoring duplicate startScheduler()');
     return;
   }
-  log.info('scheduler.starting', { intervalMs: INTERVAL_MS, bootDelayMs: BOOT_DELAY_MS });
+  console.log(
+    `[scheduler] starting — intervalMs=${INTERVAL_MS} bootDelayMs=${BOOT_DELAY_MS}`
+  );
+  status.started = true;
+  status.startedAt = new Date().toISOString();
 
   bootTimer = setTimeout(() => {
-    // Fire once right after boot, then every INTERVAL_MS.
+    console.log('[scheduler] first tick firing after boot delay');
     void tickOnce();
     timer = setInterval(() => {
       void tickOnce();
     }, INTERVAL_MS);
   }, BOOT_DELAY_MS);
 
-  // Graceful shutdown so Railway's rolling restarts don't leave the
-  // scheduler firing while the container is being terminated.
   const shutdown = () => {
     if (bootTimer != null) {
       clearTimeout(bootTimer);
@@ -85,8 +118,9 @@ export function startScheduler(): void {
     if (timer != null) {
       clearInterval(timer);
       timer = null;
-      log.info('scheduler.stopped');
+      console.log('[scheduler] stopped');
     }
+    status.started = false;
   };
   process.on('SIGTERM', shutdown);
   process.on('SIGINT', shutdown);
