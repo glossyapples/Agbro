@@ -74,7 +74,15 @@ export function CredentialManager() {
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        setError(typeof body.error === 'string' ? body.error : 'save failed');
+        const err = body.error;
+        const msg =
+          typeof err === 'string'
+            ? err
+            : err && typeof err === 'object'
+              ? // Zod's flatten() shape: { formErrors, fieldErrors }
+                JSON.stringify(err)
+              : `save failed (HTTP ${res.status})`;
+        setError(msg);
         return;
       }
       // Refresh the list so we see the new masked entry.

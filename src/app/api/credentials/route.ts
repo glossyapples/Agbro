@@ -48,6 +48,24 @@ export async function POST(req: Request) {
     await saveUserCredential(user.id, parsed.data.provider, parsed.data.key);
     return NextResponse.json({ ok: true });
   } catch (err) {
+    // Surface specific config errors directly so the user knows to fix
+    // their env vars. Fall back to a generic message for anything else.
+    const msg = (err as Error).message ?? '';
+    if (msg.includes('AGBRO_CREDENTIAL_ENCRYPTION_KEY')) {
+      return NextResponse.json(
+        {
+          error:
+            'Server missing AGBRO_CREDENTIAL_ENCRYPTION_KEY env var. Generate one with `openssl rand -hex 32` and set it in Railway → Variables. See src/lib/credentials.ts.',
+        },
+        { status: 500 }
+      );
+    }
+    if (msg === 'credential.too_short') {
+      return NextResponse.json(
+        { error: 'Key is too short — double-check you pasted the full value.' },
+        { status: 400 }
+      );
+    }
     return apiError(err, 500, 'failed to save credential', 'credentials.save');
   }
 }
