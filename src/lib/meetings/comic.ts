@@ -141,9 +141,9 @@ function buildScriptSystemPrompt(cast: CastBundle): string {
 
 STYLE — non-negotiable:
 • Mad Magazine / CRACKED editorial-caricature tradition. Exaggerated features, bold ink linework, fine crosshatch shading.
-• Graphic novel consistency: clean panel grid, clear gutters, readable speech bubbles with the speaker's name prefixed.
+• Graphic novel consistency: clean panel grid, clear gutters, clean speech bubbles with readable dialogue.
 • Limited, cohesive palette per comic — 3-5 colours max, chosen for mood.
-• NEVER photoreal. NEVER cartoony/Saturday-morning-kids style either. The register is "smart satirical weekly" — think a 2024 New Yorker long-form graphic feature, or a CRACKED editorial 2-page spread.
+• NEVER photoreal. NEVER cartoony/Saturday-morning-kids style either. The register is "smart satirical weekly" — think a New Yorker long-form graphic feature, or a CRACKED editorial 2-page spread.
 • Every character is clearly a satirical \`-bot\` variant — their names are botified for this reason. Do not mistake them for real people; visuals are exaggerated editorial caricature, dialogue is fictional extrapolation of publicly known investment philosophy.
 
 ${castSheet(cast)}
@@ -152,24 +152,43 @@ The comic must focus on the ONE turning-point scene the meeting has already iden
 
 Write the IMAGE GENERATION PROMPT for gpt-image-2. Rules:
 
-1. USE THE FIXED CAST VISUAL DESCRIPTIONS VERBATIM — the exact features, clothes, props, name badges listed above. Characters must be recognisable across meetings.
+1. USE THE FIXED CAST VISUAL DESCRIPTIONS VERBATIM — the exact features, clothes, props, name badges listed above. Characters must be recognisable across meetings, and those visual cues are how the reader identifies who's speaking.
 
-2. Name each character explicitly in every panel they appear in so the model draws them correctly and labels speech bubbles with the right name.
+2. 4-6 panels on one page, story arc:
+   • Panel 1: SETUP — who's in the room, what's on the table (show the specific symbol / number / decision in the background, e.g. on a whiteboard or chart)
+   • Middle panels: the DISAGREEMENT plays out as dialogue. Pull the EMOTIONAL beats from the transcript; don't invent contradicting lines. Translate engineering terms to boardroom English (see the translation layer below).
+   • Final panel: RESOLUTION — the outcome, with the specific action item or decision visible (e.g. on a whiteboard, sticky note, or caption).
 
-3. 4-6 panels on one page, story arc:
-   - Panel 1: SETUP — who's in the room, what's on the table (show the specific symbol / number / decision in the background)
-   - Middle panels: the DISAGREEMENT plays out as dialogue. Pull short quotes from the actual meeting transcript; don't invent contradicting lines.
-   - Final panel: RESOLUTION — the outcome, with the specific action item or decision visible (e.g. on a whiteboard, sticky note, or caption).
+3. DIALOGUE — CRITICAL FORMAT:
+   Speech bubbles contain ONLY the spoken line. NEVER prefix a bubble with "CharacterName:" — that text will render literally inside the bubble and ruin the comic.
 
-4. DIALOGUE goes in speech bubbles, each prefixed with the character's exact name (e.g. \`Buff-bot: "Shouldn't we consider buying this? They've got a moat."\`). Each bubble under ~15 words; longer bubbles cramp the render.
+   How the reader identifies speakers:
+     (a) Fixed character visuals from the cast sheet (primary — every character has a distinct silhouette)
+     (b) Nameplates on desks, door placards, or lapel badges visible in the scene (secondary — a subtle visual aid)
+     (c) Characters addressing each other by name INSIDE the dialogue when it's natural ("Charlie, you're not helping" / "Forgive me, Warren")
 
-5. MOOD visuals (pick cues matching the meeting's sentiment):
-   - bullish       → open framing, warmer light, palette leans gold/amber
-   - cautious      → restrained composition, muted warm tones
-   - defensive     → tighter framing, darker palette, cool shadows
-   - opportunistic → energetic diagonals, a single pop of saturated colour
+   The correct format in your image-gen prompt:
+     ✓ "Panel 2: Smythe-bot (recognisable by rimless glasses, pointing finger, Union Jack lapel pin) speaks in a speech bubble: \\"Slow I can live with. Invisible I cannot.\\" From across the table, Trayne-bot (tweed, round tortoiseshell glasses, mug of tea) replies: \\"Every missed deadline tells the desk governance is optional.\\""
+     ✗ "Panel 2: Bubble from Smythe-bot: \\"Smythe-bot: Slow I can live with...\\""  — WRONG. Do not put "Name:" inside the bubble content.
 
-6. Show SPECIFIC numbers / tickers / ratios from the meeting — on whiteboards, charts, sticky notes. The stakes should feel like the actual firm's actual week.
+4. VOICE — boardroom English only. The characters ARE the firm; they don't refer to "the agent" or "the system" in third person. Translate any engineering language you see in the transcript:
+     ✗ "pause the agent"                 → ✓ "we stand down"
+     ✗ "ship the diffs"                  → ✓ "act on the calls"
+     ✗ "evaluate_exits bug"              → ✓ "our exit-review has a gap"
+     ✗ "crypto flag"                     → ✓ "our crypto policy lever"
+     ✗ "agent cadence"                   → ✓ "how often we wake"
+     ✗ "Ops posts diffs to the channel"  → ✓ "Ops files the week's record"
+   Investing acronyms a one-hour novice would recognise stay (P/E, ROE, D/E, SPY, MOS, CASH, etc.). Engineering symbols (function names, flag names, branch names) never appear in dialogue.
+
+5. EACH BUBBLE ≤ ~12 WORDS. Longer bubbles cramp the render. If a character needs to say more, split into two bubbles stacked near each other.
+
+6. MOOD visuals (pick cues matching the meeting's sentiment):
+   • bullish        → open framing, warmer light, palette leans gold/amber
+   • cautious       → restrained composition, muted warm tones
+   • defensive      → tighter framing, darker palette, cool shadows
+   • opportunistic  → energetic diagonals, a single pop of saturated colour
+
+7. Show SPECIFIC numbers / tickers / ratios from the meeting — on whiteboards, charts, sticky notes. The stakes should feel like the actual firm's actual week. These can use technical shorthand (e.g. "BRK.B MOS -2%") because they're written on surfaces, not spoken.
 
 GOAL — the comic must (in priority order):
   #1 ACCURATE to the meeting's decisions and transcript
@@ -182,7 +201,7 @@ Respond with a single JSON object:
   "title": "<5-8 word title for the comic>",
   "style": "<short art style description, e.g. 'Mad Magazine editorial ink, muted gold palette'>",
   "mood": "<one-word mood>",
-  "prompt": "<the full image-gen prompt, 450-750 words, panel-by-panel, naming every character in every panel they appear in, specifying the style note once at the top, using character VISUAL DESCRIPTIONS verbatim from the cast above>"
+  "prompt": "<the full image-gen prompt, 450-750 words, panel-by-panel, naming characters only in the NARRATION (outside bubbles) so gpt-image-2 knows who to draw, keeping bubble contents to clean dialogue only>"
 }
 
 No prose outside the JSON. No markdown fences.`;
