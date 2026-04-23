@@ -5,6 +5,7 @@ import { LocalTime } from '@/components/LocalTime';
 import { MeetingControls } from '@/components/MeetingControls';
 import { MeetingCard } from '@/components/MeetingCard';
 import { ActionItemsList } from '@/components/ActionItemsList';
+import { PolicyChangesList } from '@/components/PolicyChangesList';
 
 export const dynamic = 'force-dynamic';
 
@@ -126,7 +127,7 @@ async function StrategyTab({ userId }: { userId: string }) {
 }
 
 async function MeetingsTab({ userId }: { userId: string }) {
-  const [meetings, openItems] = await Promise.all([
+  const [meetings, openItems, proposedChanges] = await Promise.all([
     prisma.meeting.findMany({
       where: { userId },
       orderBy: { startedAt: 'desc' },
@@ -147,7 +148,26 @@ async function MeetingsTab({ userId }: { userId: string }) {
       },
       take: 30,
     }),
+    prisma.policyChange.findMany({
+      where: { userId, status: 'proposed' },
+      orderBy: { createdAt: 'desc' },
+      include: {
+        meeting: { select: { startedAt: true } },
+      },
+      take: 20,
+    }),
   ]);
+
+  const serializedProposed = proposedChanges.map((p) => ({
+    id: p.id,
+    kind: p.kind,
+    targetKey: p.targetKey,
+    before: p.before,
+    after: p.after,
+    rationale: p.rationale,
+    createdAt: p.createdAt.toISOString(),
+    meetingAt: p.meeting.startedAt.toISOString(),
+  }));
 
   // Serialize for client components (Date → string, Buffer → string).
   const serializedItems = openItems.map((i) => ({
@@ -180,6 +200,8 @@ async function MeetingsTab({ userId }: { userId: string }) {
   return (
     <>
       <MeetingControls />
+
+      <PolicyChangesList proposed={serializedProposed} />
 
       <section className="card flex flex-col gap-3">
         <div>

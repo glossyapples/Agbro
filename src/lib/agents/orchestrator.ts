@@ -21,6 +21,11 @@ import { AGBRO_PRINCIPLES } from './prompts';
 import { TOOL_DEFS, runTool } from './tools';
 import { child } from '@/lib/logger';
 import { estimateCostUsd, type TokenUsage } from '@/lib/pricing';
+import {
+  loadMeetingPriorities,
+  renderPrioritiesForWakePrompt,
+  markPrioritiesSeen,
+} from './meeting-priorities';
 import { getPositions } from '@/lib/alpaca';
 import { toCents } from '@/lib/money';
 import { refreshEarningsDate } from '@/lib/data/earnings';
@@ -135,12 +140,32 @@ export async function runAgent(args: RunAgentArgs): Promise<RunAgentResult> {
   }
 
   const ctx = { agentRunId: run.id, userId: args.userId };
+
+  // Meeting → orchestrator handoff. Open research / review items from
+  // the most recent executive meeting become explicit priorities in
+  // the wake prompt. Graduated trust: auto-queue research and review
+  // items (low blast radius — they only affect what the agent *looks
+  // at*, not what it trades), but NEVER auto-apply policy changes
+  // (those surface as accept/reject PolicyChange cards in the UI).
+  const meetingPriorities = await loadMeetingPriorities(args.userId).catch(
+    () => [] as Awaited<ReturnType<typeof loadMeetingPriorities>>
+  );
+  const prioritiesBlock = renderPrioritiesForWakePrompt(meetingPriorities);
+  // Stamp executedBy now rather than on completion — audit trail
+  // captures "which run saw this item", regardless of whether the
+  // agent ends up doing anything with it. The next meeting reviews
+  // and marks completed.
+  await markPrioritiesSeen(meetingPriorities, run.id).catch((err) => {
+    log.warn('agent.meeting_priorities_stamp_failed', undefined, err);
+  });
+
   const messages: Anthropic.MessageParam[] = [
     {
       role: 'user',
       content:
         `Wake up. Trigger: ${args.trigger}. Start by reading the brain and the current account state. ` +
-        `End with finalize_run when you're done. Remember your two goals: preserve principal, then grow it.`,
+        `End with finalize_run when you're done. Remember your two goals: preserve principal, then grow it.` +
+        prioritiesBlock,
     },
   ];
 
