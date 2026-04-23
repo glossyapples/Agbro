@@ -15,6 +15,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { prisma } from '@/lib/db';
 import { log } from '@/lib/logger';
 import type { MeetingOutput } from './schema';
+import { CAST, castSheet } from './cast';
 
 const SCRIPT_MODEL = 'claude-opus-4-7';
 
@@ -100,25 +101,49 @@ export async function generateMeetingComic(params: {
 }
 
 // ─── Step 1: screenplay ─────────────────────────────────────────────────
+//
+// The comic dramatises ONE turning-point scene from the meeting —
+// usually a disagreement that resolved or a decision that flipped —
+// with real dialogue pulled from the transcript. Every character is
+// drawn to a fixed cast sheet so they look like the same characters
+// across weeks. Speech bubbles use each character's name so the user
+// can follow who's speaking even if the render is rough.
 
-const SCRIPT_SYSTEM_PROMPT = `You are a comics writer turning agentic investment-firm meetings into single-page comic strips. Each meeting has a transcript of four characters arguing productively:
-• Warren Buffbot — CEO, value investor, quiet and decisive
-• the Analyst — research lead, fundamentals-focused
-• the Risk Officer — conservative, worried about downside
-• the Operations lead — data-driven, pragmatic
+const SCRIPT_SYSTEM_PROMPT = `You are a comics writer turning executive meetings at AgBro (an agentic investment firm) into single-page dialogue-driven comic strips.
 
-Write a crisp IMAGE GENERATION PROMPT describing a single-page comic with 4-6 panels summarising the meeting. The image generator is gpt-image-1; your prompt should be dense, visual, and specific. Include:
-  - Overall art style (choose one per meeting that fits the mood): "vintage New Yorker cartoon", "1980s corporate comic strip", "modern minimalist line art", "noir graphic novel"
-  - Panel breakdown: 4-6 panels on one page, each with staging + what the characters say (speech bubbles)
-  - Visual mood matching the meeting sentiment (bullish=open/bright, cautious=restrained, defensive=darker, opportunistic=energetic)
-  - Any specific numbers, symbols, or charts worth showing in a panel
+${castSheet()}
+
+The comic must focus on the ONE turning-point scene the meeting has already identified (in \`comicFocus\`) — a beat with real emotional stakes where a decision flipped or a disagreement was settled. NOT a generic summary of the whole meeting.
+
+Write a crisp IMAGE GENERATION PROMPT for gpt-image-1. Rules:
+
+1. USE EACH CHARACTER'S FIXED VISUAL DESCRIPTION VERBATIM from the cast above — same chassis color, same props, same silhouette every meeting. This is how users recognise them.
+
+2. EXPLICITLY NAME each character in every panel they appear in (e.g. "Panel 2: Warren Buffbot pauses…" — not "a robot thinks"). The image model needs the name so speech bubbles can be labelled.
+
+3. Build a 4-6 panel narrative arc:
+   - Panel 1: setup — who's in the room, what's on the table (show the specific symbol / number / decision)
+   - Middle panels: the disagreement plays out as dialogue. Pull short quotes from the actual meeting transcript; don't invent new lines that contradict the transcript.
+   - Final panel: the resolution + the real-world consequence (referencing the actual action item or decision the meeting made)
+
+4. DIALOGUE goes in speech bubbles, prefixed with the character's name (e.g. \`Warren Buffbot: "Shouldn't we consider buying this? They've got a moat."\`). Keep each bubble under ~15 words — the image model cramps when bubbles get long.
+
+5. Art style is consistent within the comic: pick ONE from "vintage New Yorker cartoon", "1980s corporate comic strip", "modern minimalist line art with flat colour", "noir graphic novel", or "warm Sunday funnies" — matching the meeting's sentiment.
+
+6. Overall mood visuals:
+   - bullish       → open framing, brighter palette
+   - cautious      → restrained, warm but muted
+   - defensive     → tighter framing, darker palette, cool tones
+   - opportunistic → energetic angles, pops of colour
+
+7. Show specific numbers / tickers / ratios that were discussed — they should appear on whiteboards, HUDs, or captions in the background. Real stakes make the comic feel like the real firm.
 
 Respond with a single JSON object:
 {
   "title": "<5-8 word title for the comic>",
   "style": "<short art style description>",
   "mood": "<one-word mood>",
-  "prompt": "<the full prompt for gpt-image-1, ~300-600 words, panel-by-panel>"
+  "prompt": "<the full image-gen prompt, ~400-700 words, panel-by-panel, naming every character in every panel they appear in>"
 }
 
 No prose outside the JSON. No markdown fences.`;
@@ -128,12 +153,30 @@ async function writeComicScript(params: {
   meeting: MeetingOutput;
 }): Promise<{ title: string; style: string; mood: string; prompt: string; costUsd: number }> {
   const client = new Anthropic({ apiKey: params.anthropicKey });
+  // Feed only the parts the comic writer needs. comicFocus is the star —
+  // everything else is supporting context for pulling quotes.
   const userMessage = JSON.stringify(
     {
+      sentiment: params.meeting.sentiment,
+      comicFocus: params.meeting.comicFocus,
       summary: params.meeting.summary,
       transcript: params.meeting.transcript,
       decisions: params.meeting.decisions,
-      sentiment: params.meeting.sentiment,
+      // Only include names — the model doesn't need full item text,
+      // just enough to reference "the ORCL research item" in a caption.
+      actionItemsDigest: [
+        ...(params.meeting.actionItems ?? []).map(
+          (a) => `NEW ${a.kind}: ${a.description}`
+        ),
+        ...(params.meeting.actionItemUpdates ?? []).map(
+          (u) => `UPDATE ${u.status}${u.note ? ' — ' + u.note : ''}`
+        ),
+      ],
+      cast: Object.values(CAST).map((c) => ({
+        role: c.role,
+        name: c.name,
+        personality: c.personality,
+      })),
     },
     null,
     2
@@ -145,7 +188,7 @@ async function writeComicScript(params: {
     messages: [
       {
         role: 'user',
-        content: `Meeting to turn into a comic:\n\n${userMessage}`,
+        content: `Meeting to turn into a comic. Dramatise the comicFocus scene with real dialogue from the transcript.\n\n${userMessage}`,
       },
     ],
   });

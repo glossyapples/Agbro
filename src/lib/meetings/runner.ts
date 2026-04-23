@@ -72,6 +72,33 @@ export async function runMeeting(params: {
           costUsd,
         },
       });
+
+      // Apply updates to prior action items. Each update targets an
+      // existing item by id; we ignore updates targeting items that
+      // don't belong to this user (defence against the model making
+      // up an id). completedAt is set when status goes to completed.
+      for (const update of parsed.actionItemUpdates ?? []) {
+        const existing = await tx.meetingActionItem.findUnique({
+          where: { id: update.id },
+        });
+        if (!existing || existing.userId !== userId) continue;
+        await tx.meetingActionItem.update({
+          where: { id: update.id },
+          data: {
+            status: update.status,
+            completedAt:
+              update.status === 'completed'
+                ? existing.completedAt ?? new Date()
+                : null,
+            // Append the note to the description as a history breadcrumb.
+            description: update.note
+              ? `${existing.description}\n  • ${new Date().toISOString().slice(0, 10)} (${update.status}): ${update.note}`
+              : existing.description,
+          },
+        });
+      }
+
+      // Then create any NEW action items.
       for (const item of parsed.actionItems) {
         await tx.meetingActionItem.create({
           data: {
@@ -83,6 +110,7 @@ export async function runMeeting(params: {
           },
         });
       }
+
       for (const change of parsed.policyChanges) {
         await tx.policyChange.create({
           data: {
@@ -144,7 +172,7 @@ export async function runMeeting(params: {
 async function buildBriefing(userId: string, agendaOverride?: string) {
   const sevenDaysAgo = new Date(Date.now() - 7 * 86_400_000);
 
-  const [account, activeStrategy, recentTrades, recentRuns, brainEntries, regime, positions, priorMeeting] =
+  const [account, activeStrategy, recentTrades, recentRuns, brainEntries, regime, positions, priorMeeting, openActionItems] =
     await Promise.all([
       prisma.account.findUnique({ where: { userId } }),
       prisma.strategy.findFirst({ where: { userId, isActive: true } }),
@@ -171,6 +199,25 @@ async function buildBriefing(userId: string, agendaOverride?: string) {
         where: { userId, status: 'completed' },
         orderBy: { startedAt: 'desc' },
         select: { summary: true, startedAt: true },
+      }),
+      // Every open action item — the meeting MUST review each of these
+      // and emit an actionItemUpdates entry for it. Capped at 40 to
+      // protect context budget; if a user ever has >40 open items
+      // that's its own problem (the meeting should complete some).
+      prisma.meetingActionItem.findMany({
+        where: {
+          userId,
+          status: { in: ['started', 'on_hold', 'blocked'] },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 40,
+        select: {
+          id: true,
+          kind: true,
+          description: true,
+          status: true,
+          createdAt: true,
+        },
       }),
     ]);
 
@@ -250,6 +297,21 @@ async function buildBriefing(userId: string, agendaOverride?: string) {
     })),
     priorMeetingSummary: priorMeeting?.summary ?? null,
     priorMeetingAt: priorMeeting?.startedAt.toISOString() ?? null,
+    // Open action items from prior meetings. The model MUST emit an
+    // actionItemUpdates entry for every id here — see MEETING_SYSTEM_PROMPT.
+    openActionItems: (openActionItems as Array<{
+      id: string;
+      kind: string;
+      description: string;
+      status: string;
+      createdAt: Date;
+    }>).map((a) => ({
+      id: a.id,
+      kind: a.kind,
+      description: a.description,
+      status: a.status,
+      openedAt: a.createdAt.toISOString(),
+    })),
   };
 }
 
@@ -286,8 +348,19 @@ function parseMeetingJson(raw: string): MeetingOutput {
   if (!parsed.summary) throw new Error('meeting output missing summary');
   parsed.decisions = parsed.decisions ?? [];
   parsed.actionItems = parsed.actionItems ?? [];
+  parsed.actionItemUpdates = parsed.actionItemUpdates ?? [];
   parsed.policyChanges = parsed.policyChanges ?? [];
   parsed.sentiment = parsed.sentiment ?? 'cautious';
+  // Fallback comicFocus if the model skipped it — defaults to the
+  // meeting as a whole with everyone on stage. Not ideal for drama
+  // but keeps the comic renderable.
+  if (!parsed.comicFocus) {
+    parsed.comicFocus = {
+      title: 'Weekly review',
+      arc: parsed.summary.slice(0, 300),
+      roles: ['warren_buffbot', 'charlie_mungbot', 'analyst', 'risk', 'operations'],
+    };
+  }
   return parsed;
 }
 
