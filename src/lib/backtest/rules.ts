@@ -122,7 +122,9 @@ export const STRATEGY_LABELS: Record<StrategyKey, string> = {
 // portfolio; the others default to a handful of watchlist names with
 // long price histories so the tests work back to the 2008 era.
 export const DEFAULT_UNIVERSES: Record<StrategyKey, string[]> = {
-  buffett_core: ['KO', 'AAPL', 'MSFT', 'JNJ', 'PG', 'V', 'MA', 'SPY'],
+  // SPY excluded: ETFs don't file 10-Ks, so they always reject the
+  // fundamentals filter. Use /backtest/grid for SPY-benchmarked overlay.
+  buffett_core: ['KO', 'AAPL', 'MSFT', 'JNJ', 'PG', 'V', 'MA', 'WMT'],
   deep_value_graham: ['XOM', 'CVX', 'JNJ', 'PG', 'KO', 'WMT'],
   quality_compounders: ['AAPL', 'MSFT', 'V', 'MA', 'GOOGL', 'COST'],
   dividend_growth: ['JNJ', 'PG', 'KO', 'PEP', 'MCD', 'ADP'],

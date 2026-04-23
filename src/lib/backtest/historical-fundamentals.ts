@@ -57,6 +57,7 @@ const TAGS = {
 
 type Fact = {
   end: string; // period end YYYY-MM-DD
+  start?: string; // period start YYYY-MM-DD (present for flow/duration facts)
   val: number;
   fp?: string; // fiscal period Q1 / Q2 / Q3 / FY
   form?: string; // 10-Q, 10-K, etc.
@@ -126,24 +127,36 @@ function groupByFiled(facts: Fact[]): Map<string, Fact> {
   return byFiled;
 }
 
-// Build TTM (trailing 12 months) EPS as of each filing date by summing
-// the most recent 4 quarterly EPS entries with period-end <= filing date.
-function ttmEpsAtFiled(epsFacts: Fact[]): Map<string, number> {
-  const quarterlyOnly = epsFacts.filter((f) => f.fp && f.fp.startsWith('Q'));
-  const result = new Map<string, number>();
-  // For each filing date in the quarterly series, take the 4 most
-  // recent period-ends <= that filing date and sum.
-  for (const f of quarterlyOnly) {
-    const priorQuarters = quarterlyOnly
-      .filter((q) => q.end <= f.end)
-      .sort((a, b) => (a.end < b.end ? 1 : -1))
-      .slice(0, 4);
-    if (priorQuarters.length === 4) {
-      const sum = priorQuarters.reduce((s, q) => s + q.val, 0);
-      result.set(f.filed, sum);
-    }
+// Duration classifiers. We can't trust `fp` alone: some filers report
+// YTD values (6-month, 9-month) tagged Q2/Q3 that would double-count if
+// summed. The authoritative signal is `start`..`end` duration.
+function durationDays(f: Fact): number | null {
+  if (!f.start) return null;
+  const s = new Date(f.start + 'T00:00:00Z').getTime();
+  const e = new Date(f.end + 'T00:00:00Z').getTime();
+  if (!Number.isFinite(s) || !Number.isFinite(e)) return null;
+  return Math.round((e - s) / 86_400_000);
+}
+
+function isQuarterDuration(f: Fact): boolean {
+  const d = durationDays(f);
+  return d != null && d >= 80 && d <= 100;
+}
+
+function isAnnualDuration(f: Fact): boolean {
+  const d = durationDays(f);
+  return d != null && d >= 350 && d <= 380;
+}
+
+// For flow items (income statement), keep ONE fact per unique period end
+// — take the most-recently-filed version so amendments/restatements win.
+function dedupeByEnd(facts: Fact[]): Fact[] {
+  const byEnd = new Map<string, Fact>();
+  for (const f of facts) {
+    const existing = byEnd.get(f.end);
+    if (!existing || existing.filed < f.filed) byEnd.set(f.end, f);
   }
-  return result;
+  return Array.from(byEnd.values()).sort((a, b) => (a.end < b.end ? -1 : 1));
 }
 
 type RowAtFiled = {
@@ -169,7 +182,7 @@ function buildRows(factsJson: FactsJson): RowAtFiled[] {
   const costFacts = firstAvailable(facts, TAGS.costOfRevenue, 'USD');
   const sharesFacts = firstAvailable(facts, TAGS.sharesOutstanding, 'shares');
 
-  const ttmEps = ttmEpsAtFiled(epsFacts);
+  const ttmEps = rollingTTM(epsFacts);
   const ttmNetIncome = rollingTTM(netIncomeFacts);
   const ttmRevenue = rollingTTM(revenueFacts);
   const ttmCost = rollingTTM(costFacts);
@@ -212,18 +225,38 @@ function buildRows(factsJson: FactsJson): RowAtFiled[] {
   return rows.sort((a, b) => a.asOfDate.getTime() - b.asOfDate.getTime());
 }
 
+// TTM for any flow-item series (net income, revenue, cost, EPS).
+//
+// Two kinds of anchor points:
+//   (1) 10-K filings (~365-day duration) — the FY value IS the trailing
+//       12 months as of that period end. Use it directly.
+//   (2) 10-Q filings (~90-day duration) — sum the 4 most recent unique
+//       3-month slices with end ≤ this quarter's end. Because 10-Ks
+//       normally include a 3-month Q4 context alongside the FY context,
+//       this works even at year-end.
+//
+// The `fp` field is unreliable for distinguishing 3-month from YTD
+// values (some filers tag YTD as Q2/Q3); duration-on-start/end is the
+// authoritative signal.
 function rollingTTM(facts: Fact[]): Map<string, number> {
-  const quarterly = facts
-    .filter((f) => f.fp && f.fp.startsWith('Q'))
-    .sort((a, b) => (a.end < b.end ? -1 : 1));
+  const quarters = dedupeByEnd(facts.filter(isQuarterDuration));
+  const annuals = facts.filter(isAnnualDuration);
+
   const result = new Map<string, number>();
-  for (let i = 0; i < quarterly.length; i++) {
-    const q = quarterly[i];
-    const window = quarterly.filter((x) => x.end <= q.end).slice(-4);
-    if (window.length === 4) {
+
+  // Anchor: FY value at 10-K filing date = TTM directly.
+  for (const a of annuals) {
+    if (!result.has(a.filed)) result.set(a.filed, a.val);
+  }
+
+  // Quarterly anchor: sum of last 4 unique 3-month slices ≤ this end.
+  for (const q of quarters) {
+    const window = quarters.filter((x) => x.end <= q.end).slice(-4);
+    if (window.length === 4 && !result.has(q.filed)) {
       result.set(q.filed, window.reduce((s, x) => s + x.val, 0));
     }
   }
+
   return result;
 }
 
@@ -234,12 +267,21 @@ function rollingTTM(facts: Fact[]): Map<string, number> {
 export async function backfillHistoricalFundamentals(
   symbol: string
 ): Promise<{ symbol: string; rowsWritten: number; skippedReason?: string }> {
-  // Skip if we already have >= 20 snapshots (≈ 5 years of quarterlies)
-  // — the data doesn't change retroactively so re-fetching is wasted
-  // Alpaca+SEC calls. Refresh is manual if ever needed.
+  // Skip if we already have >= 20 snapshots AND at least a few of them
+  // carry real ratio data. The AND is important: an earlier, buggy
+  // backfill could have written 20+ rows of all-null ratios, and a
+  // plain count check would lock us into that broken state forever.
   const existing = await prisma.stockFundamentalsSnapshot.count({ where: { symbol } });
   if (existing >= 20) {
-    return { symbol, rowsWritten: 0, skippedReason: 'already backfilled' };
+    const healthy = await prisma.stockFundamentalsSnapshot.count({
+      where: { symbol, returnOnEquity: { not: null } },
+    });
+    if (healthy >= 4) {
+      return { symbol, rowsWritten: 0, skippedReason: 'already backfilled' };
+    }
+    // Stale/null-only data — wipe and re-fetch with the corrected parser.
+    await prisma.stockFundamentalsSnapshot.deleteMany({ where: { symbol } });
+    log.info('historical_fundamentals.refreshing_stale', { symbol, existing });
   }
 
   const cik = await cikForSymbol(symbol).catch(() => null);
@@ -256,6 +298,24 @@ export async function backfillHistoricalFundamentals(
   if (rows.length === 0) {
     return { symbol, rowsWritten: 0, skippedReason: 'no facts parsed' };
   }
+
+  // Diagnostic: did we actually compute the ratios we need? On a healthy
+  // large-cap filer we should see most rows with ROE + D/E + margin. If
+  // these are zero the filter will silently reject everything downstream.
+  log.info('historical_fundamentals.parsed', {
+    symbol,
+    rowsTotal: rows.length,
+    rowsWithNetIncomeTTM: rows.filter((r) => r.netIncomeTTM != null).length,
+    rowsWithEquity: rows.filter((r) => r.equity != null).length,
+    rowsWithROE: rows.filter(
+      (r) => r.netIncomeTTM != null && r.equity != null && r.equity > 0
+    ).length,
+    rowsWithDE: rows.filter((r) => r.totalDebt != null && r.equity != null && r.equity > 0)
+      .length,
+    rowsWithMargin: rows.filter(
+      (r) => r.revenueTTM != null && r.costTTM != null && r.revenueTTM > 0
+    ).length,
+  });
 
   let written = 0;
   for (const row of rows) {
