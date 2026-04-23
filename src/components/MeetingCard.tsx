@@ -6,6 +6,7 @@
 // the full transcript.
 
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { LocalTime } from '@/components/LocalTime';
 
 type TranscriptTurn = { role: string; text: string };
@@ -33,7 +34,32 @@ const SENTIMENT_COLORS: Record<string, string> = {
 };
 
 export function MeetingCard({ meeting }: { meeting: MeetingSummary }) {
+  const router = useRouter();
   const [expanded, setExpanded] = useState(false);
+  const [comicBusy, setComicBusy] = useState(false);
+  const [comicError, setComicError] = useState<string | null>(null);
+
+  async function generateComic() {
+    setComicBusy(true);
+    setComicError(null);
+    try {
+      const res = await fetch(`/api/meetings/${meeting.id}/generate-comic`, {
+        method: 'POST',
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        setComicError(
+          typeof body.error === 'string' ? body.error : `failed (HTTP ${res.status})`
+        );
+        return;
+      }
+      router.refresh();
+    } catch (err) {
+      setComicError(`Network error: ${(err as Error).message.slice(0, 120)}`);
+    } finally {
+      setComicBusy(false);
+    }
+  }
 
   const transcript =
     (meeting.transcriptJson as { transcript?: TranscriptTurn[]; decisions?: string[] } | null)
@@ -101,13 +127,33 @@ export function MeetingCard({ meeting }: { meeting: MeetingSummary }) {
           />
         </div>
       ) : (
-        <div className="rounded-md border border-dashed border-ink-700/60 p-3 text-[11px] text-ink-500">
-          No comic for this meeting. Save an OpenAI key in{' '}
-          <a href="/settings" className="text-brand-400">
-            Settings
-          </a>{' '}
-          to generate one on future meetings (~$0.05 each, billed to your
-          OpenAI account).
+        <div className="flex flex-col gap-2 rounded-md border border-dashed border-ink-700/60 p-3 text-[11px] text-ink-400">
+          <p>
+            No comic yet for this meeting. Generate one on demand — costs
+            ~$0.05, billed to your OpenAI account. Add a key in{' '}
+            <a href="/settings" className="text-brand-400">
+              Settings
+            </a>{' '}
+            first if you haven&apos;t.
+          </p>
+          <button
+            type="button"
+            onClick={generateComic}
+            disabled={comicBusy}
+            className={`btn-primary self-start text-[11px] ${
+              comicBusy ? 'cursor-not-allowed opacity-60' : ''
+            }`}
+          >
+            {comicBusy ? (
+              <span className="flex items-center gap-1.5">
+                <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-ink-900/40 border-t-ink-900" />
+                Drawing the comic…
+              </span>
+            ) : (
+              'Generate comic'
+            )}
+          </button>
+          {comicError && <p className="text-[11px] text-red-300">{comicError}</p>}
         </div>
       )}
 
