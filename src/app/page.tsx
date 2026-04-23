@@ -8,6 +8,7 @@ import { PerformanceChart } from '@/components/PerformanceChart';
 import { UpcomingEventsCard } from '@/components/UpcomingEventsCard';
 import { LocalTime } from '@/components/LocalTime';
 import { MoodStrip } from '@/components/MoodStrip';
+import { KillSwitchBanner } from '@/components/KillSwitchBanner';
 import { getPortfolioHistory, getBars } from '@/lib/alpaca';
 import { getUpcomingEvents } from '@/lib/data/events';
 import {
@@ -264,6 +265,13 @@ export default async function OverviewPage() {
         </div>
         <span className={statusPill}>{status}</span>
       </header>
+
+      {account.killSwitchTriggeredAt && account.killSwitchReason && (
+        <KillSwitchBanner
+          triggeredAt={account.killSwitchTriggeredAt.toISOString()}
+          reason={account.killSwitchReason}
+        />
+      )}
 
       <MoodStrip marketMood={marketMood} agentMood={agentMood} />
 

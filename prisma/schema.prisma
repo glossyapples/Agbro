@@ -113,6 +113,29 @@ model Account {
   isStopped           Boolean  @default(false)
   maxPositionPct      Float    @default(15.0)
   maxDailyTrades      Int      @default(3)
+  // ── Kill-switch rails ────────────────────────────────────────────
+  // Daily P&L threshold (as pct of portfolio equity at market open).
+  // If today's total return crosses this, the scheduler halts new
+  // trades and flips isPaused → true with killSwitchReason set.
+  // Default -5% is a generous ceiling — tighten per-user in /settings.
+  // Zero or null disables the check.
+  dailyLossKillPct    Float    @default(-5.0)
+  // Cumulative drawdown from 30-day high that triggers a pause.
+  // Different kind of protection than daily kill: catches grinding
+  // declines (the 2022 pattern) that never hit a single bad day.
+  // Default -15% keeps the agent running through normal corrections.
+  drawdownPauseThresholdPct Float @default(-15.0)
+  // Per-trade cap in cents. No single order can buy more than this
+  // absolute dollar amount regardless of portfolio size — a backstop
+  // against a bad price fetch or runaway sizing bug. Default $5k is
+  // conservative for a $100k book; users scale it with deposits.
+  maxTradeNotionalCents BigInt @default(500000)
+  // Populated by the safety-rails module when a kill switch fires.
+  // Not reset automatically — user must visit /settings and clear.
+  // Presence of this field is how the UI decides to show the halt
+  // banner (vs. a plain manual pause).
+  killSwitchTriggeredAt DateTime?
+  killSwitchReason    String?  @db.Text
   // Separate ceiling for rule-based crypto trades (DCA legs + rebalance
   // legs). Keeps the crypto engine's mechanical activity from eating into
   // the LLM agent's stock trade budget. Each DCA of a 3-coin allowlist

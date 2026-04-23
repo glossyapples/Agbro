@@ -5,6 +5,7 @@ import { SettingsForm } from '@/components/SettingsForm';
 import { DepositForm } from '@/components/DepositForm';
 import { SignOutButton } from '@/components/SignOutButton';
 import { CredentialManager } from '@/components/CredentialManager';
+import { SafetyRailsForm } from '@/components/SafetyRailsForm';
 
 export default async function SettingsPage() {
   const user = await requirePageUser('/settings');
@@ -49,6 +50,16 @@ export default async function SettingsPage() {
           optionsEnabled: a.optionsEnabled,
           cryptoEnabled: a.cryptoEnabled,
           maxCryptoAllocationPct: a.maxCryptoAllocationPct,
+        }}
+      />
+
+      <SafetyRailsForm
+        initial={{
+          dailyLossKillPct: a.dailyLossKillPct,
+          drawdownPauseThresholdPct: a.drawdownPauseThresholdPct,
+          maxTradeNotionalCents: a.maxTradeNotionalCents.toString(),
+          killSwitchTriggeredAt: a.killSwitchTriggeredAt?.toISOString() ?? null,
+          killSwitchReason: a.killSwitchReason,
         }}
       />
 

@@ -652,13 +652,33 @@ async function placeTradeTool(ctx: ToolContext, input: Record<string, unknown>) 
               `place_trade: insufficient spendable cash. Order needs ~$${(Number(estimatedCostCents) / 100).toFixed(0)} but only $${(Number(spendable.spendableCents) / 100).toFixed(0)} is available ($${(Number(spendable.walletBalanceCents) / 100).toFixed(0)} is parked in the wallet). Transfer from wallet to active cash if you want this trade to go through.`
             );
           }
+          // Per-trade notional kill: defensive cap on absolute dollar
+          // amount regardless of portfolio size. Protects against a
+          // bad price fetch or runaway sizing math. Only applies to
+          // buys — sells reduce exposure so we don't cap their size.
+          if (p.side === 'buy') {
+            const { checkTradeNotional } = await import('@/lib/safety/rails');
+            const notional = await checkTradeNotional(ctx.userId, estimatedCostCents);
+            if (!notional.ok) {
+              log.info('trade.blocked_by_notional', {
+                userId: ctx.userId,
+                symbol,
+                estimatedCostCents: estimatedCostCents.toString(),
+              });
+              throw new Error(`place_trade: ${notional.reason}. Raise maxTradeNotionalCents in Settings or split the order.`);
+            }
+          }
         }
       }
     } catch (walletErr) {
-      // Only re-throw the wallet-specific block. Anything else (Alpaca
-      // hiccup, DB glitch) falls through to the broker call which will
-      // be authoritative.
-      if (walletErr instanceof Error && walletErr.message.startsWith('place_trade: insufficient')) {
+      // Only re-throw the wallet-specific or notional-specific blocks.
+      // Anything else (Alpaca hiccup, DB glitch) falls through to the
+      // broker call which will be authoritative.
+      if (
+        walletErr instanceof Error &&
+        (walletErr.message.startsWith('place_trade: insufficient') ||
+          walletErr.message.startsWith('place_trade: trade notional'))
+      ) {
         throw walletErr;
       }
     }

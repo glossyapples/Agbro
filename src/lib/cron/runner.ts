@@ -15,6 +15,7 @@ import { runAgent, AgentRunInflightError } from '@/lib/agents/orchestrator';
 import { runCryptoCycleAllUsers } from '@/lib/crypto/engine';
 import { detectAndPersistRegime } from '@/lib/data/regime';
 import { runMeeting } from '@/lib/meetings/runner';
+import { checkKillSwitches, applyKillSwitch } from '@/lib/safety/rails';
 import { log } from '@/lib/logger';
 
 const PER_USER_BUDGET_MS = 90_000;
@@ -126,6 +127,20 @@ export async function runScheduledTick(): Promise<TickResult> {
 
   const outcomes: TickOutcome[] = [];
   for (const account of accounts) {
+    // Safety rails — daily loss kill switch + 30-day drawdown
+    // threshold. Runs BEFORE trading-hours + cadence checks so that
+    // a bad day halts the agent even during a regime-forced wake.
+    const safety = await checkKillSwitches(account.userId);
+    if (!safety.ok) {
+      await applyKillSwitch(account.userId, safety.reason);
+      outcomes.push({
+        userId: account.userId,
+        skipped: true,
+        reason: `kill_switch:${safety.triggeredBy}`,
+      });
+      continue;
+    }
+
     if (
       !forceWakeFromRegime &&
       !withinTradingHours(now, account.tradingHoursStart, account.tradingHoursEnd)
