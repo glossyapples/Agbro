@@ -8,6 +8,7 @@ import { ActionItemsList } from '@/components/ActionItemsList';
 import { PolicyChangesList } from '@/components/PolicyChangesList';
 import { BurryGuestToggle } from '@/components/BurryGuestToggle';
 import { FormHypothesisButton } from '@/components/FormHypothesisButton';
+import { AskBurrybotChat } from '@/components/AskBurrybotChat';
 import { StrategySyncNudge } from '@/components/StrategySyncNudge';
 import { missingStarterStrategySlugs } from '@/lib/brain/seed-brain';
 
@@ -142,11 +143,17 @@ async function StrategyTab({ userId }: { userId: string }) {
               initial={s.allowBurryGuest}
             />
             {(s.allowBurryGuest || s.name.toLowerCase().includes('burry')) && (
-              <FormHypothesisButton
-                strategyId={s.id}
-                strategyName={s.name}
-                alreadyFormed={onboardedStrategyIds.has(s.id)}
-              />
+              <>
+                <FormHypothesisButton
+                  strategyId={s.id}
+                  strategyName={s.name}
+                  alreadyFormed={onboardedStrategyIds.has(s.id)}
+                />
+                <AskBurrybotChat
+                  strategyId={s.id}
+                  strategyName={s.name}
+                />
+              </>
             )}
           </li>
         ))}
