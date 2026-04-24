@@ -182,6 +182,8 @@ Write the IMAGE GENERATION PROMPT for gpt-image-2. Rules:
    • Middle panels: the DISAGREEMENT plays out as dialogue. Pull the EMOTIONAL beats from the transcript; don't invent contradicting lines. Translate engineering terms to boardroom English (see the translation layer below).
    • Final panel: RESOLUTION — the outcome, with the specific action item or decision visible (e.g. on a whiteboard, sticky note, or caption).
 
+   FOCAL-BEAT DISCIPLINE — the biggest failure mode is drifting into a week-in-review. Don't. Panels 2 through N-1 (the middle panels) must dramatise the ONE \`comicFocus.arc\` beat-by-beat in order, NOT other topics the meeting also touched. If a topic wasn't in \`comicFocus.arc\`, it does NOT earn panel time — even if the transcript spent ten turns on it. And the middle panels must feature ONLY the characters listed in \`comicFocus.roles\` (plus the guest if applicable); the rest of the cast stays off-stage until the final resolution panel. Fewer characters per panel = a sharper beat. When in doubt, cut.
+
 3. DIALOGUE — CRITICAL FORMAT:
    Speech bubbles contain ONLY the spoken line. NEVER prefix a bubble with "CharacterName:" — that text will render literally inside the bubble and ruin the comic.
 
