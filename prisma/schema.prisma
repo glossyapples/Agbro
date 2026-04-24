@@ -142,6 +142,21 @@ model Account {
   // for audit/history but can't be applied. Useful if the user
   // wants meetings as pure advisory without any write path.
   allowAgentPolicyProposals Boolean @default(true)
+  // Autonomy ladder for agent trade execution:
+  //   observe — agent analyzes + meets + writes brain, but every
+  //             place_trade call is intercepted upstream of the gate
+  //             and converted to an action item / pending approval;
+  //             no autonomous execution.
+  //   propose — every Governor-approved trade still routes to the
+  //             approval queue for user sign-off. Rejections + real
+  //             rail trips still fire automatically.
+  //   auto    — Governor's native approve/reject stands; only
+  //             requires_approval verdicts queue. Today's behaviour.
+  // Default 'auto' for existing users (preserves current UX) via
+  // migration data-backfill; new-user default flips to 'propose' at
+  // the onboarding-wizard layer, not here, so we don't stealth-change
+  // behaviour on existing accounts.
+  autonomyLevel       String   @default("auto")
   // Separate ceiling for rule-based crypto trades (DCA legs + rebalance
   // legs). Keeps the crypto engine's mechanical activity from eating into
   // the LLM agent's stock trade budget. Each DCA of a 3-coin allowlist
