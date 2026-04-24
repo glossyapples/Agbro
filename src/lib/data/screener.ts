@@ -64,15 +64,24 @@ export type ScreenResult = {
 
 // -------------------- Rate-limit check --------------------
 
-export async function getCooldownState(): Promise<{
+export async function getCooldownState(userId?: string): Promise<{
   daysSinceLastScreen: number;
   blocked: boolean;
 }> {
-  const last = await prisma.stock.findFirst({
-    where: { candidateSource: 'screener' },
-    orderBy: { discoveredAt: 'desc' },
-    select: { discoveredAt: true },
-  });
+  // B2.2: per-user cooldown when userId is supplied. Legacy callers
+  // without userId still hit the global Stock (preserves old behaviour
+  // until B2.3 removes that column).
+  const last = userId
+    ? await prisma.userWatchlist.findFirst({
+        where: { userId, candidateSource: 'screener' },
+        orderBy: { discoveredAt: 'desc' },
+        select: { discoveredAt: true },
+      })
+    : await prisma.stock.findFirst({
+        where: { candidateSource: 'screener' },
+        orderBy: { discoveredAt: 'desc' },
+        select: { discoveredAt: true },
+      });
   if (!last?.discoveredAt) return { daysSinceLastScreen: 9999, blocked: false };
   const daysSince = (Date.now() - last.discoveredAt.getTime()) / 86_400_000;
   return { daysSinceLastScreen: Math.floor(daysSince), blocked: daysSince < SCREEN_COOLDOWN_DAYS };
@@ -213,7 +222,7 @@ export async function runScreen(
   options: ScreenOptions = {},
   userId?: string
 ): Promise<ScreenResult> {
-  const cooldown = await getCooldownState();
+  const cooldown = await getCooldownState(userId);
   if (cooldown.blocked && !options.bypassCooldown) {
     return {
       status: 'cooldown_active',

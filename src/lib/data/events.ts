@@ -14,9 +14,13 @@ export type CalendarEvent = {
 
 export type CalendarOptions = {
   // Only include events for this specific symbol + market-wide events.
-  // Omit to include all watchlist symbols' events.
+  // Omit to include all of the caller's watchlist symbols' events.
   symbol?: string;
   horizonDays?: number;
+  // B2.2: per-user watchlist scoping. When omitted, falls back to
+  // "any user's watchlist" — a legacy behaviour only the backtest
+  // overlay-chart path needs.
+  userId?: string;
 };
 
 export async function getUpcomingEvents(
@@ -26,9 +30,37 @@ export async function getUpcomingEvents(
   const now = new Date();
   const horizonDate = new Date(now.getTime() + horizon * 86_400_000);
 
-  const stockWhere = options.symbol
-    ? { symbol: options.symbol }
-    : { onWatchlist: true };
+  // Resolve the symbol filter: explicit symbol > per-user watchlist > legacy global onWatchlist.
+  let stockWhere:
+    | { symbol: string }
+    | { symbol: { in: string[] } }
+    | { onWatchlist: true }
+    | { noMatch: true };
+  if (options.symbol) {
+    stockWhere = { symbol: options.symbol };
+  } else if (options.userId) {
+    const rows = await prisma.userWatchlist.findMany({
+      where: { userId: options.userId, onWatchlist: true },
+      select: { symbol: true },
+    });
+    const symbols = rows.map((r) => r.symbol);
+    stockWhere = symbols.length > 0 ? { symbol: { in: symbols } } : { noMatch: true };
+  } else {
+    // Legacy fallback for callers that haven't threaded userId yet.
+    stockWhere = { onWatchlist: true };
+  }
+  // Fast-path: no matches possible → return market events only.
+  if ('noMatch' in stockWhere) {
+    const marketEventsOnly = await prisma.marketEvent.findMany({
+      where: { occursAt: { gte: now, lte: horizonDate } },
+      orderBy: { occursAt: 'asc' },
+    });
+    return marketEventsOnly.map((e) => ({
+      kind: (e.kind as CalendarEvent['kind']) ?? 'other',
+      occursAt: e.occursAt.toISOString(),
+      description: e.description ?? e.kind,
+    }));
+  }
 
   const [stocks, marketEvents] = await Promise.all([
     prisma.stock.findMany({

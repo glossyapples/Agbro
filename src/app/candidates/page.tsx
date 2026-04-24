@@ -7,34 +7,38 @@ import { CandidateManager } from '@/components/CandidateManager';
 export const runtime = 'nodejs';
 
 export default async function CandidatesPage() {
-  await requirePageUser('/candidates');
+  const user = await requirePageUser('/candidates');
 
-  const [stocks, cooldown] = await Promise.all([
-    prisma.stock.findMany({
-      where: { candidateSource: 'screener' },
+  // B2.2: per-user candidates from UserWatchlist joined to Stock.
+  const [watchlistRows, cooldown] = await Promise.all([
+    prisma.userWatchlist.findMany({
+      where: { userId: user.id, candidateSource: 'screener' },
       orderBy: { discoveredAt: 'desc' },
+      include: { stock: true },
     }),
-    getCooldownState(),
+    getCooldownState(user.id),
   ]);
 
-  const initial = stocks.map((s) => ({
-    symbol: s.symbol,
-    name: s.name,
-    sector: s.sector,
-    candidateNotes: s.candidateNotes,
-    businessDescription: s.businessDescription,
-    discoveredAt: s.discoveredAt ? s.discoveredAt.toISOString() : null,
-    fundamentalsSource: s.fundamentalsSource,
-    fundamentalsUpdatedAt: s.fundamentalsUpdatedAt
-      ? s.fundamentalsUpdatedAt.toISOString()
+  const initial = watchlistRows.map((r) => ({
+    symbol: r.stock.symbol,
+    name: r.stock.name,
+    sector: r.stock.sector,
+    // candidateNotes lives on UserWatchlist; businessDescription stays
+    // on Stock (global — Apple does the same thing for every user).
+    candidateNotes: r.candidateNotes,
+    businessDescription: r.stock.businessDescription,
+    discoveredAt: r.discoveredAt ? r.discoveredAt.toISOString() : null,
+    fundamentalsSource: r.stock.fundamentalsSource,
+    fundamentalsUpdatedAt: r.stock.fundamentalsUpdatedAt
+      ? r.stock.fundamentalsUpdatedAt.toISOString()
       : null,
-    peRatio: s.peRatio,
-    dividendYield: s.dividendYield,
-    debtToEquity: s.debtToEquity,
-    returnOnEquity: s.returnOnEquity,
-    grossMarginPct: s.grossMarginPct,
-    epsTTM: s.epsTTM,
-    bookValuePerShare: s.bookValuePerShare,
+    peRatio: r.stock.peRatio,
+    dividendYield: r.stock.dividendYield,
+    debtToEquity: r.stock.debtToEquity,
+    returnOnEquity: r.stock.returnOnEquity,
+    grossMarginPct: r.stock.grossMarginPct,
+    epsTTM: r.stock.epsTTM,
+    bookValuePerShare: r.stock.bookValuePerShare,
   }));
 
   return (

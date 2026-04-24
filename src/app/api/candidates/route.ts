@@ -13,30 +13,34 @@ export async function GET() {
   if (user instanceof NextResponse) return user;
 
   try {
-    const [candidates, cooldown] = await Promise.all([
-      prisma.stock.findMany({
-        where: { candidateSource: 'screener' },
+    const [watchlistRows, cooldown] = await Promise.all([
+      // B2.2: per-user candidates from UserWatchlist joined to Stock.
+      // discoveredAt + candidateNotes now live on the UserWatchlist row;
+      // global fundamentals come from the joined Stock.
+      prisma.userWatchlist.findMany({
+        where: { userId: user.id, candidateSource: 'screener' },
         orderBy: { discoveredAt: 'desc' },
+        include: { stock: true },
       }),
-      getCooldownState(),
+      getCooldownState(user.id),
     ]);
 
     return NextResponse.json({
-      candidates: candidates.map((s) => ({
-        symbol: s.symbol,
-        name: s.name,
-        sector: s.sector,
-        candidateNotes: s.candidateNotes,
-        discoveredAt: s.discoveredAt?.toISOString() ?? null,
-        fundamentalsSource: s.fundamentalsSource,
-        fundamentalsUpdatedAt: s.fundamentalsUpdatedAt?.toISOString() ?? null,
-        peRatio: s.peRatio,
-        dividendYield: s.dividendYield,
-        debtToEquity: s.debtToEquity,
-        returnOnEquity: s.returnOnEquity,
-        grossMarginPct: s.grossMarginPct,
-        epsTTM: s.epsTTM,
-        bookValuePerShare: s.bookValuePerShare,
+      candidates: watchlistRows.map((r) => ({
+        symbol: r.stock.symbol,
+        name: r.stock.name,
+        sector: r.stock.sector,
+        candidateNotes: r.candidateNotes,
+        discoveredAt: r.discoveredAt?.toISOString() ?? null,
+        fundamentalsSource: r.stock.fundamentalsSource,
+        fundamentalsUpdatedAt: r.stock.fundamentalsUpdatedAt?.toISOString() ?? null,
+        peRatio: r.stock.peRatio,
+        dividendYield: r.stock.dividendYield,
+        debtToEquity: r.stock.debtToEquity,
+        returnOnEquity: r.stock.returnOnEquity,
+        grossMarginPct: r.stock.grossMarginPct,
+        epsTTM: r.stock.epsTTM,
+        bookValuePerShare: r.stock.bookValuePerShare,
       })),
       cooldown,
     });

@@ -40,7 +40,18 @@ export default async function AnalyticsPage() {
         orderBy: { startedAt: 'desc' },
       }),
       prisma.position.findMany({ where: { userId: user.id } }),
-      prisma.stock.findMany({ where: { onWatchlist: true }, orderBy: { buffettScore: 'desc' } }),
+      // B2.2: per-user watchlist via UserWatchlist + Stock join; promote the
+      // Stock rows back to the top level to preserve the existing shape.
+      prisma.userWatchlist
+        .findMany({
+          where: { userId: user.id, onWatchlist: true },
+          include: { stock: true },
+        })
+        .then((rows) =>
+          rows
+            .map((r) => r.stock)
+            .sort((a, b) => (b.buffettScore ?? -1) - (a.buffettScore ?? -1))
+        ),
       prisma.optionPosition.findMany({ where: { userId: user.id } }),
       getDividends(monthStartIso).catch(() => []),
     ]);

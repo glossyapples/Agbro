@@ -27,10 +27,17 @@ export async function GET() {
   if (user instanceof NextResponse) return user;
 
   try {
-    const stocks = await prisma.stock.findMany({
-      where: { onWatchlist: true },
-      orderBy: [{ buffettScore: 'desc' }, { symbol: 'asc' }],
+    // B2.2: per-user reads now come from UserWatchlist joined to Stock.
+    const rows = await prisma.userWatchlist.findMany({
+      where: { userId: user.id, onWatchlist: true },
+      include: { stock: true },
     });
+    const stocks = rows
+      .map((r) => r.stock)
+      .sort((a, b) => {
+        const bs = (b.buffettScore ?? -1) - (a.buffettScore ?? -1);
+        return bs !== 0 ? bs : a.symbol.localeCompare(b.symbol);
+      });
     return NextResponse.json(
       stocks.map((s) => ({
         ...s,

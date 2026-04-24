@@ -143,10 +143,15 @@ export async function runCandidateWizard(userId: string): Promise<WizardResult> 
     throw new Error('ANTHROPIC_API_KEY missing — wizard disabled');
   }
 
-  const [candidates, activeStrategy, principles] = await Promise.all([
-    prisma.stock.findMany({
-      where: { candidateSource: 'screener' },
+  // B2.2: per-user candidates from UserWatchlist joined to Stock.
+  // candidateNotes now lives on UserWatchlist; the rest of the fields
+  // formatCandidate consumes come from the global Stock row. Compose
+  // a single object per candidate so downstream code is unchanged.
+  const [watchlistRows, activeStrategy, principles] = await Promise.all([
+    prisma.userWatchlist.findMany({
+      where: { userId, candidateSource: 'screener' },
       orderBy: { discoveredAt: 'desc' },
+      include: { stock: true },
     }),
     prisma.strategy.findFirst({ where: { userId, isActive: true } }),
     prisma.brainEntry.findMany({
@@ -154,6 +159,12 @@ export async function runCandidateWizard(userId: string): Promise<WizardResult> 
       orderBy: { createdAt: 'desc' },
     }),
   ]);
+  // Compose Stock + UserWatchlist.candidateNotes into the shape
+  // downstream code + formatCandidate expect.
+  const candidates: CandidateInput[] = watchlistRows.map((r) => ({
+    ...r.stock,
+    candidateNotes: r.candidateNotes,
+  }));
 
   if (candidates.length === 0) {
     return {

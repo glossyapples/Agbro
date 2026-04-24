@@ -78,13 +78,18 @@ export async function refreshWatchlistFundamentals(options?: {
   delayMs?: number;
 }): Promise<RefreshResult[]> {
   const delayMs = options?.delayMs ?? 200; // 5 req/sec, half the SEC ceiling
-  const stocks = await prisma.stock.findMany({
+  // B2.2: union of symbols any user has on their watchlist. Fundamentals
+  // themselves are global (Apple's EPS is the same for everyone), so one
+  // batch refresh covers all users' watchlists. `distinct: ['symbol']`
+  // dedupes the same symbol across multiple users.
+  const watchlistRows = await prisma.userWatchlist.findMany({
     where: { onWatchlist: true },
     select: { symbol: true },
+    distinct: ['symbol'],
   });
 
   const out: RefreshResult[] = [];
-  for (const s of stocks) {
+  for (const s of watchlistRows) {
     const r = await refreshFundamentalsForSymbol(s.symbol);
     out.push(r);
     if (delayMs > 0) await new Promise((res) => setTimeout(res, delayMs));

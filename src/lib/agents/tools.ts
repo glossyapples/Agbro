@@ -483,11 +483,21 @@ export async function runTool(
       return { price: await safeAlpaca(() => getLatestPrice(String(input.symbol))) };
     case 'is_market_open':
       return { open: await safeAlpaca(() => isMarketOpen()) };
-    case 'get_watchlist':
-      return prisma.stock.findMany({
-        where: { onWatchlist: true },
-        orderBy: [{ buffettScore: 'desc' }],
+    case 'get_watchlist': {
+      // B2.2: read per-user watchlist from UserWatchlist joined to Stock
+      // (global catalog). Returns the same shape the agent used to see —
+      // Stock fields promoted to top level — so no prompt changes are
+      // needed. Ordering by buffettScore stays on the Stock relation.
+      const rows = await prisma.userWatchlist.findMany({
+        where: { userId: ctx.userId, onWatchlist: true },
+        include: { stock: true },
       });
+      return rows
+        .map((r) => r.stock)
+        .sort(
+          (a, b) => (b.buffettScore ?? -1) - (a.buffettScore ?? -1)
+        );
+    }
     case 'read_brain': {
       // Clamp limit so an agent emitting limit=10000 can't dump every
       // row, blow the 60KB tool-output cap, and waste tokens. 100 is
@@ -586,7 +596,9 @@ export async function runTool(
       if (!parsed.success) {
         throw new Error(`get_event_calendar: invalid input — ${parsed.error.message}`);
       }
-      return { events: await getUpcomingEvents(parsed.data) };
+      return {
+        events: await getUpcomingEvents({ ...parsed.data, userId: ctx.userId }),
+      };
     }
     case 'evaluate_exits': {
       // The orchestrator's syncPositions already reconciled our DB against

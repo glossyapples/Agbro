@@ -6,15 +6,24 @@ import { WatchlistManager } from '@/components/WatchlistManager';
 export const runtime = 'nodejs';
 
 export default async function WatchlistPage() {
-  await requirePageUser('/watchlist');
+  const user = await requirePageUser('/watchlist');
 
-  const [stocks, candidateCount] = await Promise.all([
-    prisma.stock.findMany({
-      where: { onWatchlist: true },
-      orderBy: [{ buffettScore: 'desc' }, { symbol: 'asc' }],
+  // B2.2: per-user reads from UserWatchlist joined to Stock.
+  const [watchlistRows, candidateCount] = await Promise.all([
+    prisma.userWatchlist.findMany({
+      where: { userId: user.id, onWatchlist: true },
+      include: { stock: true },
     }),
-    prisma.stock.count({ where: { candidateSource: 'screener' } }),
+    prisma.userWatchlist.count({
+      where: { userId: user.id, candidateSource: 'screener' },
+    }),
   ]);
+  const stocks = watchlistRows
+    .map((r) => r.stock)
+    .sort((a, b) => {
+      const bs = (b.buffettScore ?? -1) - (a.buffettScore ?? -1);
+      return bs !== 0 ? bs : a.symbol.localeCompare(b.symbol);
+    });
 
   // Strip Prisma BigInt + Date types for the client boundary.
   const initial = stocks.map((s) => ({

@@ -193,10 +193,11 @@ async function getOverview() {
         where: { userId: user.id },
         orderBy: { createdAt: 'desc' },
       }),
-      prisma.stock.count({ where: { onWatchlist: true } }),
-      prisma.stock.count({ where: { candidateSource: 'screener' } }),
+      // B2.2: per-user counts from UserWatchlist.
+      prisma.userWatchlist.count({ where: { userId: user.id, onWatchlist: true } }),
+      prisma.userWatchlist.count({ where: { userId: user.id, candidateSource: 'screener' } }),
       getInitialChartPayload(user.id),
-      getUpcomingEvents({ horizonDays: 14 }),
+      getUpcomingEvents({ horizonDays: 14, userId: user.id }),
       getMoodInputs(user.id),
     ]);
 
