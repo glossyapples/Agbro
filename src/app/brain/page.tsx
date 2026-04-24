@@ -24,6 +24,7 @@ const KIND_LABELS: Record<string, string> = {
   lesson: 'Lesson',
   market_memo: 'Memo',
   agent_run_summary: 'Run',
+  research_note: 'Research',
   hypothesis: 'Hypothesis',
   note: 'Note',
 };

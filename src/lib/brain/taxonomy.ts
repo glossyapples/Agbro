@@ -89,6 +89,7 @@ export const BRAIN_KIND_TAXONOMY: Record<
   post_mortem: { category: 'memory', confidence: 'medium' },
   lesson: { category: 'memory', confidence: 'medium' },
   market_memo: { category: 'memory', confidence: 'medium' },
+  research_note: { category: 'memory', confidence: 'medium' },
   hypothesis: { category: 'hypothesis', confidence: 'low' },
   note: { category: 'note', confidence: 'medium' },
 };

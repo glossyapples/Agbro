@@ -123,6 +123,7 @@ export const TOOL_DEFS: Anthropic.Tool[] = [
               'post_mortem',
               'weekly_update',
               'agent_run_summary',
+              'research_note',
               'hypothesis',
               'note',
             ],
@@ -525,17 +526,7 @@ export async function runTool(
     case 'research_google':
       return googleSearch(String(input.query), Number(input.num ?? 5));
     case 'record_research_note':
-      return prisma.researchNote.create({
-        data: {
-          agentRunId: ctx.agentRunId,
-          symbol: (input.symbol as string) ?? null,
-          topic: String(input.topic),
-          source: String(input.source),
-          bullCase: (input.bullCase as string) ?? null,
-          bearCase: (input.bearCase as string) ?? null,
-          summary: String(input.summary),
-        },
-      });
+      return recordResearchNoteTool(ctx, input);
     case 'size_position':
       return sizePositionTool(ctx, input);
     case 'place_trade':
@@ -1084,6 +1075,84 @@ async function updateStockFundamentalsTool(input: Record<string, unknown>) {
     updatedFields: Object.keys(patch).filter((k) => patch[k as keyof typeof patch] !== undefined),
     lastAnalyzedAt: stock.lastAnalyzedAt,
   };
+}
+
+// record_research_note does TWO writes now:
+//   (1) ResearchNote — the structured record (symbol, source, bull/bear).
+//   (2) BrainEntry mirror — category=memory, kind='research_note', tagged
+//       with symbol + 'research_note' so it shows up on /brain alongside
+//       every other memory. The prompt promised "every research loop ends
+//       with a persisted note", but historically those notes were only
+//       queryable via the raw ResearchNote table — invisible from /brain
+//       and never surfaced to the agent's own read_brain tool.
+async function recordResearchNoteTool(
+  ctx: ToolContext,
+  input: Record<string, unknown>
+) {
+  const topic = String(input.topic).slice(0, 240);
+  const source = String(input.source).slice(0, 120);
+  const symbol =
+    typeof input.symbol === 'string' && input.symbol.trim().length > 0
+      ? input.symbol.toUpperCase()
+      : null;
+  const bullCase =
+    typeof input.bullCase === 'string' && input.bullCase.trim().length > 0
+      ? input.bullCase
+      : null;
+  const bearCase =
+    typeof input.bearCase === 'string' && input.bearCase.trim().length > 0
+      ? input.bearCase
+      : null;
+  const summary = String(input.summary);
+
+  const note = await prisma.researchNote.create({
+    data: {
+      agentRunId: ctx.agentRunId,
+      symbol,
+      topic,
+      source,
+      bullCase,
+      bearCase,
+      summary,
+    },
+  });
+
+  // BrainEntry mirror. Body composes the parts into a readable block;
+  // kept tight (≤ ~2000 chars) so the /brain list stays scannable.
+  const parts: string[] = [summary.trim()];
+  if (bullCase) parts.push(`\nBull case: ${bullCase.trim()}`);
+  if (bearCase) parts.push(`\nBear case: ${bearCase.trim()}`);
+  parts.push(`\nSource: ${source}`);
+  const body = parts.join('\n').slice(0, 8_000);
+  const title = symbol
+    ? `Research: ${symbol} — ${topic}`.slice(0, 240)
+    : `Research: ${topic}`.slice(0, 240);
+  await prisma.brainEntry
+    .create({
+      data: {
+        userId: ctx.userId,
+        kind: 'research_note',
+        category: 'memory',
+        confidence: 'medium',
+        sourceRunId: ctx.agentRunId,
+        title,
+        body,
+        tags: ['research_note', 'auto-recorded'],
+        relatedSymbols: symbol ? [symbol] : [],
+      },
+    })
+    .catch((err) => {
+      // Don't let a brain write failure break record_research_note —
+      // the structured ResearchNote row is the authoritative record,
+      // the BrainEntry is just the /brain visibility mirror.
+      log.warn('research_note.brain_mirror_failed', {
+        userId: ctx.userId,
+        agentRunId: ctx.agentRunId,
+        err: (err as Error).message,
+      });
+    });
+
+  return note;
 }
 
 async function finalizeRunTool(ctx: ToolContext, input: Record<string, unknown>) {

@@ -18,6 +18,7 @@ const BRAIN_KINDS = [
   'post_mortem',
   'weekly_update',
   'agent_run_summary',
+  'research_note',
   'hypothesis',
   'note',
 ] as const;
