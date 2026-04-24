@@ -105,23 +105,22 @@ export function resolveRuleset(key: StrategyKey): BacktestRuleset {
         rebalanceCadenceDays: 90,
       };
     case 'burry_deep_research':
-      // No Tier-2 pre-screen — Burry ignores P/E, treats D/E as a
-      // read-the-footnotes question, and buys ROE-poor turnarounds
-      // when the balance sheet hides value. But without rotation
-      // rules the backtest was pure equal-weight buy-and-hold of
-      // the day-0 "ick" universe with no exits, which overstates
-      // what Burry actually does: his winners do run for years, but
-      // losers get cut fast. Add a mean-reversion target-sell (25%
-      // is below Graham's 30 since Burry leans on the initial MOS
-      // being deeper) and a 3-year soft time-stop matching the
-      // live strategy's rules.timeStopDays. With these, the backtest
-      // can at least rotate into successor names as exits fire — a
-      // crude but faithful proxy for "Burry picks, held, recycled
-      // when the thesis pays off or ages out."
-      return {
-        targetSellPct: 25,
-        timeStopDays: 1095,
-      };
+      // Honest buy-and-hold approximation. A previous version added
+      // targetSellPct + timeStopDays to "rotate", but the simulator
+      // has no redeploy path for Burry (no filtersActive, no
+      // rebalance cadence, no DCA) — so exits fired and proceeds
+      // sat in cash indefinitely. Silent cash drag compounded, making
+      // the curve worse than pure buy-and-hold.
+      //
+      // Empty ruleset = equal-weight buy-and-hold of the day-0 "ick"
+      // universe with no exits. Overstates how long Burry actually
+      // holds (his losers get cut fast in reality), but it's
+      // predictable and doesn't lie about cash drag. A proper
+      // rotation-aware version would need a redeploy leg in the
+      // simulator that equal-weights the surviving names after each
+      // exit; out of scope for a backtest approximation of a style
+      // whose real edge is the 10-K read, not the trade mechanics.
+      return {};
   }
 }
 
