@@ -8,6 +8,7 @@
 // brand-new user sees an empty state until at least two snapshots exist.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { formatUsd } from '@/lib/money';
 
 type Range = '1D' | '1W' | '1M' | '3M' | 'YTD' | '1Y' | 'ALL';
@@ -118,6 +119,14 @@ export function CryptoPerformanceChart({ initial }: { initial: Payload }) {
             </p>
           )}
         </div>
+        <Link
+          href="/crypto/positions"
+          prefetch={false}
+          className="text-xs text-brand-400"
+          aria-label="View all crypto holdings"
+        >
+          Holdings →
+        </Link>
       </div>
 
       {data.book.length >= 2 ? (

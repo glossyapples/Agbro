@@ -13,6 +13,7 @@
 //   - Time-range chips underneath: 1D · 1W · 1M · 3M · YTD · 1Y · ALL
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { formatUsd } from '@/lib/money';
 
 type Range = '1D' | '1W' | '1M' | '3M' | 'YTD' | '1Y' | 'ALL';
@@ -65,7 +66,17 @@ export function PerformanceChart({ initial }: { initial: Payload }) {
 
   return (
     <section className="card">
-      <p className="stat-label">Portfolio · stocks</p>
+      <div className="flex items-start justify-between">
+        <p className="stat-label">Portfolio · stocks</p>
+        <Link
+          href="/positions"
+          prefetch={false}
+          className="text-xs text-brand-400"
+          aria-label="View all stock holdings"
+        >
+          Holdings →
+        </Link>
+      </div>
       <p className="stat-value">
         {data.summary ? formatUsd(BigInt(Math.round(data.summary.currentEquity * 100))) : '—'}
       </p>
