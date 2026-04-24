@@ -212,6 +212,8 @@ Write the IMAGE GENERATION PROMPT for gpt-image-2. Rules:
 
 7. Show SPECIFIC numbers / tickers / ratios from the meeting — on whiteboards, charts, sticky notes. The stakes should feel like the actual firm's actual week. These can use technical shorthand (e.g. "BRK.B MOS -2%") because they're written on surfaces, not spoken.
 
+8. CURRENCY — ALL monetary figures, dollar signs, and prices in the comic MUST use US DOLLARS ($). AgBro is a US-based firm. Never use £ (pounds), € (euros), ¥ (yen), or any other symbol, regardless of the cast's visual styling (e.g. a "London boardroom" mood is purely aesthetic — the books are still in USD). A cost of $39.37 is ALWAYS "$39.37", never "£39.37".
+
 GOAL — the comic must (in priority order):
   #1 ACCURATE to the meeting's decisions and transcript
   #2 highlight at least one specific action item or decision on-page

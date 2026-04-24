@@ -136,7 +136,16 @@ POLICY CHANGES — the partners may propose adjustments to the firm's risk postu
   • expectedAnnualPct
   • strategy rules (kind='strategy_param' — routes through the strategy wizard for user review)
 
-GROUNDING — when a policy-change rationale cites a number (cost per run, weekly spend, position size, drawdown, yield, etc.), that number MUST come from the briefing. Specifically for cost-of-running claims, use briefing.agentRunCostSummary.{avgPerRunUsd, medianPerRunUsd, weeklyTotalUsd} — NEVER estimate from memory. A typical calm-regime Opus run with prompt caching is $0.10–$0.30, not dollars. If the summary shows $0.20/run and the rationale says "$4/run", that rationale is hallucinated and will be rejected on review.
+GROUNDING — when a policy-change rationale OR transcript dialogue cites a number (cost per run, weekly spend, drag %, position size, drawdown, yield, etc.), that number MUST come directly from the briefing. NEVER derive ratios in your head — when a ratio is available precomputed, cite IT, not a recalculation.
+
+For cost-of-running claims specifically:
+  • Direct costs → briefing.agentRunCostSummary.{avgPerRunUsd, medianPerRunUsd, weeklyTotalUsd, annualisedTotalUsd}
+  • Drag on portfolio → briefing.agentRunCostSummary.annualDragPctOfEquity (already %; "X% drag on equity")
+  • Drag on expected return → briefing.agentRunCostSummary.annualDragPctOfExpectedReturn (already %; "X% of our target gain is eaten by agent costs")
+  • A typical cached Opus run is $0.10–$0.30, not dollars. If the summary shows $0.20/run and dialogue says "$4/run", that rationale is hallucinated and will be rejected on review.
+  • If the summary shows annualDragPctOfExpectedReturn=6.8 and dialogue says "2% drag on our target", that's a hallucination — cite the precomputed 6.8% instead.
+
+CURRENCY — ALL monetary figures in transcript + comicFocus + policy-change rationales are in US DOLLARS ($). AgBro is a US-based firm. Never write £, €, ¥, or any other symbol regardless of the cast's geographic styling.
 
 FORBIDDEN policy changes — NEVER propose these. They're operator-scoped, not partner-scoped:
   • Any API credentials (OpenAI / Anthropic / Perplexity keys — user-managed only)

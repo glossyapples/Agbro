@@ -179,13 +179,15 @@ export async function runMeeting(params: {
     // Comic failures still don't fail the meeting — we persist the
     // error to meeting.comicError and return status:'completed'.
     let openaiKey: string | null = null;
+    let credentialReadError: string | null = null;
     try {
       openaiKey = await getUserCredential(userId, 'openai');
     } catch (err) {
+      credentialReadError = (err as Error).message.slice(0, 300);
       log.warn('meeting.comic_credential_read_failed', {
         meetingId: meeting.id,
         userId,
-        err: (err as Error).message,
+        err: credentialReadError,
       });
     }
     if (openaiKey) {
@@ -216,11 +218,26 @@ export async function runMeeting(params: {
           .catch(() => {});
       }
     } else {
+      // No OpenAI key available at meeting-run time. Persist the
+      // reason to comicError so the UI shows something useful instead
+      // of the generic "no comic yet" copy — e.g. "credential read
+      // failed" surfaces when decryption blew up, vs "no OpenAI key"
+      // when the user hasn't saved one. Retry via the manual
+      // generate-comic button when fixed.
+      const reason = credentialReadError
+        ? `credential read failed: ${credentialReadError}`
+        : 'No OpenAI key saved. Add one in Settings → API keys, then use "Generate comic" on this card.';
       log.info('meeting.comic_skipped', {
         meetingId: meeting.id,
         userId,
-        reason: 'no_openai_key',
+        reason: credentialReadError ? 'credential_read_error' : 'no_openai_key',
       });
+      await prisma.meeting
+        .update({
+          where: { id: meeting.id },
+          data: { comicError: reason },
+        })
+        .catch(() => {});
     }
 
     return { meetingId: meeting.id, status: 'completed' };
@@ -444,9 +461,14 @@ async function buildBriefing(userId: string, agendaOverride?: string) {
     })),
     // Honest cost rollup so the partners don't have to eyeball per-run
     // numbers (and, previously, invent them — rationales were quoting
-    // $4-7/run when the real number was $0.20). Source-of-truth math.
+    // $4-7/run when the real number was $0.20). Source-of-truth math,
+    // including derived drag ratios so the partners cite them directly
+    // instead of deriving them wrong (earlier meetings claimed "2%
+    // drag on a 30% target" when the actual number was 6.8%).
     agentRunCostSummary: summariseAgentRunCosts(
-      recentRuns as Array<{ costUsd: number | null; startedAt: Date; status: string }>
+      recentRuns as Array<{ costUsd: number | null; startedAt: Date; status: string }>,
+      account ? Number(account.depositedCents) / 100 : 0,
+      account?.expectedAnnualPct ?? 0
     ),
     // Doctrine: principles + playbooks the partners should always
     // reason from. Shorter body slice — these are reminders, not
@@ -554,13 +576,20 @@ function parseMeetingJson(raw: string): MeetingOutput {
 // full histogram; weeklyTotal is the number the partners actually care
 // about when debating cadence.
 function summariseAgentRunCosts(
-  runs: Array<{ costUsd: number | null; startedAt: Date; status: string }>
+  runs: Array<{ costUsd: number | null; startedAt: Date; status: string }>,
+  equityUsdForDrag: number,
+  expectedAnnualReturnPct: number
 ): {
   runCount: number;
   weeklyTotalUsd: number;
   avgPerRunUsd: number;
   medianPerRunUsd: number;
   maxPerRunUsd: number;
+  annualisedTotalUsd: number;
+  // Direct ratios so the partners don't have to do the math in their
+  // heads — and don't derive it wrong. Empty/0 when inputs are absent.
+  annualDragPctOfEquity: number;
+  annualDragPctOfExpectedReturn: number;
 } {
   const costs = runs
     .map((r) => r.costUsd)
@@ -572,18 +601,31 @@ function summariseAgentRunCosts(
       avgPerRunUsd: 0,
       medianPerRunUsd: 0,
       maxPerRunUsd: 0,
+      annualisedTotalUsd: 0,
+      annualDragPctOfEquity: 0,
+      annualDragPctOfExpectedReturn: 0,
     };
   }
   const total = costs.reduce((a, b) => a + b, 0);
   const sorted = [...costs].sort((a, b) => a - b);
   const median = sorted[Math.floor(sorted.length / 2)];
   const max = sorted[sorted.length - 1];
+  const annualised = total * 52;
+  const dragOfEquity =
+    equityUsdForDrag > 0 ? (annualised / equityUsdForDrag) * 100 : 0;
+  const dragOfExpected =
+    equityUsdForDrag > 0 && expectedAnnualReturnPct > 0
+      ? (annualised / (equityUsdForDrag * (expectedAnnualReturnPct / 100))) * 100
+      : 0;
   return {
     runCount: runs.length,
     weeklyTotalUsd: Number(total.toFixed(4)),
     avgPerRunUsd: Number((total / costs.length).toFixed(4)),
     medianPerRunUsd: Number(median.toFixed(4)),
     maxPerRunUsd: Number(max.toFixed(4)),
+    annualisedTotalUsd: Number(annualised.toFixed(2)),
+    annualDragPctOfEquity: Number(dragOfEquity.toFixed(2)),
+    annualDragPctOfExpectedReturn: Number(dragOfExpected.toFixed(2)),
   };
 }
 
@@ -597,20 +639,29 @@ function buildMeetingSystemPrompt(
   const roster = Object.values(cast.characters)
     .map((c) => `  • role "${c.role}" → ${c.name}: ${c.personality}`)
     .join('\n');
-  // Guest block — when Burrybot is on, add him as a 6th role with
-  // tightly-scoped guest constraints. He speaks, but he does NOT drive
-  // the meeting, he does NOT propose policy changes (no partner
-  // authority), and he is capped at ≤3 turns. If he's absent the block
-  // is empty.
+  // Guest block — when Burrybot joins ANOTHER firm's meeting as a
+  // drop-in analyst. He's a 6th voice with tight constraints: ≤3
+  // turns, cannot drive the call, cannot propose policy changes. The
+  // firm's own principal still runs the meeting.
   const guestBlock = guest
-    ? `\n  • role "${guest.role}" → ${guest.name} (GUEST ANALYST): ${guest.personality}\n\nGUEST RULES (Burrybot):\n  • ≤3 transcript turns across the whole meeting. Every turn must cite a specific number, ticker, or filing detail.\n  • NOT the final decision-maker. The firm's principal decides; Burrybot's role is to inform and dissent productively.\n  • He does NOT propose policyChanges. He MAY suggest actionItems with kind='research' when he flags a name worth the firm's deep-read.\n  • Voice: deferential but direct ("you've been doing this longer, but the Q3 footnote says…"). Introverted, narrow, data-driven. Never schmoozes. Never cheerleads.`
+    ? `\n\nGUEST this week — the base prompt's "five roles" expands to SIX for this meeting only. Add:\n  • role "${guest.role}" → ${guest.name} (GUEST ANALYST): ${guest.personality}\n\nGUEST RULES (Burrybot):\n  • ≤3 transcript turns across the whole meeting. Every turn must cite a specific number, ticker, or filing detail.\n  • NOT the final decision-maker. The firm's principal decides; Burrybot's role is to inform and dissent productively.\n  • He does NOT propose policyChanges. He MAY suggest actionItems with kind='research' when he flags a name worth the firm's deep-read.\n  • Voice: deferential but direct ("you've been doing this longer, but the Q3 footnote says…"). Introverted, narrow, data-driven. Never schmoozes. Never cheerleads.`
+    : '';
+  // Firm-mode block — when Burrybot IS the firm's principal (his own
+  // strategy is active). Shapes the meeting's tone + airtime so the
+  // transcript reflects HIS style, not a generic boardroom rhythm.
+  // Without this the base system prompt keeps nudging the
+  // warren_buffbot slot toward "folksy Midwestern CEO" regardless of
+  // the cast override. This block explicitly retargets it.
+  const isBurryFirm = cast.strategyKey === 'burry_deep_research';
+  const firmBlock = isBurryFirm
+    ? `\n\nFIRM MODE — Burrybot runs this firm.\n  • The \`warren_buffbot\` role key is occupied by Burrybot (principal / managing partner). IGNORE the base prompt's description of that slot as a "folksy Midwestern CEO" — the cast roster above is authoritative. Burrybot's voice is introverted, terse, filings-driven.\n  • Airtime: Burrybot SHOULD speak 5-7 turns out of ~12-14 total. This is his firm; he's the one who read the filings all week. The supporting partners (Cassandra-bot / analyst / risk / ops) support his reads with specific numbers or push back on narrow technical points; they do NOT deliver independent theses of their own.\n  • Cassandra-bot (in the charlie_mungbot slot) is his forensic-quant partner — not a generic devil's advocate. She pushes back when his macro-paranoia runs ahead of the numbers, and names the specific footnote / ratio that contradicts his read. Skip the "abominable no" / one-liner tradition; her pushback is surgical, not rhetorical.\n  • Subject matter skew: 10-K / 10-Q footnote beats, cash-flow-quality reads, ick-factor pattern-matching, concentration sizing debates. Fewer macro / rate-cycle tangents unless the firm has an active hypothesis on one. Almost never covered-calls or crypto.\n  • Policy changes are RARE here — Burrybot's rulebook isn't tweaked week-to-week, and de-emphasising P/E etc. is already baked into the firm's rules. Prefer actionItems (usually kind='research') over policyChanges.`
     : '';
   return `${MEETING_SYSTEM_PROMPT}
 
 The current meeting's cast is:
-${roster}${guestBlock}
+${roster}${guestBlock}${firmBlock}
 
-When writing transcript turns, use the \`role\` keys above in the role field, but refer to characters by their names inside dialogue (e.g. "I think Mung-bot raised a fair point…"). Stay in character for each role's personality; these are satirical -bot variants, not real people.`;
+When writing transcript turns, use the \`role\` keys above in the role field, but refer to characters by their names inside dialogue (e.g. "I think Mung-bot raised a fair point…"). Stay in character for each role's personality as defined in the roster above; these are satirical -bot variants, not real people. The roster overrides any personality description in the base prompt above.`;
 }
 
 // Minimal snapshot of the cast to persist on the Meeting row so the
