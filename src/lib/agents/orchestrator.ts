@@ -86,6 +86,23 @@ export async function runAgent(args: RunAgentArgs): Promise<RunAgentResult> {
   // persisted trigger fields here means every run-start honours the
   // halt, regardless of how it was invoked.
   if (account.killSwitchTriggeredAt != null) {
+    // Re-assert isPaused without touching killSwitchTriggeredAt or the
+    // reason — covers the case where isPaused was flipped back to
+    // false out-of-band (manual DB edit, partial clear) while the
+    // persisted trip is still live. Not using applyKillSwitch here
+    // because that would overwrite the original trip timestamp, losing
+    // the audit trail of when the safety rail actually fired.
+    if (!account.isPaused) {
+      await prisma.account
+        .update({
+          where: { userId: args.userId },
+          data: { isPaused: true },
+        })
+        .catch(() => {
+          // Best-effort re-pause; the skip below still halts this run
+          // regardless of whether the write succeeded.
+        });
+    }
     return skipRun(
       args.userId,
       args.trigger,
