@@ -887,11 +887,19 @@ async function placeTradeTool(ctx: ToolContext, input: Record<string, unknown>) 
     // separate ceiling (maxDailyCryptoTrades) so rule-based DCA legs
     // don't eat the agent's trade budget. Schema default 'stock' covers
     // pre-crypto-module rows automatically.
+    // Only statuses representing a live or completed order count against
+    // the cap. A 'rejected' broker order OR an orchestrator-cancelled
+    // pending row is a failed attempt — letting it burn the day's
+    // budget was causing the agent to hit its own cap via Alpaca's
+    // rejections (bad tickers, insufficient funds) with no recourse
+    // until the next ET day. Live statuses only: pending, submitted,
+    // filled. Rejected + canceled preserved for audit but excluded.
     const todaysTrades = await tx.trade.count({
       where: {
         userId: ctx.userId,
         submittedAt: { gte: since },
         assetClass: 'stock',
+        status: { in: ['pending', 'submitted', 'filled'] },
       },
     });
     if (todaysTrades >= acct.maxDailyTrades) {
