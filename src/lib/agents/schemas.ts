@@ -4,19 +4,48 @@
 
 import { z } from 'zod';
 
-export const PlaceTradeInput = z.object({
-  symbol: z.string().min(1).max(12),
-  side: z.enum(['buy', 'sell']),
-  qty: z.number().positive().finite().max(1_000_000),
-  orderType: z.enum(['market', 'limit']).optional(),
-  limitPrice: z.number().positive().finite().optional(),
-  bullCase: z.string().min(1).max(4_000),
-  bearCase: z.string().min(1).max(4_000),
-  thesis: z.string().min(1).max(4_000),
-  confidence: z.number().min(0).max(1),
-  intrinsicValuePerShare: z.number().nonnegative().finite().optional(),
-  marginOfSafetyPct: z.number().min(-100).max(100).optional(),
-});
+// Buys require a written fair-value estimate + an explicit MOS. The
+// agent's principles document MOS as non-negotiable; making those
+// fields required at the schema level closes the previous gap where
+// the prompt promised the gate but the tool accepted trades without
+// either value. Sells stay flexible — exit decisions have their own
+// path (evaluate_exits) and don't require a fresh IV/MOS on the wire.
+export const PlaceTradeInput = z
+  .object({
+    symbol: z.string().min(1).max(12),
+    side: z.enum(['buy', 'sell']),
+    qty: z.number().positive().finite().max(1_000_000),
+    orderType: z.enum(['market', 'limit']).optional(),
+    limitPrice: z.number().positive().finite().optional(),
+    bullCase: z.string().min(1).max(4_000),
+    bearCase: z.string().min(1).max(4_000),
+    thesis: z.string().min(1).max(4_000),
+    confidence: z.number().min(0).max(1),
+    intrinsicValuePerShare: z.number().nonnegative().finite().optional(),
+    marginOfSafetyPct: z.number().min(-100).max(100).optional(),
+  })
+  .superRefine((val, ctx) => {
+    if (val.side !== 'buy') return;
+    if (
+      typeof val.intrinsicValuePerShare !== 'number' ||
+      val.intrinsicValuePerShare <= 0
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['intrinsicValuePerShare'],
+        message:
+          'buys require a positive intrinsicValuePerShare (per-share fair value from the analyzer or a documented alternative). Run run_analyzer first, then place_trade.',
+      });
+    }
+    if (typeof val.marginOfSafetyPct !== 'number') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['marginOfSafetyPct'],
+        message:
+          'buys require an explicit marginOfSafetyPct (price vs intrinsic value). Compute via run_analyzer; accept the gap as-is or justify a lower bar in the thesis.',
+      });
+    }
+  });
 
 export const SizePositionInput = z.object({
   buffettScore: z.number().min(0).max(100),

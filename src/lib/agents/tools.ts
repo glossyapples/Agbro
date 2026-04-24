@@ -398,7 +398,7 @@ export const TOOL_DEFS: Anthropic.Tool[] = [
   {
     name: 'place_trade',
     description:
-      'Submit an order to Alpaca. Requires symbol, side, qty, bullCase, bearCase, thesis, confidence (0..1), intrinsicValuePerShare, marginOfSafetyPct. Server re-validates ALL safety rails before routing.',
+      "Submit an order to Alpaca. For BUYS, intrinsicValuePerShare AND marginOfSafetyPct are required (compute via run_analyzer first) — the server enforces a minimum MOS consistent with the active strategy's minMarginOfSafetyPct and rejects trades below it. Sells may omit IV/MOS. Server re-validates ALL safety rails before routing.",
     input_schema: {
       type: 'object',
       properties: {
@@ -411,8 +411,16 @@ export const TOOL_DEFS: Anthropic.Tool[] = [
         bearCase: { type: 'string' },
         thesis: { type: 'string' },
         confidence: { type: 'number' },
-        intrinsicValuePerShare: { type: 'number' },
-        marginOfSafetyPct: { type: 'number' },
+        intrinsicValuePerShare: {
+          type: 'number',
+          description:
+            'Per-share fair value from run_analyzer (or an equivalent documented method). REQUIRED for side=buy.',
+        },
+        marginOfSafetyPct: {
+          type: 'number',
+          description:
+            'Discount of price vs intrinsic, as a percent (e.g. 25 = price is 25% below intrinsic). REQUIRED for side=buy. Must meet or exceed the active strategy\'s minMarginOfSafetyPct.',
+        },
       },
       required: [
         'symbol',
@@ -682,6 +690,35 @@ async function placeTradeTool(ctx: ToolContext, input: Record<string, unknown>) 
   const orderType = p.orderType ?? 'market';
   if (orderType === 'limit' && p.limitPrice == null) {
     throw new Error('place_trade: limitPrice required when orderType=limit');
+  }
+
+  // MOS gate for buys — schema guarantees both fields are present on
+  // buy orders; enforce the active strategy's minMarginOfSafetyPct
+  // here rather than at Zod level so the error message can name the
+  // strategy rule the agent was breaking. Sells skip this block.
+  if (p.side === 'buy') {
+    const mos = p.marginOfSafetyPct as number; // schema-guaranteed for buys
+    const activeStrategy = await prisma.strategy.findFirst({
+      where: { userId: ctx.userId, isActive: true },
+      select: { name: true, rules: true },
+    });
+    const strategyMinMos = (() => {
+      const rules = (activeStrategy?.rules as Record<string, unknown> | undefined) ?? {};
+      const v = rules.minMarginOfSafetyPct;
+      return typeof v === 'number' ? v : null;
+    })();
+    if (strategyMinMos != null && mos < strategyMinMos) {
+      log.info('trade.blocked_by_mos', {
+        userId: ctx.userId,
+        symbol,
+        mos,
+        strategyMinMos,
+        strategy: activeStrategy?.name ?? null,
+      });
+      throw new Error(
+        `place_trade: MOS ${mos.toFixed(1)}% is below ${activeStrategy?.name ?? 'the active strategy'}'s minimum of ${strategyMinMos}%. Either find a price that clears the bar or document the exception in the thesis — the gate does not bend per-trade.`
+      );
+    }
   }
 
   // Earnings blackout — hard block on BUYS within 3 days of a scheduled
