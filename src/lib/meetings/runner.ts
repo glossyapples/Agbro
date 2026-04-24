@@ -581,7 +581,11 @@ function parseMeetingJson(raw: string): MeetingOutput {
 // without having to sum. Median + max make outliers visible without a
 // full histogram; weeklyTotal is the number the partners actually care
 // about when debating cadence.
-function summariseAgentRunCosts(
+// Exported for unit testing — pure function over an array of AgentRun
+// rows, no DB / no side effects. Moving it out of the runner module
+// would scatter the cost-accounting logic; keeping + exporting keeps
+// grounding-related code adjacent to where it's consumed.
+export function summariseAgentRunCosts(
   runs: Array<{ costUsd: number | null; startedAt: Date; status: string }>,
   equityUsdForDrag: number,
   expectedAnnualReturnPct: number

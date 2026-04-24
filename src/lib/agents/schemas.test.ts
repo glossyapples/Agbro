@@ -85,6 +85,65 @@ describe('PlaceTradeInput', () => {
       PlaceTradeInput.safeParse({ ...validPlaceTrade, marginOfSafetyPct: -200 }).success
     ).toBe(false);
   });
+
+  // Buy-specific gate: intrinsicValuePerShare + marginOfSafetyPct are
+  // REQUIRED on buys (superRefine). Previously both were .optional() at
+  // the field level despite the prompt saying required; this closed a
+  // silent-bypass hole where buys could skip the MOS check.
+  describe('buy-specific MOS gate (superRefine)', () => {
+    it('rejects a buy missing intrinsicValuePerShare', () => {
+      const { intrinsicValuePerShare: _iv, ...noIV } = validPlaceTrade;
+      const r = PlaceTradeInput.safeParse(noIV);
+      expect(r.success).toBe(false);
+      if (!r.success) {
+        const msg = r.error.issues.map((i) => i.message).join(' ');
+        expect(msg).toMatch(/intrinsicValuePerShare|fair value/i);
+      }
+    });
+
+    it('rejects a buy missing marginOfSafetyPct', () => {
+      const { marginOfSafetyPct: _mos, ...noMOS } = validPlaceTrade;
+      const r = PlaceTradeInput.safeParse(noMOS);
+      expect(r.success).toBe(false);
+      if (!r.success) {
+        const msg = r.error.issues.map((i) => i.message).join(' ');
+        expect(msg).toMatch(/marginOfSafetyPct|MOS|margin of safety/i);
+      }
+    });
+
+    it('rejects a buy whose intrinsicValuePerShare is zero', () => {
+      expect(
+        PlaceTradeInput.safeParse({
+          ...validPlaceTrade,
+          intrinsicValuePerShare: 0,
+        }).success
+      ).toBe(false);
+    });
+
+    it('accepts a sell WITHOUT intrinsicValuePerShare', () => {
+      const { intrinsicValuePerShare: _iv, marginOfSafetyPct: _m, ...base } = validPlaceTrade;
+      const r = PlaceTradeInput.safeParse({ ...base, side: 'sell' });
+      expect(r.success).toBe(true);
+    });
+
+    it('accepts a sell WITHOUT marginOfSafetyPct', () => {
+      const { marginOfSafetyPct: _m, ...base } = validPlaceTrade;
+      const r = PlaceTradeInput.safeParse({ ...base, side: 'sell' });
+      expect(r.success).toBe(true);
+    });
+
+    it('accepts a buy at MOS=0 boundary (strategy rules enforce minimum separately)', () => {
+      const r = PlaceTradeInput.safeParse({ ...validPlaceTrade, marginOfSafetyPct: 0 });
+      expect(r.success).toBe(true);
+    });
+
+    it('accepts a buy at a NEGATIVE MOS — schema allows it, active strategy rejects via placeTradeTool', () => {
+      // -10 = price is 10% ABOVE intrinsic. Schema accepts (-100..100 range);
+      // the runtime gate in placeTradeTool rejects if MOS < strategy minimum.
+      const r = PlaceTradeInput.safeParse({ ...validPlaceTrade, marginOfSafetyPct: -10 });
+      expect(r.success).toBe(true);
+    });
+  });
 });
 
 describe('SizePositionInput', () => {
