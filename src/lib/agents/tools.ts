@@ -1226,17 +1226,38 @@ async function finalizeRunTool(ctx: ToolContext, input: Record<string, unknown>)
 async function writeBrainTool(ctx: ToolContext, input: Record<string, unknown>) {
   const kind = String(input.kind);
   const title = String(input.title).slice(0, 240);
-  const body = String(input.body).slice(0, 8_000);
-  if (!title || !body) {
+  const rawBody = String(input.body);
+  if (!title || !rawBody) {
     throw new Error('write_brain: title and body are required');
   }
+  // Body size rejection — previously sliced silently at 8000, which
+  // meant a 12KB lesson got halved mid-sentence with no feedback to
+  // the agent. Now rejects loudly so the agent can re-emit a
+  // summarised version instead of shipping a truncated one. Same 8KB
+  // ceiling as before.
+  if (rawBody.length > 8_000) {
+    throw new Error(
+      `write_brain: body is ${rawBody.length} chars, limit is 8000. Summarise and re-emit.`
+    );
+  }
+  const body = rawBody;
   // Map category/confidence, falling back to the legacy-kind taxonomy
   // if the agent supplied only `kind`. Agents are NEVER allowed to
   // write `principle` or `canonical` — those are reserved for the
   // seeded firm charter.
-  const { BRAIN_KIND_TAXONOMY, DEFAULT_AGENT_TAXONOMY } = await import(
+  const { BRAIN_KIND_TAXONOMY, BRAIN_KIND_VALUES, DEFAULT_AGENT_TAXONOMY } = await import(
     '@/lib/brain/taxonomy'
   );
+  // Reject unknown kinds explicitly — Anthropic's client-side JSON-
+  // schema enum is advisory, and letting an arbitrary string land in
+  // the DB produced orphan rows the /brain UI couldn't label and
+  // read_brain filters couldn't find. Kinds the taxonomy knows about
+  // are the only values accepted.
+  if (!(BRAIN_KIND_VALUES as readonly string[]).includes(kind)) {
+    throw new Error(
+      `write_brain: unknown kind '${kind}'. Valid: ${(BRAIN_KIND_VALUES as readonly string[]).join(', ')}.`
+    );
+  }
   const fallback = BRAIN_KIND_TAXONOMY[kind] ?? DEFAULT_AGENT_TAXONOMY;
   let category = (input.category as string | undefined) ?? fallback.category;
   let confidence =
