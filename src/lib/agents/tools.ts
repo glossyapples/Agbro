@@ -33,6 +33,9 @@ import { getUpcomingEvents } from '@/lib/data/events';
 import { isInEarningsBlackout } from '@/lib/data/earnings';
 import { checkWashSaleBlock } from '@/lib/data/tax';
 import { computeSpendable } from '@/lib/wallet';
+import { recordGovernorDecision } from '@/lib/safety/governor';
+import { parseAutonomyLevel } from '@/lib/safety/autonomy';
+import type { CodedReason } from '@/lib/safety/reason-codes';
 import { getCurrentRegime } from '@/lib/data/regime';
 import { evaluateExits } from './exits';
 import {
@@ -715,14 +718,46 @@ async function sizePositionTool(ctx: ToolContext, input: Record<string, unknown>
 async function placeTradeTool(ctx: ToolContext, input: Record<string, unknown>) {
   const parsed = PlaceTradeInput.safeParse(input);
   if (!parsed.success) {
+    // Schema rejections don't have a symbol we can trust, so we skip
+    // the audit row here — nothing reached the gate proper.
     throw new Error(`place_trade: invalid input — ${parsed.error.message}`);
   }
   const p = parsed.data;
 
   const symbol = p.symbol.toUpperCase();
   const orderType = p.orderType ?? 'market';
+
+  // Load the account up-front so every audit row can stamp the
+  // autonomy level at decision time. One read, shared across gates.
+  const governorAccount = await prisma.account.findUnique({
+    where: { userId: ctx.userId },
+    select: { autonomyLevel: true },
+  });
+  const autonomyLevel = parseAutonomyLevel(governorAccount?.autonomyLevel);
+
+  const rejectWithCode = async (reasons: CodedReason[], message: string): Promise<never> => {
+    await recordGovernorDecision({
+      userId: ctx.userId,
+      agentRunId: ctx.agentRunId ?? null,
+      symbol,
+      side: p.side,
+      qty: p.qty,
+      orderType,
+      limitPriceCents:
+        typeof p.limitPrice === 'number' ? BigInt(Math.round(p.limitPrice * 100)) : null,
+      estimatedCostCents: null,
+      decision: 'rejected',
+      reasons,
+      autonomyLevel,
+    });
+    throw new Error(message);
+  };
+
   if (orderType === 'limit' && p.limitPrice == null) {
-    throw new Error('place_trade: limitPrice required when orderType=limit');
+    await rejectWithCode(
+      [{ code: 'LIMIT_PRICE_REQUIRED', params: {} }],
+      'place_trade: limitPrice required when orderType=limit'
+    );
   }
 
   // MOS gate for buys — schema guarantees both fields are present on
@@ -748,7 +783,17 @@ async function placeTradeTool(ctx: ToolContext, input: Record<string, unknown>) 
         strategyMinMos,
         strategy: activeStrategy?.name ?? null,
       });
-      throw new Error(
+      await rejectWithCode(
+        [
+          {
+            code: 'MOS_INSUFFICIENT',
+            params: {
+              mosPct: mos,
+              strategyMinPct: strategyMinMos,
+              strategyName: activeStrategy?.name ?? 'the active strategy',
+            },
+          },
+        ],
         `place_trade: MOS ${mos.toFixed(1)}% is below ${activeStrategy?.name ?? 'the active strategy'}'s minimum of ${strategyMinMos}%. Either find a price that clears the bar or document the exception in the thesis — the gate does not bend per-trade.`
       );
     }
@@ -767,7 +812,8 @@ async function placeTradeTool(ctx: ToolContext, input: Record<string, unknown>) 
         symbol,
         nextEarningsAt: blackout.nextEarningsAt?.toISOString() ?? null,
       });
-      throw new Error(
+      await rejectWithCode(
+        [{ code: 'EARNINGS_BLACKOUT', params: { symbol, nextEarningsAt: blackout.nextEarningsAt ?? null } }],
         `place_trade: blocked by earnings blackout — ${blackout.reason}. Wait until after the report. (Sells/trims would have been allowed.)`
       );
     }
@@ -785,7 +831,13 @@ async function placeTradeTool(ctx: ToolContext, input: Record<string, unknown>) 
         symbol,
         recentSellTradeId: washSale.recentSell?.tradeId,
       });
-      throw new Error(`place_trade: ${washSale.reason}`);
+      const washWindowEndsAt = washSale.recentSell
+        ? new Date(washSale.recentSell.submittedAt.getTime() + 30 * 86_400_000)
+        : null;
+      await rejectWithCode(
+        [{ code: 'WASH_SALE_VIOLATION', params: { symbol, windowEndsAt: washWindowEndsAt } }],
+        `place_trade: ${washSale.reason}`
+      );
     }
 
     // Wallet-reservation check. If the user has parked cash in the
@@ -833,7 +885,18 @@ async function placeTradeTool(ctx: ToolContext, input: Record<string, unknown>) 
               spendableCents: spendable.spendableCents.toString(),
               walletBalanceCents: spendable.walletBalanceCents.toString(),
             });
-            throw new Error(
+            await rejectWithCode(
+              [
+                {
+                  code: 'WALLET_INSUFFICIENT',
+                  params: {
+                    symbol,
+                    needCents: estimatedCostCents,
+                    haveCents: spendable.spendableCents,
+                    walletCents: spendable.walletBalanceCents,
+                  },
+                },
+              ],
               `place_trade: insufficient spendable cash. Order needs ~$${(Number(estimatedCostCents) / 100).toFixed(0)} but only $${(Number(spendable.spendableCents) / 100).toFixed(0)} is available ($${(Number(spendable.walletBalanceCents) / 100).toFixed(0)} is parked in the wallet). Transfer from wallet to active cash if you want this trade to go through.`
             );
           }
@@ -849,7 +912,25 @@ async function placeTradeTool(ctx: ToolContext, input: Record<string, unknown>) 
                 symbol,
                 estimatedCostCents: estimatedCostCents.toString(),
               });
-              throw new Error(`place_trade: ${notional.reason}. Raise maxTradeNotionalCents in Settings or split the order.`);
+              // Pull the per-trade cap off the account so the audit
+              // row records both sides of the comparison.
+              const capRow = await prisma.account.findUnique({
+                where: { userId: ctx.userId },
+                select: { maxTradeNotionalCents: true },
+              });
+              await rejectWithCode(
+                [
+                  {
+                    code: 'NOTIONAL_CAP_EXCEEDED',
+                    params: {
+                      symbol,
+                      needCents: estimatedCostCents,
+                      capCents: capRow?.maxTradeNotionalCents ?? 0n,
+                    },
+                  },
+                ],
+                `place_trade: ${notional.reason}. Raise maxTradeNotionalCents in Settings or split the order.`
+              );
             }
           }
         } else if (p.side === 'buy') {
@@ -861,7 +942,8 @@ async function placeTradeTool(ctx: ToolContext, input: Record<string, unknown>) 
             symbol,
             orderType: p.orderType,
           });
-          throw new Error(
+          await rejectWithCode(
+            [{ code: 'NO_PRICE_FOR_CAP', params: { symbol } }],
             `place_trade: cannot estimate order cost for ${symbol} (live price unavailable, no limit price supplied). Retry when market data is healthy, or submit as a limit order so the per-trade notional cap has a price to check against.`
           );
         }
@@ -889,13 +971,15 @@ async function placeTradeTool(ctx: ToolContext, input: Record<string, unknown>) 
   // lock so a user flip between tool entry and the broker call can't slip
   // through (closes the pause-race window).
   const since = startOfDayET();
-  const pending = await prisma.$transaction(async (tx) => {
-    await tx.$executeRaw`SELECT id FROM "Account" WHERE "userId" = ${ctx.userId} FOR UPDATE`;
+  let pending;
+  try {
+    pending = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT id FROM "Account" WHERE "userId" = ${ctx.userId} FOR UPDATE`;
 
-    const acct = await tx.account.findUnique({ where: { userId: ctx.userId } });
-    if (!acct) throw new Error('account not found');
-    if (acct.isStopped) throw new Error('account is stopped; trading disabled');
-    if (acct.isPaused) throw new Error('account is paused; trading disabled');
+      const acct = await tx.account.findUnique({ where: { userId: ctx.userId } });
+      if (!acct) throw new Error('account not found');
+      if (acct.isStopped) throw new Error('account is stopped; trading disabled');
+      if (acct.isPaused) throw new Error('account is paused; trading disabled');
 
     // Pending + submitted + filled all count toward the daily cap — they
     // represent intent that's either at the broker or already executed.
@@ -946,6 +1030,57 @@ async function placeTradeTool(ctx: ToolContext, input: Record<string, unknown>) 
         agentRunId: ctx.agentRunId,
       },
     });
+  });
+  } catch (txErr) {
+    // Classify the intra-tx throws into reason codes for the audit
+    // trail, then re-raise the original error so the agent-visible
+    // behaviour is unchanged.
+    const msg = txErr instanceof Error ? txErr.message : String(txErr);
+    let reason: CodedReason | null = null;
+    if (msg === 'account is stopped; trading disabled') {
+      reason = { code: 'ACCOUNT_STOPPED', params: {} };
+    } else if (msg === 'account is paused; trading disabled') {
+      reason = { code: 'ACCOUNT_PAUSED', params: {} };
+    } else if (msg.startsWith('daily stock trade cap reached')) {
+      const m = msg.match(/\((\d+)\)/);
+      const cap = m ? Number(m[1]) : 0;
+      reason = { code: 'DAILY_TRADE_CAP_EXCEEDED', params: { cap } };
+    }
+    if (reason) {
+      await recordGovernorDecision({
+        userId: ctx.userId,
+        agentRunId: ctx.agentRunId ?? null,
+        symbol,
+        side: p.side,
+        qty: p.qty,
+        orderType,
+        limitPriceCents:
+          typeof p.limitPrice === 'number' ? BigInt(Math.round(p.limitPrice * 100)) : null,
+        estimatedCostCents: null,
+        decision: 'rejected',
+        reasons: [reason],
+        autonomyLevel,
+      });
+    }
+    throw txErr;
+  }
+
+  // All gates passed. Stamp the audit row as approved BEFORE the
+  // broker call; broker success/failure is a separate event captured
+  // on the Trade row.
+  await recordGovernorDecision({
+    userId: ctx.userId,
+    agentRunId: ctx.agentRunId ?? null,
+    symbol,
+    side: p.side,
+    qty: p.qty,
+    orderType,
+    limitPriceCents:
+      typeof p.limitPrice === 'number' ? BigInt(Math.round(p.limitPrice * 100)) : null,
+    estimatedCostCents: null,
+    decision: 'approved',
+    reasons: [],
+    autonomyLevel,
   });
 
   // Step 2: place the order with the broker.
