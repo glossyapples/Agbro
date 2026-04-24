@@ -889,3 +889,31 @@ model PolicyChange {
 
   @@index([userId, status])
 }
+
+// Multi-replica scheduler leader-election. When Railway runs >1 replica,
+// each instance would otherwise fire its own tick timer and duplicate
+// every tick's work — double regime writes, double crypto DCA legs,
+// double weekly meetings. (Agent wakes themselves are already
+// serialised via FOR UPDATE on Account, so they're safe — but the
+// surrounding tick work isn't.)
+//
+// Design: single row per named lease ('tick', 'crypto_tick' etc.).
+// Acquire is an atomic INSERT ... ON CONFLICT DO UPDATE with a
+// `WHERE expires_at < NOW()` guard, so only one instance can hold an
+// unexpired lease. Release sets expires_at = NOW() early (don't wait
+// for TTL). TTL is the safety net for a crashed holder.
+//
+// Why a row rather than pg_advisory_lock: session-level advisory locks
+// break with Prisma's connection pool (acquire + release can land on
+// different connections); xact-scoped advisory locks require the entire
+// tick body to run inside a transaction, which is too long-running for
+// this workload (broker + Anthropic calls inside). A row-based lease
+// is observable, pool-safe, and debuggable.
+model SchedulerLease {
+  leaseId    String   @id               // 'tick' | 'crypto_tick' | ...
+  heldBy     String                       // opaque per-instance token (UUID)
+  acquiredAt DateTime @default(now())
+  expiresAt  DateTime                     // now + TTL on acquire; now on release
+
+  @@index([expiresAt])
+}

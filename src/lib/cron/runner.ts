@@ -16,6 +16,7 @@ import { runCryptoCycleAllUsers } from '@/lib/crypto/engine';
 import { detectAndPersistRegime } from '@/lib/data/regime';
 import { runMeeting } from '@/lib/meetings/runner';
 import { checkKillSwitches, applyKillSwitch } from '@/lib/safety/rails';
+import { tryAcquireLease, releaseLease } from './lease';
 import { log } from '@/lib/logger';
 
 const PER_USER_BUDGET_MS = 90_000;
@@ -34,6 +35,10 @@ export type TickResult = {
   crypto: Awaited<ReturnType<typeof runCryptoCycleAllUsers>>;
   regime: Awaited<ReturnType<typeof detectAndPersistRegime>> | null;
   regimeChanged: boolean;
+  // True when the tick was skipped because another replica held the
+  // lease. Distinguishes "nothing to do" from "another instance
+  // already did it" in the logs + /api/scheduler/status.
+  skippedByLock?: boolean;
 };
 
 function withinTradingHours(now: Date, start: string, end: string): boolean {
@@ -77,6 +82,38 @@ function withTimeout<T>(promise: Promise<T>, ms: number, tag: string): Promise<T
 }
 
 export async function runScheduledTick(): Promise<TickResult> {
+  // Leader election. Railway may scale to >1 replica; without this gate,
+  // every replica would fire its own 2-minute timer and every tick would
+  // double every write (regime rows, crypto DCA legs, weekly meeting
+  // dispatch). Agent wakes themselves are already serialised via the
+  // FOR UPDATE lock on Account, but the tick body around them isn't.
+  // See SchedulerLease in schema.prisma for full rationale.
+  const lease = await tryAcquireLease('tick');
+  if (!lease.acquired) {
+    log.info('tick.skipped_by_lease', { heldBy: lease.heldBy });
+    return {
+      total: 0,
+      ran: 0,
+      skipped: 0,
+      failed: 0,
+      outcomes: [],
+      crypto: [],
+      regime: null,
+      regimeChanged: false,
+      skippedByLock: true,
+    };
+  }
+  try {
+    return await runTickBody();
+  } finally {
+    // Release even on throw — the next tick reclaims the lease on its
+    // own merits. Release is best-effort (logged if it fails); worst
+    // case the TTL reclaims.
+    await releaseLease('tick');
+  }
+}
+
+async function runTickBody(): Promise<TickResult> {
   // Crypto runs 24/7 — fire it on every tick regardless of weekend /
   // market hours. The engine self-rate-limits via
   // CryptoConfig.dcaCadenceDays so calling it frequently is a no-op
