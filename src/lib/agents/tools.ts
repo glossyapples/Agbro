@@ -756,9 +756,12 @@ async function placeTradeTool(ctx: ToolContext, input: Record<string, unknown>) 
 
   // Load the account up-front so every audit row can stamp the
   // autonomy level at decision time. One read, shared across gates.
+  // Also pull the user's forbidden-symbol list from the Mandate for
+  // the next check. Sectors land here once we have a reliable
+  // per-symbol sector source.
   const governorAccount = await prisma.account.findUnique({
     where: { userId: ctx.userId },
-    select: { autonomyLevel: true },
+    select: { autonomyLevel: true, forbiddenSymbols: true },
   });
   const autonomyLevel = parseAutonomyLevel(governorAccount?.autonomyLevel);
 
@@ -785,6 +788,20 @@ async function placeTradeTool(ctx: ToolContext, input: Record<string, unknown>) 
       [{ code: 'LIMIT_PRICE_REQUIRED', params: {} }],
       'place_trade: limitPrice required when orderType=limit'
     );
+  }
+
+  // Mandate: forbidden symbols. A hard reject at every autonomy
+  // level — the user explicitly told us never to trade these names.
+  // Runs before the Observe intercept so the agent gets the reason
+  // back ("you said no TSLA") instead of silently queueing it.
+  if (p.side === 'buy') {
+    const forbidden = new Set(governorAccount?.forbiddenSymbols ?? []);
+    if (forbidden.has(symbol)) {
+      await rejectWithCode(
+        [{ code: 'MANDATE_FORBIDDEN_SYMBOL', params: { symbol } }],
+        `place_trade: ${symbol} is on your Plan's forbidden-symbol list. Remove it from /settings or skip this trade.`
+      );
+    }
   }
 
   // Observe autonomy: intercept upstream of every gate. The agent's

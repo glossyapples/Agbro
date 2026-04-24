@@ -339,6 +339,35 @@ export default async function OverviewPage() {
         </Link>
       )}
 
+      <Link href="/settings" className="card block">
+        <div className="flex items-baseline justify-between">
+          <h2 className="text-sm font-semibold">Your Plan</h2>
+          <span className="text-xs text-brand-400">Edit →</span>
+        </div>
+        <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+          <div>
+            <p className="stat-label">Horizon</p>
+            <p className="text-ink-100">
+              {account.timeHorizonYears != null
+                ? `${account.timeHorizonYears} yr${account.timeHorizonYears === 1 ? '' : 's'}`
+                : 'not set'}
+            </p>
+          </div>
+          <div>
+            <p className="stat-label">Autonomy</p>
+            <p className="text-ink-100 capitalize">{account.autonomyLevel}</p>
+          </div>
+          <div>
+            <p className="stat-label">Max per name</p>
+            <p className="text-ink-100">{account.maxPositionPct}%</p>
+          </div>
+          <div>
+            <p className="stat-label">Pause at drawdown</p>
+            <p className="text-ink-100">{account.drawdownPauseThresholdPct}%</p>
+          </div>
+        </div>
+      </Link>
+
       {budgetStatus.state === 'warning' && (
         <Link
           href="/settings"

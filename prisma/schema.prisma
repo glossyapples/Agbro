@@ -148,6 +148,24 @@ model Account {
   // for audit/history but can't be applied. Useful if the user
   // wants meetings as pure advisory without any write path.
   allowAgentPolicyProposals Boolean @default(true)
+  // Plan / Mandate fields set via /onboarding. Additive — the older
+  // account fields (maxPositionPct, riskTolerance, cash reserve) stay
+  // authoritative; these extend the picture.
+  //   timeHorizonYears — how long before the user expects to draw on
+  //     the capital. Shapes meeting prompts ("you have 20 years; a
+  //     2022-style drawdown is recoverable"), does NOT drive any
+  //     automatic rule.
+  //   forbiddenSectors — case-insensitive sector names the agent must
+  //     never recommend. Checked against the stock's sector string at
+  //     place_trade time.
+  //   forbiddenSymbols — ticker blacklist. Same check point.
+  //   onboardingCompletedAt — null for legacy accounts; middleware
+  //     redirects users whose column is null to /onboarding on first
+  //     hit so we don't leave anyone with a half-set plan.
+  timeHorizonYears        Int?
+  forbiddenSectors        String[] @default([])
+  forbiddenSymbols        String[] @default([])
+  onboardingCompletedAt   DateTime?
   // BYOK cost-governor budget. Null = alarm disabled (no cap). The
   // scheduler aggregates AgentRun.costUsd since the start of the
   // current UTC month; at alarmThresholdPct of the cap a banner

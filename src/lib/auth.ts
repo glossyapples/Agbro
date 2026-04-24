@@ -35,12 +35,30 @@ export async function maybeCurrentUser() {
   });
 }
 
+// Paths that must stay reachable even when onboarding isn't complete
+// — otherwise the middleware-ish redirect below creates an infinite
+// loop (/ → /onboarding → /onboarding loads requirePageUser → /).
+const ONBOARDING_EXEMPT = new Set(['/onboarding', '/settings', '/help', '/disclaimer']);
+
 // For server components. If no session / stale session, redirects to /login
-// with a `from` param so post-login returns the user to this page.
+// with a `from` param so post-login returns the user to this page. If the
+// user has a session but hasn't completed the /onboarding wizard, redirects
+// there once — skipped for the exempt routes above.
 export async function requirePageUser(returnTo: string = '/') {
   try {
-    return await getCurrentUser();
-  } catch {
+    const user = await getCurrentUser();
+    if (
+      user.account &&
+      !user.account.onboardingCompletedAt &&
+      !ONBOARDING_EXEMPT.has(returnTo)
+    ) {
+      redirect('/onboarding');
+    }
+    return user;
+  } catch (err) {
+    // Re-raise Next's redirect "errors" so the above redirect() above
+    // actually fires — catching it would swallow the redirect.
+    if (err && typeof err === 'object' && 'digest' in err) throw err;
     const qs = returnTo && returnTo !== '/' ? `?from=${encodeURIComponent(returnTo)}` : '';
     redirect(`/login${qs}`);
   }
