@@ -3,6 +3,8 @@ import { requirePageUser } from '@/lib/auth';
 import { formatPct, formatUsd } from '@/lib/money';
 import { getDividends } from '@/lib/alpaca';
 import { ManualSellButton } from '@/components/ManualSellButton';
+import { GovernorActivityCard } from '@/components/GovernorActivityCard';
+import { getGovernorStats } from '@/lib/safety/governor-stats';
 
 // First-of-month at ~midnight ET. Close enough for a "this month" filter —
 // a trade that fills in the first 5 hours of a new month UTC would still
@@ -28,7 +30,7 @@ export default async function AnalyticsPage() {
   const monthStart = startOfMonthET(now);
   const monthStartIso = monthStart.toISOString().slice(0, 10);
 
-  const [trades, runs, positions, watchlist, optionPositions, dividends] =
+  const [trades, runs, positions, watchlist, optionPositions, dividends, governorStats] =
     await Promise.all([
       prisma.trade.findMany({
         where: { userId: user.id },
@@ -54,6 +56,7 @@ export default async function AnalyticsPage() {
         ),
       prisma.optionPosition.findMany({ where: { userId: user.id } }),
       getDividends(monthStartIso).catch(() => []),
+      getGovernorStats(user.id, 7),
     ]);
 
   const buys = trades.filter((t) => t.side === 'buy').length;
@@ -203,6 +206,8 @@ export default async function AnalyticsPage() {
           <Stat label="Errored" value={runsErr.toString()} />
         </div>
       </section>
+
+      <GovernorActivityCard stats={governorStats} />
 
       <section className="card">
         <h2 className="text-sm font-semibold">Open positions ({positions.length})</h2>
