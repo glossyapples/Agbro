@@ -259,7 +259,11 @@ export async function runAgent(args: RunAgentArgs): Promise<RunAgentResult> {
         // parsing the full transcript. Cheap at the scale we run (dozens
         // of tool calls per run, a few runs per day).
         const toolStart = Date.now();
-        log.info('agent.tool_called', { tool: use.name });
+        // Per-tool call is routine — one line per dispatch across
+        // dozens of tools per run. Downgraded to debug so prod logs
+        // keep agent.run.start / agent.run.end / agent.tool_error as
+        // the signal; dev still sees the full stream.
+        log.debug('agent.tool_called', { tool: use.name });
         try {
           result = await runTool(use.name, use.input as Record<string, unknown>, ctx);
         } catch (err) {

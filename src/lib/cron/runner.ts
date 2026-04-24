@@ -179,7 +179,11 @@ export async function runScheduledTick(): Promise<TickResult> {
         continue;
       }
     } else if (lastRun) {
-      log.info('tick.market_open_wake', {
+      // Routine tick event — fires on every market-open tick that
+      // clears cadence for every active user. Downgraded to debug so
+      // prod logs keep tick.start / tick.end / kill_switch / agent
+      // run events as signal.
+      log.debug('tick.market_open_wake', {
         userId: account.userId,
         lastRunAt: lastRun.startedAt.toISOString(),
       });

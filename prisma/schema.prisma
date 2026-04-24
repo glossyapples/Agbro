@@ -103,7 +103,7 @@ model VerificationToken {
 model Account {
   id                  String   @id @default(cuid())
   userId              String   @unique
-  user                User     @relation(fields: [userId], references: [id])
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   principalCents      BigInt   @default(0)         // total money ever deposited
   depositedCents      BigInt   @default(0)         // cumulative deposits
   withdrawnCents      BigInt   @default(0)
@@ -210,7 +210,7 @@ model Deposit {
 model Strategy {
   id           String   @id @default(cuid())
   userId       String
-  user         User     @relation(fields: [userId], references: [id])
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   name         String
   // Stable identifier for seeded preset strategies — 'buffett_core',
   // 'deep_value_graham', 'quality_compounders', 'dividend_growth',
@@ -495,7 +495,7 @@ model BrainEntry {
 model UserNote {
   id        String   @id @default(cuid())
   userId    String
-  user      User     @relation(fields: [userId], references: [id])
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   body      String   @db.Text
   createdAt DateTime @default(now())
 }
@@ -770,9 +770,9 @@ model MarketRegime {
 model Notification {
   id        String   @id @default(cuid())
   userId    String
-  user      User     @relation(fields: [userId], references: [id])
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   tradeId   String?
-  trade     Trade?   @relation(fields: [tradeId], references: [id])
+  trade     Trade?   @relation(fields: [tradeId], references: [id], onDelete: SetNull)
   kind      String   // "trade_placed" | "trade_filled" | "agent_paused" | "weekly_update" | "error"
   title     String
   body      String   @db.Text

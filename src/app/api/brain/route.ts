@@ -2,29 +2,17 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { prisma } from '@/lib/db';
 import { apiError, requireUser } from '@/lib/api';
-import { BRAIN_KIND_TAXONOMY } from '@/lib/brain/taxonomy';
+import { BRAIN_KIND_TAXONOMY, BRAIN_KIND_VALUES } from '@/lib/brain/taxonomy';
 
 export const runtime = 'nodejs';
 
-const BRAIN_KINDS = [
-  'principle',
-  'checklist',
-  'pitfall',
-  'crisis_playbook',
-  'sector_primer',
-  'case_study',
-  'lesson',
-  'market_memo',
-  'post_mortem',
-  'weekly_update',
-  'agent_run_summary',
-  'research_note',
-  'hypothesis',
-  'note',
-] as const;
+// Single source of truth — BRAIN_KIND_VALUES is derived from the
+// taxonomy map's keys, so adding a new kind there automatically keeps
+// this route + read_brain tool + UI labels in sync.
+const BRAIN_KINDS = BRAIN_KIND_VALUES;
 
 const CreateBrainEntry = z.object({
-  kind: z.enum(BRAIN_KINDS),
+  kind: z.enum(BRAIN_KINDS as [string, ...string[]]),
   title: z.string().min(1).max(240),
   body: z.string().min(1).max(20_000),
   tags: z.array(z.string().max(64)).max(20).optional(),

@@ -73,7 +73,9 @@ export const CONFIDENCE_DESCRIPTION: Record<BrainConfidence, string> = {
 // Every legacy `kind` string maps to exactly one (category, confidence)
 // pair. Used at seed time, during backfill, and defensively inside the
 // write_brain tool if an agent emits a legacy kind without the new
-// fields.
+// fields. The keys of this map are the single source of truth for
+// every valid `kind` — exported as BRAIN_KIND_VALUES below so the API
+// route + read_brain tool don't drift from it.
 export const BRAIN_KIND_TAXONOMY: Record<
   string,
   { category: BrainCategory; confidence: BrainConfidence }
@@ -93,6 +95,14 @@ export const BRAIN_KIND_TAXONOMY: Record<
   hypothesis: { category: 'hypothesis', confidence: 'low' },
   note: { category: 'note', confidence: 'medium' },
 };
+
+// Source of truth for valid kind strings. Derived from the taxonomy
+// map's keys so any new kind added there automatically flows to the
+// API zod schema + read_brain tool enum + UI labels.
+export const BRAIN_KIND_VALUES = Object.keys(BRAIN_KIND_TAXONOMY) as [
+  string,
+  ...string[],
+];
 
 // What category + confidence to assign to an agent-written entry whose
 // kind the agent didn't specify. Defensive fallback only — the agent
