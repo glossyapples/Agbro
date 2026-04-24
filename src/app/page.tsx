@@ -472,6 +472,13 @@ export default async function OverviewPage() {
           {unreadNotifications} unread notification{unreadNotifications === 1 ? '' : 's'}
         </p>
       )}
+
+      <Link
+        href="/help"
+        className="block text-center text-[11px] text-ink-500 hover:text-brand-400"
+      >
+        Help &amp; docs →
+      </Link>
     </div>
   );
 }

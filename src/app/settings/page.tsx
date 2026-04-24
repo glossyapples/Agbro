@@ -66,6 +66,10 @@ export default async function SettingsPage() {
 
       <CredentialManager />
 
+      <Link href="/help" className="card text-center text-sm text-brand-400">
+        Help &amp; docs →
+      </Link>
+
       <Link href="/disclaimer" className="card text-center text-sm text-brand-400">
         Read the full disclaimer →
       </Link>
