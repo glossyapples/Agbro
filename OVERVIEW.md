@@ -44,7 +44,7 @@ Everything is BYOK on API keys — Anthropic (required), OpenAI (optional for co
   - `size_position`, `place_trade` (market + limit; MOS gate on buys; defense-in-depth safety rails)
   - `get_option_chain`, `place_option_trade` (covered calls + cash-secured puts only; strategy must permit)
   - `finalize_run` (writes `agent_run_summary` brain entry with sourceRunId)
-- **Defense-in-depth trade gate** (every buy): earnings blackout (3 days) → wash-sale (IRS §1091 30-day) → wallet spendable pre-check → per-trade notional cap → FOR UPDATE lock → daily-cap count (excludes rejected/cancelled) → pending-row reservation → broker call → DB stitch
+- **Defense-in-depth trade gate** (every buy): **Governor audit row** (approved/rejected/requires_approval with a structured reason code) → forbidden-symbol check → autonomy-ladder divergence (Observe intercepts; Propose queues) → MOS → earnings blackout (3 days) → wash-sale (IRS §1091 30-day) → wallet spendable pre-check → per-trade notional cap → FOR UPDATE lock → daily-cap count (excludes rejected/cancelled) → pending-row reservation → broker call → DB stitch. Every rejection lands in `GovernorDecision` with a rendered user-readable explanation.
 - **Prompt caching** on system + tool defs (~6k tokens) to cut within-run input cost
 - **Cost accounting** cache-aware via shared pricing module
 
@@ -113,10 +113,32 @@ A satirical "-bot" homage to Michael Burry — introverted, terse, reads 10-Ks o
 - **Daily loss kill** (%, default -5) — pauses if equity drops ≥5% intraday
 - **30-day drawdown pause** (%, default -15) — pauses if equity sits ≥15% below 30-day peak
 - **Max trade notional** ($, default $5,000) — hard cap per single buy, no exceptions
+- **BYOK API cost-governor** — `monthlyApiBudgetUsd` (default $50) + `budgetAlarmThresholdPct` (default 80). Warning banner fires at the threshold; 100% auto-pauses the account with reason `BUDGET_EXCEEDED` clearable from Settings. Month-to-date spend aggregated from `AgentRun.costUsd` against the UTC calendar (aligns with Anthropic's invoice window).
 - **Fail-closed semantics** — Alpaca outage returns `data_unavailable` and skips the tick without persisting a trip (vs the previous fail-open behaviour)
 - **Kill-switch persistence** — once tripped, survives restarts; requires manual clear from Settings
-- **Pre-trade gates**: earnings blackout (3-day window) · wash-sale (IRS §1091) · MOS check vs active strategy's `minMarginOfSafetyPct` · wallet spendable · per-trade notional · daily-cap count · FOR UPDATE lock
+- **Pre-trade gates**: Governor audit row · forbidden-symbol check · autonomy-ladder divergence · earnings blackout (3-day window) · wash-sale (IRS §1091) · MOS check vs active strategy's `minMarginOfSafetyPct` · wallet spendable · per-trade notional · daily-cap count · FOR UPDATE lock
 - **Allow agent proposals toggle** — when off, meetings record policy-change proposals for audit but can't apply them
+
+---
+
+## Governor + autonomy ladder
+
+Every pre-trade decision now routes through a **structured reason-code Governor**. The existing defense-in-depth gates (MOS, earnings, wash-sale, wallet, notional, daily-cap, pause/stop) each emit a `GovernorDecision` row with:
+
+- `decision` ∈ `approved | rejected | requires_approval`
+- `reasonCodes[]` from a fixed enum (`EARNINGS_BLACKOUT`, `MOS_INSUFFICIENT`, `WALLET_INSUFFICIENT`, `NOTIONAL_CAP_EXCEEDED`, `MANDATE_FORBIDDEN_SYMBOL`, `PROPOSE_MODE_REQUIRES_APPROVAL`, etc. — 19 codes total)
+- `userExplanation` — rendered template that names the conflict ("This trade would push AAPL to 11% of portfolio, above your 8% cap")
+- `autonomyLevel` + `governorVersion` stamped for reproducibility
+
+**Autonomy ladder** (`Account.autonomyLevel`):
+
+- **Observe** — every proposal intercepted before any gate; logged as a pending approval for user review. Zero autonomous execution.
+- **Propose** — all gates run. If approved, the trade routes to the approval queue (not the broker) with reason `PROPOSE_MODE_REQUIRES_APPROVAL`. Real rail rejections still fire.
+- **Auto** — today's behaviour. Governor's native approve/reject stands; only mandate-escalated decisions queue.
+
+**Approval queue** at `/approvals` with per-item cards: Approve re-dispatches the trade through the gate with `bypassAutonomyLadder=true` (re-checks fresh — MOS at 5pm may differ from 9am); Reject stores an optional note for the agent to read next run. Items expire after 24h via a sweep that runs at the top of every scheduler tick. Home dashboard shows a pending-count banner linking to the queue.
+
+**Your Plan** (`/onboarding`) — one-time setup capturing `timeHorizonYears`, `planningAssumption` (% /yr — *a planning input, not a forecast*), `maxPositionPct`, `drawdownPauseThresholdPct`, `autonomyLevel`, `forbiddenSectors[]`, `forbiddenSymbols[]`. Middleware-level redirect routes first-time users here before they can reach the trading surface. A "Your Plan" card on the home dashboard summarises the chosen values.
 
 ---
 
@@ -184,14 +206,16 @@ Each has a deterministic rulebook consumed by both the live agent and the backte
 
 ---
 
-## UI surfaces (13 routes)
+## UI surfaces (15 routes)
 
-- `/` — Home dashboard (equity, mood rings, positions, recent agent runs, overdue-scheduler diagnostic)
+- `/` — Home dashboard (equity, mood rings, positions, recent agent runs, "Your Plan" card, pending-approvals + budget-warning banners, overdue-scheduler diagnostic)
+- `/onboarding` — one-time Plan wizard; middleware-level redirect gates first-time users until completed
+- `/approvals` — pending-approval queue with Approve / Reject actions per card
 - `/trades` — trade history with manual sell capability
 - `/strategy` — 3 tabs (Strategy list / Meetings / Back-testing)
 - `/strategy/[id]` — wizard chat for one strategy
 - `/brain` — firm memory with category filters + sync button
-- `/settings` — all safety/trading/crypto settings + API keys + session
+- `/settings` — all safety/trading/crypto settings + API keys + session + API cost-governor budget
 - `/wallet` — deposits + transfers
 - `/analytics` — deeper performance + attribution
 - `/backtest`, `/backtest/grid` — single + grid simulation
@@ -218,7 +242,7 @@ Bottom nav: Home · Trades · Strategy · Brain · Settings (5 tabs, iOS-optimiz
 ## Testing
 
 - **Vitest** suite, colocated `*.test.ts` files next to source, `node` environment
-- **252 passing tests across 19 files, full suite runs in ~4s**
+- **313 passing tests across 29 files, full suite runs in ~4s**
 - `npm test` (watch) · `npm run test:run` (one-shot) · `npm run test:ci` (with v8 coverage)
 - **Phase 1 — pure-function coverage** (shipped):
   - **Pricing math** (`pricing.test.ts`) — cache-aware cost per model tier (Opus/Sonnet/Haiku), env-var rate overrides, unknown-model → 0, rounding
@@ -235,10 +259,18 @@ Bottom nav: Home · Trades · Strategy · Brain · Settings (5 tabs, iOS-optimiz
   - **Point-in-time cache key** (`backtest/point-in-time.test.ts`) — determinism, per-scope isolation (pins the parallel-grid-cell fix), price-bucket rounding
   - **Rate-limit bucket meta-test** (`ratelimit.buckets.test.ts`) — static scan of every `checkLimit()` call site in `src/` asserting the bucket is in the declared union; a typo now fails CI rather than silently bypassing rate limits
   - **PlaceTradeInput superRefine** (`agents/schemas.property.test.ts`) — generative coverage of the buy-side IV + MOS gate; any buy missing either field is rejected, sells pass without them
+- **Sprint 1 coverage — Governor + autonomy + approval queue (shipped)**:
+  - **Reason-code module** (`safety/reason-codes.test.ts`) — enum ↔ render map completeness (no orphan codes), template smoke tests for every code, length ceiling, determinism
+  - **Autonomy helpers** (`safety/autonomy.test.ts`) — 3-level ladder, parser fallback to 'auto' on garbage input, label/description tables cover every level
+  - **Pending approval factory** (`safety/pending-approval.test.ts`) — atomic Governor-decision + approval-row write, TTL defaults, bigint field persistence, governor-version stamping
+  - **Expiry sweep** (`safety/approval-sweep.test.ts`) — pending → expired with `resolvedBy='timeout'`, swallows DB errors to never block the tick
+  - **Cost-budget classifier** (`safety/budget.test.ts`) — `classifyBudgetState` with property-based monotonicity, UTC month boundary
+  - **API handlers** (`src/app/api/**/*.test.ts`) — GET `/api/approvals` filters + BigInt serialisation · POST `/api/approvals/[id]/approve` with idempotency (404/403/409/410) + `runTool` dispatch with `bypassAutonomyLadder=true` · POST `/api/approvals/[id]/reject` with state-machine guards · POST `/api/onboarding` validation + forbidden-list normalisation · POST `/api/settings/budget` with nullable-cap semantics
 - **Scoped but not yet shipped**:
   - **Phase 3** — integration tests with a test DB (`seedBrainForUser` idempotency, `backfillBrainTaxonomy`, `writeBrain` validation, policy-change apply boundary, AgentRun stale-sweep, daily-cap exclusion, cascade FK chain)
   - **Phase 4** — chaos tests with mocked externals (Alpaca/Anthropic/OpenAI/EDGAR failure modes)
-- No UI/component tests, no E2E browser tests — deliberate scope choice for a mobile-first app; Vitest node-environment focuses on the pure logic that matters
+  - **Playwright E2E on the money path** — browser-level verification of the sign-up → wizard → agent run → proposal → approval → fill flow. Deferred; covered at the API layer by the Sprint 1 handler tests above.
+- No UI/component tests — deliberate scope choice for a mobile-first app; Vitest node-environment focuses on the pure logic + HTTP handlers that matter
 
 ---
 
@@ -247,10 +279,12 @@ Bottom nav: Home · Trades · Strategy · Brain · Settings (5 tabs, iOS-optimiz
 - **Real ACH in/out** — flagged "coming when live"
 - **Crypto send/receive** — same
 - **No subscription/pricing tier** — BYOK + paper-trading means no revenue path yet
-- **No onboarding wizard** — new users must set deposit + strategy + rails manually via Settings
-- **Comic storage inline base64** — meetings carry ~2MB comic data URLs; should be R2/S3 at scale
+- **Comic storage inline base64** — meetings carry ~2MB comic data URLs; should be R2/S3 at scale. Deferred until object storage is provisioned.
+- **Playwright E2E** — browser-level money-path smoke test. Sprint 1 ships handler-level Vitest coverage instead; full E2E is a follow-up when CI + test-infra land.
+- **Mandate sector-level enforcement** — `forbiddenSectors[]` is captured at onboarding but not yet enforced at trade time (no reliable per-symbol sector source). `forbiddenSymbols[]` is fully wired through the Governor.
+- **Onboarding wizard screen-per-question polish** — v1 ships a single-screen mobile-scrollable form; the proposal called for 7-9 screens with progressive disclosure. The schema + flow + governor integration ship; the UX polish is follow-up.
 - **Some meeting prompt tuning** — agents occasionally over-fixate on cost when it's only marginally material
 
 ---
 
-**TL;DR**: Value-investing paper-trading app that treats itself as a five-to-six-bot "firm" with institutional memory, weekly exec meetings rendered as Mad Magazine comics, a serious safety-rails + defense-in-depth trade gate, six preset strategies + a custom wizard, point-in-time-fundamentals backtesting, rule-based crypto DCA, BYOK on every model provider, a growing brain library you resync from the repo, and a 252-test mutation-verified Vitest suite (including fast-check property tests on the safety-rail state machine + fundamentals parser + trade-input gate) pinning the critical behaviour invariants.
+**TL;DR**: Value-investing paper-trading app that treats itself as a five-to-six-bot "firm" with institutional memory, weekly exec meetings rendered as Mad Magazine comics, a **Governor-routed defense-in-depth trade gate** with structured reason codes + audit trail, a **three-level autonomy ladder** (Observe / Propose / Auto) feeding a **user approval queue**, a **BYOK API cost-governor** that pauses the agent before surprise bills, a **Your Plan onboarding wizard** every user must complete before trading, six preset strategies + a custom wizard, point-in-time-fundamentals backtesting, rule-based crypto DCA, BYOK on every model provider, a growing brain library you resync from the repo, and a **313-test mutation-verified Vitest suite** (property tests + HTTP handler tests) pinning the critical behaviour invariants.
