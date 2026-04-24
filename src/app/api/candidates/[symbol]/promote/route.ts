@@ -6,6 +6,7 @@ import { NextResponse } from 'next/server';
 import { revalidatePath } from 'next/cache';
 import { prisma } from '@/lib/db';
 import { apiError, requireUser } from '@/lib/api';
+import { promoteCandidateToWatchlist } from '@/lib/data/user-watchlist';
 
 export const runtime = 'nodejs';
 
@@ -36,6 +37,8 @@ export async function POST(
         candidateSource: 'watchlist',
       },
     });
+    // B2.1 dual-write.
+    await promoteCandidateToWatchlist(user.id, symbol);
     await prisma.auditLog.create({
       data: {
         userId: user.id,

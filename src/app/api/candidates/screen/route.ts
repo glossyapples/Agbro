@@ -45,10 +45,14 @@ export async function POST(req: Request) {
       select: { autoPromoteCandidates: true },
     });
 
-    const result = await runScreen(parsed.data ?? {}, {
-      bypassCooldown: true,
-      autoPromoteHighConviction: account?.autoPromoteCandidates === true,
-    });
+    const result = await runScreen(
+      parsed.data ?? {},
+      {
+        bypassCooldown: true,
+        autoPromoteHighConviction: account?.autoPromoteCandidates === true,
+      },
+      user.id
+    );
     revalidatePath('/candidates');
     // Auto-promoted candidates land on the watchlist immediately, so those
     // pages need to re-render too.

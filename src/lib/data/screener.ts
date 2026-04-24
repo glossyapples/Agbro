@@ -210,7 +210,8 @@ function passesHighConvictionBar(
 
 export async function runScreen(
   criteria: ScreenCriteria,
-  options: ScreenOptions = {}
+  options: ScreenOptions = {},
+  userId?: string
 ): Promise<ScreenResult> {
   const cooldown = await getCooldownState();
   if (cooldown.blocked && !options.bypassCooldown) {
@@ -343,6 +344,20 @@ export async function runScreen(
         discoveredAt: new Date(),
       },
     });
+
+    // B2.1 dual-write: mirror screener state to UserWatchlist. We do
+    // this AFTER the Stock upsert so a UserWatchlist row never exists
+    // without its Stock catalog counterpart (FK relation). userId is
+    // optional on this function for migration; once all callers pass
+    // it, it becomes required in B2.3.
+    if (userId) {
+      const { markCandidate } = await import('./user-watchlist');
+      await markCandidate(userId, symbol, {
+        source: 'screener',
+        notes: thesis,
+        autoPromoted: highConviction,
+      });
+    }
 
     results.push({
       symbol,

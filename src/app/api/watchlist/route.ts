@@ -6,6 +6,7 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import { prisma } from '@/lib/db';
 import { apiError, requireUser } from '@/lib/api';
+import { markOnWatchlist, removeFromWatchlist } from '@/lib/data/user-watchlist';
 
 export const runtime = 'nodejs';
 
@@ -70,6 +71,10 @@ export async function POST(req: Request) {
         onWatchlist: true,
       },
     });
+    // B2.1 dual-write: mirror the per-user state into UserWatchlist.
+    // Stock.onWatchlist is still the read-authoritative source; this
+    // keeps the two in sync so B2.2 can flip reads cleanly.
+    await markOnWatchlist(user.id, symbol);
     revalidatePath('/watchlist');
     revalidatePath('/analytics');
     return NextResponse.json({ ok: true, symbol: stock.symbol });
@@ -94,6 +99,8 @@ export async function DELETE(req: Request) {
       where: { symbol },
       data: { onWatchlist: false },
     });
+    // B2.1 dual-write: mirror the removal to UserWatchlist.
+    await removeFromWatchlist(user.id, symbol);
     revalidatePath('/watchlist');
     revalidatePath('/analytics');
     return NextResponse.json({ ok: true });

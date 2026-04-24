@@ -41,6 +41,7 @@ model User {
   backtestRuns  BacktestRun[]
   apiCredentials UserApiCredential[]
   meetings      Meeting[]
+  watchlist     UserWatchlist[]
 }
 
 // BYOK — per-user API keys for third-party providers. The raw key is
@@ -560,6 +561,10 @@ model Stock {
   lastAnalyzedAt DateTime?
   updatedAt      DateTime @updatedAt
   prices         PriceSnapshot[]
+  // Per-user preferences live on UserWatchlist now (see B2 migration
+  // notes on that model). onWatchlist / candidateSource / etc. above
+  // stay on Stock during the phased migration — removed in B2.3+.
+  userWatchlist  UserWatchlist[]
 }
 
 model PriceSnapshot {
@@ -916,4 +921,45 @@ model SchedulerLease {
   expiresAt  DateTime                     // now + TTL on acquire; now on release
 
   @@index([expiresAt])
+}
+
+// Per-user watchlist + candidate state. Splits out from Stock — Stock
+// is the global catalog (symbol, name, fundamentals, analyzer scores —
+// genuinely shared: Apple's EPS is the same for everyone), while
+// UserWatchlist holds the per-user preferences that were mixed into
+// Stock before. Pre-split, user A flipping `onWatchlist=false` affected
+// every user; that was a multi-tenant leak + a cross-user cache-
+// poisoning vector the audit flagged as Tier 0 critical.
+//
+// Migration is phased:
+//   B2.1 — add this model, backfill existing Stock per-user fields into
+//          UserWatchlist rows, dual-write from every Stock write site
+//          (reads unchanged, still hit Stock)
+//   B2.2 — flip reads to UserWatchlist (joining back to Stock for
+//          global fields). Dual-write continues.
+//   B2.3 — stop writing per-user fields on Stock; UserWatchlist is
+//          authoritative. Columns stay on Stock for a soak period
+//          before eventual removal.
+//
+// candidateSource enum (string-typed for now): 'screener' | 'agent' |
+// 'rejected' | 'watchlist' | null. Semantics preserved from the
+// original Stock field. "rejected" becomes per-user — A rejecting a
+// candidate no longer hides it from B's screener.
+model UserWatchlist {
+  id              String    @id @default(cuid())
+  userId          String
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  symbol          String
+  stock           Stock     @relation(fields: [symbol], references: [symbol], onDelete: Cascade)
+  onWatchlist     Boolean   @default(false)
+  candidateSource String?
+  candidateNotes  String?   @db.Text
+  discoveredAt    DateTime?
+  autoPromotedAt  DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@unique([userId, symbol])
+  @@index([userId, onWatchlist])
+  @@index([userId, candidateSource])
 }

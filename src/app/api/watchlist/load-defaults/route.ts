@@ -7,6 +7,7 @@ import { revalidatePath } from 'next/cache';
 import { prisma } from '@/lib/db';
 import { apiError, requireUser } from '@/lib/api';
 import { STARTER_UNIVERSE } from '@/lib/stocks/starter-universe';
+import { markOnWatchlist } from '@/lib/data/user-watchlist';
 
 export const runtime = 'nodejs';
 export const maxDuration = 60;
@@ -24,6 +25,9 @@ export async function POST() {
         update: { ...s, onWatchlist: true, lastAnalyzedAt: new Date() },
         create: { ...s, onWatchlist: true, lastAnalyzedAt: new Date() },
       });
+      // B2.1 dual-write: seed-universe additions become per-user
+      // watchlist entries for the calling user.
+      await markOnWatchlist(user.id, s.symbol);
       results.push({ symbol: s.symbol, created: !existing });
     }
     revalidatePath('/watchlist');

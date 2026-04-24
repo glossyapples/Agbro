@@ -573,9 +573,13 @@ export async function runTool(
         where: { userId: ctx.userId },
         select: { autoPromoteCandidates: true },
       });
-      return runScreen(parsed.data, {
-        autoPromoteHighConviction: account?.autoPromoteCandidates === true,
-      });
+      return runScreen(
+        parsed.data,
+        {
+          autoPromoteHighConviction: account?.autoPromoteCandidates === true,
+        },
+        ctx.userId
+      );
     }
     case 'get_event_calendar': {
       const parsed = GetEventCalendarInput.safeParse(input);
