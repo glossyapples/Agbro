@@ -7,6 +7,8 @@ import { MeetingCard } from '@/components/MeetingCard';
 import { ActionItemsList } from '@/components/ActionItemsList';
 import { PolicyChangesList } from '@/components/PolicyChangesList';
 import { BurryGuestToggle } from '@/components/BurryGuestToggle';
+import { StrategySyncNudge } from '@/components/StrategySyncNudge';
+import { missingStarterStrategySlugs } from '@/lib/brain/seed-brain';
 
 export const dynamic = 'force-dynamic';
 
@@ -72,12 +74,16 @@ function Tabs({ active }: { active: Tab }) {
 }
 
 async function StrategyTab({ userId }: { userId: string }) {
-  const strategies = await prisma.strategy.findMany({
-    where: { userId },
-    orderBy: [{ isActive: 'desc' }, { createdAt: 'desc' }],
-  });
+  const [strategies, missingSlugs] = await Promise.all([
+    prisma.strategy.findMany({
+      where: { userId },
+      orderBy: [{ isActive: 'desc' }, { createdAt: 'desc' }],
+    }),
+    missingStarterStrategySlugs(userId),
+  ]);
   return (
     <>
+      <StrategySyncNudge missingSlugs={missingSlugs} />
       <ul className="flex flex-col gap-3">
         {strategies.map((s) => (
           <li key={s.id} className="card">

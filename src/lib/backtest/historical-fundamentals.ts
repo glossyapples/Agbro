@@ -454,20 +454,50 @@ function buildRows(factsJson: FactsJson): RowAtFiled[] {
 // authoritative signal.
 function rollingTTM(facts: Fact[]): Map<string, number> {
   const quarters = dedupeByEnd(facts.filter(isQuarterDuration));
-  const annuals = facts.filter(isAnnualDuration);
+  // Sort annuals by filing date so the forward-fill pass below finds
+  // the most recent annual ≤ a given quarterly filing in O(log n) via
+  // binary search (or O(n) scan — n is small, whatever).
+  const annuals = facts
+    .filter(isAnnualDuration)
+    .slice()
+    .sort((a, b) => (a.filed < b.filed ? -1 : 1));
 
   const result = new Map<string, number>();
 
-  // Anchor: FY value at 10-K filing date = TTM directly.
+  // Anchor 1: FY value at 10-K filing date = TTM directly.
   for (const a of annuals) {
     if (!result.has(a.filed)) result.set(a.filed, a.val);
   }
 
-  // Quarterly anchor: sum of last 4 unique 3-month slices ≤ this end.
+  // Anchor 2: quarterly — sum of last 4 unique 3-month slices ≤ this end.
+  // This is the normal path for calendar-aligned filers; it also works
+  // for off-calendar filers who DO publish a Q4 3-month slice alongside
+  // their 10-K.
   for (const q of quarters) {
     const window = quarters.filter((x) => x.end <= q.end).slice(-4);
     if (window.length === 4 && !result.has(q.filed)) {
       result.set(q.filed, window.reduce((s, x) => s + x.val, 0));
+    }
+  }
+
+  // Anchor 3 (fallback): off-calendar fiscal-year filers like Visa (FY
+  // ends Sept 30) often report only YTD cumulatives + the FY annual —
+  // no standalone Q4 3-month slice — so the window loop above can't
+  // reach 4 for their 10-Q filings and the 10-Q rows land with
+  // epsTTM=null. Forward-fill those quarterlies from the most recent
+  // annual filed on or before this 10-Q. The value is slightly stale
+  // (it's the prior FY's number), but that's what an analyst would
+  // use when no fresher TTM is computable. Much better than null.
+  if (annuals.length > 0) {
+    for (const q of quarters) {
+      if (result.has(q.filed)) continue;
+      // Most recent annual with filed ≤ q.filed. Annuals pre-sorted.
+      let latest: Fact | null = null;
+      for (const a of annuals) {
+        if (a.filed <= q.filed) latest = a;
+        else break;
+      }
+      if (latest) result.set(q.filed, latest.val);
     }
   }
 

@@ -205,6 +205,22 @@ export async function isBrainSeeded(userId: string): Promise<boolean> {
 
 export { STARTER_BRAIN_SUMMARY };
 
+// Returns the list of library-strategy slugs this user is missing. Used
+// by /strategy to show a "new strategies available — sync now" nudge
+// so users don't have to know that the /brain sync button is what also
+// pulls in new strategy rows.
+export async function missingStarterStrategySlugs(userId: string): Promise<string[]> {
+  const expectedIds = STARTER_STRATEGIES.map((s) => strategyRowId(userId, s.slug));
+  const existing = await prisma.strategy.findMany({
+    where: { userId, id: { in: expectedIds } },
+    select: { id: true },
+  });
+  const existingIds = new Set(existing.map((s) => s.id));
+  return STARTER_STRATEGIES.filter(
+    (s) => !existingIds.has(strategyRowId(userId, s.slug))
+  ).map((s) => s.slug);
+}
+
 // One-shot taxonomy backfill. After the schema added category +
 // confidence with defaults of memory/medium, any pre-existing row whose
 // kind unambiguously belongs to a different bucket (principle,
