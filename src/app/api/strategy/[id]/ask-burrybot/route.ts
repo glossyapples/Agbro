@@ -34,7 +34,9 @@ export async function POST(
   const user = await requireUser();
   if (user instanceof NextResponse) return user;
 
-  const gate = await checkLimit(user.id, 'default');
+  // LLM-specific bucket — 30 turns/hour caps a held-down Send key at
+  // meaningful spend while leaving room for real multi-turn chat.
+  const gate = await checkLimit(user.id, 'burry.chat');
   if (!gate.success) return rateLimited(gate);
 
   try {

@@ -7,6 +7,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { apiError, requireUser } from '@/lib/api';
+import { checkLimit, rateLimited } from '@/lib/ratelimit';
 import {
   burryHypothesesFormed,
   formBurryHypotheses,
@@ -21,6 +22,13 @@ export async function POST(
 ) {
   const user = await requireUser();
   if (user instanceof NextResponse) return user;
+
+  // Burrybot hypothesis formation is an LLM call that costs real money
+  // — cap at 3/hour per user so a stuck button or automated clicker
+  // can't run a meaningful bill.
+  const gate = await checkLimit(user.id, 'burry.hypothesis');
+  if (!gate.success) return rateLimited(gate);
+
   try {
     const strategy = await prisma.strategy.findFirst({
       where: { id: params.id, userId: user.id },

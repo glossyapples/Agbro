@@ -18,6 +18,9 @@ export type Bucket =
   | 'analyzer'
   | 'strategy.wizard'
   | 'candidates.wizard'
+  | 'burry.hypothesis'
+  | 'burry.chat'
+  | 'meetings.comic'
   | 'auth'
   | 'default';
 
@@ -29,6 +32,17 @@ const LIMITS: Record<Bucket, { limit: number; window: Duration }> = {
   // hour is more than enough for the user-triggered "help me pick"
   // workflow and caps spend at ~$50/month if someone abuses it.
   'candidates.wizard': { limit: 6, window: '1 h' },
+  // Burrybot first-research session: ~$0.20-$0.40 per call, one-shot
+  // per strategy. 3/hour caps a click-spammer at ~$1.20/hour.
+  'burry.hypothesis': { limit: 3, window: '1 h' },
+  // Ask Burrybot chat: ~$0.05-$0.20 per turn (with caching, lower).
+  // 30/hour allows meaningful back-and-forth without opening a spend
+  // hose for a held-down Send key.
+  'burry.chat': { limit: 30, window: '1 h' },
+  // Meeting comic regeneration: ~$0.05 on OpenAI's side per call.
+  // User pays directly on their own OpenAI key but the backend still
+  // opens a 30-60s window per call; 10/hour is plenty.
+  'meetings.comic': { limit: 10, window: '1 h' },
   auth: { limit: 5, window: '1 m' },
   default: { limit: 120, window: '1 m' },
 };

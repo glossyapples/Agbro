@@ -6,6 +6,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { apiError, requireUser } from '@/lib/api';
+import { checkLimit, rateLimited } from '@/lib/ratelimit';
 import { generateMeetingComic } from '@/lib/meetings/comic';
 import { getUserCredential } from '@/lib/credentials';
 
@@ -18,6 +19,14 @@ export async function POST(
 ) {
   const user = await requireUser();
   if (user instanceof NextResponse) return user;
+
+  // Cap comic regeneration at 10/hour per user — each call opens a
+  // 30-60s OpenAI image window (billed to the user's own key) plus an
+  // Opus script call on ours. A stuck retry button could otherwise
+  // loop expensively.
+  const gate = await checkLimit(user.id, 'meetings.comic');
+  if (!gate.success) return rateLimited(gate);
+
   try {
     const meeting = await prisma.meeting.findUnique({
       where: { id: params.id },
