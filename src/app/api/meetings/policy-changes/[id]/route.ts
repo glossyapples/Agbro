@@ -110,7 +110,11 @@ const ACCOUNT_ALLOWED_KEYS = new Set([
   'maxCryptoAllocationPct',
   'dailyLossKillPct',
   'drawdownPauseThresholdPct',
+  // 'expectedAnnualPct' is kept as a legacy alias for 'planningAssumption'
+  // so in-flight PolicyChange rows from pre-rename meetings still apply.
+  // applyChange rewrites it below.
   'expectedAnnualPct',
+  'planningAssumption',
 ]);
 
 function validateBounds(
@@ -184,13 +188,16 @@ function validateBounds(
       };
     }
   }
-  // expectedAnnualPct is the user's target return. 0-60% covers
-  // everything from T-bill-equivalent to aggressive compounders; the
-  // safety-rails form clamps the same way.
-  if (kind === 'account' && targetKey === 'expectedAnnualPct') {
+  // planningAssumption (aka legacy expectedAnnualPct) — user's own
+  // planning input. 0-60% covers everything from T-bill-equivalent
+  // to aggressive compounders. Not a forecast or a promise.
+  if (
+    kind === 'account' &&
+    (targetKey === 'planningAssumption' || targetKey === 'expectedAnnualPct')
+  ) {
     const v = Number(after);
     if (!Number.isFinite(v) || v < 0 || v > 60) {
-      return { ok: false, reason: 'expectedAnnualPct must be 0..60' };
+      return { ok: false, reason: 'planningAssumption must be 0..60' };
     }
   }
   return { ok: true };
@@ -208,9 +215,11 @@ async function applyChange(
   // rules / universe) should grow here plus in validateBounds +
   // schema.ts's allowlist in lockstep.
   if (kind === 'cadence' || kind === 'account') {
+    // Map the legacy 'expectedAnnualPct' alias onto its new column.
+    const column = targetKey === 'expectedAnnualPct' ? 'planningAssumption' : targetKey;
     await prisma.account.update({
       where: { userId },
-      data: { [targetKey]: Number(after) } as Record<string, unknown>,
+      data: { [column]: Number(after) } as Record<string, unknown>,
     });
     return;
   }

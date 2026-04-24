@@ -77,7 +77,7 @@ async function main() {
     update: {},
     create: {
       userId: user.id,
-      expectedAnnualPct: 12.0,
+      planningAssumption: 12.0,
       riskTolerance: 'moderate',
       maxPositionPct: Number(process.env.MAX_POSITION_PCT ?? 15),
       maxDailyTrades: Number(process.env.MAX_DAILY_TRADES ?? 3),

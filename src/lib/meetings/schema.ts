@@ -135,7 +135,7 @@ CRITICAL — action items carry over across meetings. The briefing includes \`op
 Only create NEW actionItems when the meeting identifies NEW work — not when an existing item can be updated to cover it.
 
 POLICY CHANGES — the partners may propose adjustments to the firm's risk posture, shown in \`policyChanges\`. The SERVER rejects anything outside this allowlist with a 400, so don't emit wider kinds. Allowed:
-  • kind='account', targetKey ∈ { maxPositionPct, maxDailyTrades, minCashReservePct, maxCryptoAllocationPct, dailyLossKillPct, drawdownPauseThresholdPct, expectedAnnualPct }
+  • kind='account', targetKey ∈ { maxPositionPct, maxDailyTrades, minCashReservePct, maxCryptoAllocationPct, dailyLossKillPct, drawdownPauseThresholdPct, planningAssumption }
   • kind='cadence', targetKey='agentCadenceMinutes'
 
 Things that are NOT policy-changeable from meetings (use actionItems with kind='adjust_strategy' if the partners want the user to revisit them):

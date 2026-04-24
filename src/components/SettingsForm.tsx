@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 
 export type SettingsInitial = {
-  expectedAnnualPct: number;
+  planningAssumption: number;
   riskTolerance: 'conservative' | 'moderate' | 'aggressive';
   maxPositionPct: number;
   maxDailyTrades: number;
@@ -24,7 +24,7 @@ export type SettingsInitial = {
 // editable when the user clears the field (React number bindings
 // round "" → 0 and re-render "0", which eats every keystroke).
 type FormState = {
-  expectedAnnualPct: string;
+  planningAssumption: string;
   riskTolerance: SettingsInitial['riskTolerance'];
   maxPositionPct: string;
   maxDailyTrades: string;
@@ -79,7 +79,7 @@ function unrealisticAprWarning(raw: string): string | null {
 
 function toForm(initial: SettingsInitial): FormState {
   return {
-    expectedAnnualPct: String(initial.expectedAnnualPct),
+    planningAssumption: String(initial.planningAssumption),
     riskTolerance: initial.riskTolerance,
     maxPositionPct: String(initial.maxPositionPct),
     maxDailyTrades: String(initial.maxDailyTrades),
@@ -121,7 +121,7 @@ export function SettingsForm({ initial }: { initial: SettingsInitial }) {
         return Number.isFinite(n) && s.trim() !== '' ? n : fallback;
       };
       const payload = {
-        expectedAnnualPct: num(form.expectedAnnualPct, initial.expectedAnnualPct),
+        planningAssumption: num(form.planningAssumption, initial.planningAssumption),
         riskTolerance: form.riskTolerance,
         maxPositionPct: num(form.maxPositionPct, initial.maxPositionPct),
         maxDailyTrades: Math.round(num(form.maxDailyTrades, initial.maxDailyTrades)),
@@ -162,25 +162,25 @@ export function SettingsForm({ initial }: { initial: SettingsInitial }) {
       <h2 className="text-sm font-semibold">Trading rules & schedule</h2>
 
       <div>
-        <label htmlFor="settings-expected-annual-pct">
-          Expected annual return (%)
+        <label htmlFor="settings-planning-assumption">
+          Planning assumption (% / yr)
         </label>
         <input
-          id="settings-expected-annual-pct"
+          id="settings-planning-assumption"
           type="number"
           inputMode="decimal"
-          value={form.expectedAnnualPct}
-          onChange={(e) => update('expectedAnnualPct', e.target.value)}
+          value={form.planningAssumption}
+          onChange={(e) => update('planningAssumption', e.target.value)}
           min={0}
         />
         <p className="mt-1 text-[11px] text-ink-400">
-          AgBro&apos;s survival goal. The agent will push harder when this is
-          high and stay conservative when it&apos;s low. Safety rails below
-          still apply no matter what.
+          A planning input only — not a forecast, not a promise.
+          Sets the agent&apos;s own tolerance for patience vs.
+          aggression. Safety rails below apply regardless.
         </p>
-        {unrealisticAprWarning(form.expectedAnnualPct) && (
+        {unrealisticAprWarning(form.planningAssumption) && (
           <p className="mt-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-300">
-            ⚠ {unrealisticAprWarning(form.expectedAnnualPct)}
+            ⚠ {unrealisticAprWarning(form.planningAssumption)}
           </p>
         )}
       </div>

@@ -210,10 +210,11 @@ async function getOverview() {
       checkApiBudget(user.id),
     ]);
 
-  // Numeric target (invested principal × (1 + expectedAnnualPct / 100)) for
-  // the scalar row next to the chart.
+  // Numeric target (invested principal × (1 + planningAssumption / 100)) for
+  // the scalar row next to the chart. NOT a return forecast — it's a
+  // planning reference line the user set for themselves.
   const invested = Number(user.account.depositedCents) / 100;
-  const target = invested * (1 + user.account.expectedAnnualPct / 100);
+  const target = invested * (1 + user.account.planningAssumption / 100);
 
   return {
     user,
@@ -306,12 +307,12 @@ export default async function OverviewPage() {
             </p>
           </div>
           <div className="min-w-0">
-            <p className="stat-label">Target</p>
+            <p className="stat-label">Plan reference</p>
             <p className="mt-0.5 truncate text-base font-semibold tabular-nums text-brand-400">
               {formatUsd(BigInt(Math.round(target * 100)))}
             </p>
             <p className="text-[10px] text-ink-400">
-              {formatPct(account.expectedAnnualPct)}/yr
+              {formatPct(account.planningAssumption)}/yr assumed
             </p>
           </div>
           <div className="min-w-0">

@@ -142,7 +142,7 @@ function formatValue(v: unknown, targetKey?: string): string {
   if (v === null || v === undefined) return '—';
   if (typeof v === 'number') {
     const k = targetKey ?? '';
-    if (k.endsWith('Pct') || k === 'expectedAnnualPct') return `${v}%`;
+    if (k.endsWith('Pct') || k === 'planningAssumption' || k === 'expectedAnnualPct') return `${v}%`;
     if (k === 'agentCadenceMinutes') return `${v} min`;
     if (k.endsWith('Cents')) return `$${(v / 100).toLocaleString()}`;
     return String(v);

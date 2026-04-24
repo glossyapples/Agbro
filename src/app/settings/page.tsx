@@ -26,8 +26,8 @@ export default async function SettingsPage() {
           <div>
             <h2 className="text-sm font-semibold">Principal</h2>
             <p className="mt-1 text-sm text-ink-200">
-              Deposited: <strong>{formatUsd(a.depositedCents)}</strong> · Target gain{' '}
-              <strong>{formatPct(a.expectedAnnualPct)}</strong> / yr
+              Deposited: <strong>{formatUsd(a.depositedCents)}</strong> · Plan{' '}
+              <strong>{formatPct(a.planningAssumption)}</strong> / yr assumed
             </p>
           </div>
           <Link href="/wallet" className="text-xs text-brand-400">
@@ -39,7 +39,7 @@ export default async function SettingsPage() {
 
       <SettingsForm
         initial={{
-          expectedAnnualPct: a.expectedAnnualPct,
+          planningAssumption: a.planningAssumption,
           riskTolerance: a.riskTolerance as 'conservative' | 'moderate' | 'aggressive',
           maxPositionPct: a.maxPositionPct,
           maxDailyTrades: a.maxDailyTrades,

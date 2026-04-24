@@ -701,7 +701,10 @@ async function getAccountState(ctx: ToolContext) {
     policy: account && {
       isPaused: account.isPaused,
       isStopped: account.isStopped,
-      expectedAnnualPct: account.expectedAnnualPct,
+      // Re-emit under the new name; keep the old key as a transitional
+      // alias so any in-flight agent prompt still references a live field.
+      planningAssumption: account.planningAssumption,
+      expectedAnnualPct: account.planningAssumption,
       riskTolerance: account.riskTolerance,
       maxPositionPct: account.maxPositionPct,
       maxDailyTrades: account.maxDailyTrades,

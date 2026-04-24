@@ -110,7 +110,11 @@ model Account {
   principalCents      BigInt   @default(0)         // total money ever deposited
   depositedCents      BigInt   @default(0)         // cumulative deposits
   withdrawnCents      BigInt   @default(0)
-  expectedAnnualPct   Float    @default(12.0)      // user-set target
+  // Previously named expectedAnnualPct — renamed to planningAssumption
+  // to keep the copy posture honest (it's a planning input, not a
+  // forward-looking return promise). Underlying DB column stays on
+  // the old name via @map so existing rows need no migration.
+  planningAssumption  Float    @default(12.0) @map("expectedAnnualPct")
   riskTolerance       String   @default("moderate") // conservative | moderate | aggressive
   isPaused            Boolean  @default(false)
   isStopped           Boolean  @default(false)

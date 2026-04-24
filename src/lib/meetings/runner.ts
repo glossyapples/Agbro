@@ -376,7 +376,7 @@ async function buildBriefing(userId: string, agendaOverride?: string) {
     account: account
       ? {
           depositedCents: account.depositedCents.toString(),
-          expectedAnnualPct: account.expectedAnnualPct,
+          planningAssumption: account.planningAssumption,
           riskTolerance: account.riskTolerance,
           agentCadenceMinutes: account.agentCadenceMinutes,
           isPaused: account.isPaused,
@@ -474,7 +474,7 @@ async function buildBriefing(userId: string, agendaOverride?: string) {
     agentRunCostSummary: summariseAgentRunCosts(
       recentRuns as Array<{ costUsd: number | null; startedAt: Date; status: string }>,
       account ? Number(account.depositedCents) / 100 : 0,
-      account?.expectedAnnualPct ?? 0
+      account?.planningAssumption ?? 0
     ),
     // Doctrine: principles + playbooks the partners should always
     // reason from. Shorter body slice — these are reminders, not

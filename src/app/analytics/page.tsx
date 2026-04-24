@@ -189,8 +189,8 @@ export default async function AnalyticsPage() {
           <Stat label="Win / Loss" value={`${wins} / ${losses}`} />
           <Stat label="Realized P/L" value={formatUsd(totalPnlCents)} />
           <Stat
-            label="Target / yr"
-            value={formatPct(user.account?.expectedAnnualPct)}
+            label="Plan / yr"
+            value={formatPct(user.account?.planningAssumption)}
           />
         </div>
       </section>
