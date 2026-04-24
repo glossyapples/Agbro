@@ -215,6 +215,28 @@ Bottom nav: Home · Trades · Strategy · Brain · Settings (5 tabs, iOS-optimiz
 
 ---
 
+## Testing
+
+- **Vitest** suite, colocated `*.test.ts` files next to source, `node` environment
+- **201 passing tests across 14 files, full suite runs in ~2.5s**
+- `npm test` (watch) · `npm run test:run` (one-shot) · `npm run test:ci` (with v8 coverage)
+- **Phase 1 — pure-function coverage** (shipped):
+  - **Pricing math** (`pricing.test.ts`) — cache-aware cost per model tier (Opus/Sonnet/Haiku), env-var rate overrides, unknown-model → 0, rounding
+  - **Schema validation** (`agents/schemas.test.ts`) — PlaceTradeInput with buy-specific MOS `superRefine` (buy requires IV + MOS; sell flexible); SizePositionInput; UpdateStockFundamentalsInput bounds
+  - **Brain taxonomy** (`brain/taxonomy.test.ts`) — `BRAIN_KIND_VALUES` derived from map keys (no drift), canonical mappings pinned, agent-taxonomy never promotes to principle/canonical, prompt-builder completeness
+  - **Backtest rules** (`backtest/rules.test.ts`) — every `StrategyKey` produces a ruleset, Burry empty-ruleset pinned (cash-drag regression guard), dividend_growth absent `minDividendYieldPct` pinned (un-evaluable-filter guard), Boglehead target weights sum to 1.0, ruleset shape invariants
+  - **Starter library integrity** (`brain/starter-library/index.test.ts`) — no duplicate `(kind, slug)` pairs (upsert collision), every kind known to taxonomy, `STARTER_BRAIN_MARKER_SLUG` present (`isBrainSeeded` guard), presetKey uniqueness, Burry-tagged doctrine exists
+  - **Cost-summary drag math** (`meetings/cost-summary.test.ts`) — canonical $39.37/wk × $100.1k × 30% → 6.82% drag-on-target math pinned, division-by-zero guards, monotonicity invariants
+  - **Cross-cutting concerns** (`api.test.ts`, `ratelimit.test.ts`, `logger.test.ts`, `money.test.ts`, `time.test.ts`, `analyzer.test.ts`, `strategy-diff.test.ts`, `data/sec-edgar.test.ts`) — cron-secret auth, bucket isolation + windowing, log level filtering, currency formatting, ET time helpers, analyzer verdict shape, strategy diff renderer, EDGAR XBRL parsing
+- **Mutation-verified** — four deliberate regressions were reintroduced and confirmed caught: Burry rotation rules, dividend yield filter, MOS superRefine removal, drag-math formula error
+- **Scoped but not yet shipped**:
+  - **Phase 2** — property tests (fast-check) on trade-gate ordering, supersession invariants, equity-series monotonicity, kill-switch state machine
+  - **Phase 3** — integration tests with a test DB (`seedBrainForUser` idempotency, `backfillBrainTaxonomy`, `writeBrain` validation, policy-change apply boundary, AgentRun stale-sweep, daily-cap exclusion, cascade FK chain)
+  - **Phase 4** — chaos tests with mocked externals (Alpaca/Anthropic/OpenAI/EDGAR failure modes)
+- No UI/component tests, no E2E browser tests — deliberate scope choice for a mobile-first app; Vitest node-environment focuses on the pure logic that matters
+
+---
+
 ## What's aspirational / known gaps (honest)
 
 - **Multi-replica scheduler** — duplicates ticks if Railway scales beyond 1 replica (Tier 0 critical)
@@ -229,4 +251,4 @@ Bottom nav: Home · Trades · Strategy · Brain · Settings (5 tabs, iOS-optimiz
 
 ---
 
-**TL;DR**: Value-investing paper-trading app that treats itself as a five-to-six-bot "firm" with institutional memory, weekly exec meetings rendered as Mad Magazine comics, a serious safety-rails + defense-in-depth trade gate, six preset strategies + a custom wizard, point-in-time-fundamentals backtesting, rule-based crypto DCA, BYOK on every model provider, and a growing brain library you resync from the repo.
+**TL;DR**: Value-investing paper-trading app that treats itself as a five-to-six-bot "firm" with institutional memory, weekly exec meetings rendered as Mad Magazine comics, a serious safety-rails + defense-in-depth trade gate, six preset strategies + a custom wizard, point-in-time-fundamentals backtesting, rule-based crypto DCA, BYOK on every model provider, a growing brain library you resync from the repo, and a 201-test mutation-verified Vitest suite pinning the critical behaviour invariants.
