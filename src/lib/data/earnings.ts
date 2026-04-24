@@ -36,6 +36,30 @@ export async function refreshEarningsDate(symbol: string): Promise<Date | null> 
     return stock.nextEarningsAt;
   }
 
+  // Post-B2.x: the Stock catalog is no longer the authoritative per-user
+  // surface — the per-user UserWatchlist is. A symbol can appear on the
+  // agent's desk (via research, a candidate promotion, a post-placement
+  // position sync) without ever being in Stock. Use upsert instead of
+  // update so the earnings-refresh path seeds a minimal Stock row when
+  // it's missing, rather than throwing P2025 noise through every tick.
+  async function writeEarnings(data: {
+    nextEarningsAt?: Date | null;
+    earningsCheckedAt: Date;
+    earningsSource: string;
+  }): Promise<void> {
+    await prisma.stock.upsert({
+      where: { symbol },
+      update: data,
+      create: {
+        symbol,
+        // Symbol is the only field we know at this point; the name
+        // backfills whenever the screener / EDGAR path touches this row.
+        name: symbol,
+        ...data,
+      },
+    });
+  }
+
   try {
     const res = await perplexitySearch(
       `When is the next earnings report date for ${symbol}? Respond with only the date in YYYY-MM-DD format, or UNKNOWN.`,
@@ -44,10 +68,7 @@ export async function refreshEarningsDate(symbol: string): Promise<Date | null> 
     const match = res.summary.match(DATE_RE);
     if (!match) {
       log.info('earnings.unknown', { symbol, response: res.summary.slice(0, 100) });
-      await prisma.stock.update({
-        where: { symbol },
-        data: { earningsCheckedAt: now, earningsSource: 'perplexity' },
-      });
+      await writeEarnings({ earningsCheckedAt: now, earningsSource: 'perplexity' });
       return null;
     }
     const parsed = new Date(`${match[0]}T21:00:00Z`); // 4pm ET typical AMC release, close enough for blackout math
@@ -55,19 +76,13 @@ export async function refreshEarningsDate(symbol: string): Promise<Date | null> 
     // hallucination from the model.
     if (parsed < now || parsed.getTime() > now.getTime() + 180 * 86_400_000) {
       log.warn('earnings.out_of_range', { symbol, parsed: parsed.toISOString() });
-      await prisma.stock.update({
-        where: { symbol },
-        data: { earningsCheckedAt: now, earningsSource: 'perplexity' },
-      });
+      await writeEarnings({ earningsCheckedAt: now, earningsSource: 'perplexity' });
       return null;
     }
-    await prisma.stock.update({
-      where: { symbol },
-      data: {
-        nextEarningsAt: parsed,
-        earningsCheckedAt: now,
-        earningsSource: 'perplexity',
-      },
+    await writeEarnings({
+      nextEarningsAt: parsed,
+      earningsCheckedAt: now,
+      earningsSource: 'perplexity',
     });
     log.info('earnings.refreshed', { symbol, date: match[0] });
     return parsed;

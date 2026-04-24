@@ -44,9 +44,18 @@ export async function refreshFundamentalsForSymbol(symbol: string): Promise<Refr
       // at analysis time when it has a live quote.
     }
 
-    await prisma.stock.update({
+    // Post-B2.x: Stock catalog can be missing rows the UserWatchlist
+    // knows about (agent-discovered symbols, candidates, post-buy syncs).
+    // Upsert instead of update so a missing row seeds a minimal entry
+    // rather than throwing P2025 into the logs.
+    await prisma.stock.upsert({
       where: { symbol: sym },
-      data: patch,
+      update: patch,
+      create: {
+        symbol: sym,
+        name: sym,
+        ...patch,
+      },
     });
 
     log.info('fundamentals.refreshed', {
