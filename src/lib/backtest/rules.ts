@@ -100,16 +100,18 @@ export function resolveRuleset(key: StrategyKey): BacktestRuleset {
         rebalanceCadenceDays: 90,
       };
     case 'burry_deep_research':
-      // Contrarian deep-value backtest approximation. P/E filter is
-      // explicitly omitted — Burry de-emphasises it. Low P/B + low D/E
-      // is as close as the backtester can get to "ick + balance-sheet
-      // strength" without the fundamentals-read the agent does live.
-      // ROE bar stays low because Burry buys turnarounds.
-      return {
-        maxPE: 999,
-        maxDE: 1.5,
-        minROE: 0,
-      };
+      // No Tier-2 pre-screen. This is the honest backtest approximation
+      // of Burry's actual style — he explicitly ignores P/E, treats D/E
+      // as a read-the-footnotes question rather than a ratio gate, and
+      // buys ROE-poor turnarounds when the balance sheet hides value.
+      // With no gate, the backtest becomes equal-weight buy-and-hold of
+      // the seeded "ick" universe (GEO, BMY, GILD, M, GPS, CVX) — a
+      // crude but faithful proxy for "Burry picks, held". The agent's
+      // live behaviour still uses the deeper rules in the starter-
+      // library strategy row (minFreeCashFlowYieldPct, maxEvEbitda,
+      // preferNetNetWorkingCapital) — those can't run in backtest
+      // without point-in-time FCF/EV data we don't cache.
+      return {};
   }
 }
 
