@@ -18,7 +18,7 @@
 
 import { prisma } from '@/lib/db';
 import { isInEarningsBlackout } from '@/lib/data/earnings';
-import { getPositions, getLatestPrice } from '@/lib/alpaca';
+import { getPositions, getLatestPrice, getBrokerAccount } from '@/lib/alpaca';
 import { isHarvestSeason, MIN_HARVEST_LOSS_USD, MIN_HARVEST_HELD_DAYS } from '@/lib/data/tax';
 import { log } from '@/lib/logger';
 
@@ -73,9 +73,18 @@ export async function evaluateExits(userId: string): Promise<ExitAssessment[]> {
   // reconciled the DB against the broker before this runs, so dbPositions is
   // aligned — we only need brokerPositions here for live market_value (used
   // by the portfolio-weight trim check, which Alpaca calculates for us).
-  const [strategy, brokerPositions, dbPositions, account] = await Promise.all([
+  const [strategy, brokerPositions, brokerAccount, dbPositions, account] = await Promise.all([
     prisma.strategy.findFirst({ where: { userId, isActive: true } }),
     getPositions().catch(() => [] as Array<{ symbol: string; qty: string; avg_entry_price: string }>),
+    // Live broker equity — needed for the maxPositionPct denominator.
+    // Summing position market_value only (the old path) produced a
+    // false "over-cap trim" signal for every position held by a
+    // mostly-cash account: $8k of VOO in a $100k account with $85k
+    // cash was reported as 53% of portfolio because the denominator
+    // collapsed to the $15k of positions. Now we use true total
+    // equity (cash + positions + whatever else), which matches what
+    // the user means by "no single stock over X% of portfolio".
+    getBrokerAccount().catch(() => null),
     prisma.position.findMany({ where: { userId } }),
     prisma.account.findUnique({ where: { userId } }),
   ]);
@@ -111,12 +120,19 @@ export async function evaluateExits(userId: string): Promise<ExitAssessment[]> {
     return [];
   }
 
-  // Fetch portfolio equity so we can compute per-position weight for the
-  // maxPositionPct trim check. Alpaca's position payload includes market
-  // value; we sum it to avoid a second API call.
+  // Denominator for the maxPositionPct trim check. MUST be total
+  // account equity (cash + positions + options + crypto) to match
+  // the user's mental model. If the broker call failed, fall back to
+  // summing position market_value — defensible when we have nothing
+  // better and matches the pre-fix behaviour rather than emitting a
+  // blind "no trim" on every position.
   type BrokerPosition = { symbol: string; qty: string; avg_entry_price: string; market_value?: string };
   const bp = brokerPositions as BrokerPosition[];
-  const totalValue = bp.reduce((sum, p) => sum + Number(p.market_value ?? 0), 0);
+  const positionsValue = bp.reduce((sum, p) => sum + Number(p.market_value ?? 0), 0);
+  const totalValue =
+    brokerAccount != null
+      ? Number(brokerAccount.portfolioValueCents) / 100
+      : positionsValue;
 
   const dbBySymbol = new Map(dbPositions.map((p) => [p.symbol, p]));
   const out: ExitAssessment[] = [];
