@@ -162,8 +162,11 @@ export function SettingsForm({ initial }: { initial: SettingsInitial }) {
       <h2 className="text-sm font-semibold">Trading rules & schedule</h2>
 
       <div>
-        <label>Expected annual return (%)</label>
+        <label htmlFor="settings-expected-annual-pct">
+          Expected annual return (%)
+        </label>
         <input
+          id="settings-expected-annual-pct"
           type="number"
           inputMode="decimal"
           value={form.expectedAnnualPct}
@@ -183,8 +186,9 @@ export function SettingsForm({ initial }: { initial: SettingsInitial }) {
       </div>
 
       <div>
-        <label>Risk tolerance</label>
+        <label htmlFor="settings-risk-tolerance">Risk tolerance</label>
         <select
+          id="settings-risk-tolerance"
           value={form.riskTolerance}
           onChange={(e) => update('riskTolerance', e.target.value as SettingsInitial['riskTolerance'])}
         >
@@ -196,8 +200,9 @@ export function SettingsForm({ initial }: { initial: SettingsInitial }) {
 
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <label>Max position %</label>
+          <label htmlFor="settings-max-position-pct">Max position %</label>
           <input
+            id="settings-max-position-pct"
             type="number"
             inputMode="decimal"
             value={form.maxPositionPct}
@@ -207,8 +212,11 @@ export function SettingsForm({ initial }: { initial: SettingsInitial }) {
           />
         </div>
         <div>
-          <label>Min cash reserve %</label>
+          <label htmlFor="settings-min-cash-reserve-pct">
+            Min cash reserve %
+          </label>
           <input
+            id="settings-min-cash-reserve-pct"
             type="number"
             inputMode="decimal"
             value={form.minCashReservePct}
@@ -221,8 +229,11 @@ export function SettingsForm({ initial }: { initial: SettingsInitial }) {
 
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <label>Max stock trades / day</label>
+          <label htmlFor="settings-max-daily-trades">
+            Max stock trades / day
+          </label>
           <input
+            id="settings-max-daily-trades"
             type="number"
             inputMode="numeric"
             value={form.maxDailyTrades}
@@ -235,8 +246,11 @@ export function SettingsForm({ initial }: { initial: SettingsInitial }) {
           </p>
         </div>
         <div>
-          <label>Max crypto trades / day</label>
+          <label htmlFor="settings-max-daily-crypto-trades">
+            Max crypto trades / day
+          </label>
           <input
+            id="settings-max-daily-crypto-trades"
             type="number"
             inputMode="numeric"
             value={form.maxDailyCryptoTrades}
@@ -249,8 +263,9 @@ export function SettingsForm({ initial }: { initial: SettingsInitial }) {
           </p>
         </div>
         <div>
-          <label>Agent cadence (min)</label>
+          <label htmlFor="settings-agent-cadence">Agent cadence (min)</label>
           <input
+            id="settings-agent-cadence"
             type="number"
             inputMode="numeric"
             value={form.agentCadenceMinutes}
@@ -263,16 +278,22 @@ export function SettingsForm({ initial }: { initial: SettingsInitial }) {
 
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <label>Trading hours start (ET)</label>
+          <label htmlFor="settings-trading-hours-start">
+            Trading hours start (ET)
+          </label>
           <input
+            id="settings-trading-hours-start"
             type="time"
             value={form.tradingHoursStart}
             onChange={(e) => update('tradingHoursStart', e.target.value)}
           />
         </div>
         <div>
-          <label>Trading hours end (ET)</label>
+          <label htmlFor="settings-trading-hours-end">
+            Trading hours end (ET)
+          </label>
           <input
+            id="settings-trading-hours-end"
             type="time"
             value={form.tradingHoursEnd}
             onChange={(e) => update('tradingHoursEnd', e.target.value)}
@@ -348,8 +369,11 @@ export function SettingsForm({ initial }: { initial: SettingsInitial }) {
       </div>
 
       <div>
-        <label>Crypto portfolio cap (% of total portfolio)</label>
+        <label htmlFor="settings-max-crypto-allocation-pct">
+          Crypto portfolio cap (% of total portfolio)
+        </label>
         <input
+          id="settings-max-crypto-allocation-pct"
           type="number"
           inputMode="decimal"
           value={form.maxCryptoAllocationPct}

@@ -94,8 +94,9 @@ export function WalletTransferForm({
       </div>
 
       <div>
-        <label>Amount (USD)</label>
+        <label htmlFor="wallet-transfer-amount">Amount (USD)</label>
         <input
+          id="wallet-transfer-amount"
           type="number"
           inputMode="decimal"
           value={amount}
