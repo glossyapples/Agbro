@@ -24,6 +24,11 @@
 import type { StrategyKey } from '@/lib/backtest/rules';
 import type { Role } from './schema';
 
+// Roles that always appear in a strategy's core cast. The 6th role
+// (michael_burrybot) is optional and only shows up as a guest — it
+// isn't part of any bundle's 5-slot structure.
+export type CoreRole = Exclude<Role, 'michael_burrybot'>;
+
 export type CharacterSheet = {
   role: Role;
   name: string;
@@ -38,7 +43,7 @@ export type CharacterSheet = {
 export type CastBundle = {
   strategyKey: StrategyKey | 'default';
   styleNote: string; // strategy-specific visual mood for the comic
-  characters: Record<Role, CharacterSheet>;
+  characters: Record<CoreRole, CharacterSheet>;
 };
 
 // Supporting roles — same across every strategy so the firm feels
@@ -183,6 +188,55 @@ const DIVIDEND_CAST: CastBundle = {
   },
 };
 
+// Burry's own firm. Scion-era: obsessive 10-K reader, contrarian,
+// concentrates in "ick" names, patient. Principal voice = Burrybot.
+// Partner-counterweight = Cassandra-bot, a forensic quant who pushes
+// back when Burrybot's macro-paranoia threat-detection gets ahead of
+// the numbers. Generic supporting roles underneath so the firm feels
+// like part of the same org as the other strategies.
+const BURRY_CAST: CastBundle = {
+  strategyKey: 'burry_deep_research' as StrategyKey,
+  styleNote:
+    'A cramped office buried in SEC filings. Highlighter-marked 10-Ks stacked floor-to-ceiling, drum kit in the corner, whiteboard covered in EV/EBITDA + FCF-yield scratch work. Low fluorescent light. Muted olive and dusty yellow palette with occasional highlighter-yellow pops.',
+  characters: {
+    warren_buffbot: {
+      role: 'warren_buffbot',
+      name: 'Burrybot',
+      personality:
+        "Obsessive deep-research contrarian. Quiet by default, then drops a single devastating number from deep in a 10-K nobody else read. Leads with cash flow, EV/EBITDA, balance-sheet hidden value — explicitly distrustful of P/E. Loves 'ick' names other investors reflexively dismiss. Concentrates hard in top convictions, waits years. Socially awkward, no small talk. Says 'I'm not sure about that' more than any other partner and then turns out to be right.",
+      visual:
+        "Editorial caricature in the Mad Magazine tradition — scruffy brown hair sticking up asymmetrically, one oversized glass eye exaggerated noticeably larger than the real eye (homage to his prosthetic, rendered purely as a visual signature — NOT photoreal), faded band T-shirt visible under a rumpled button-down, no tie, socks mismatched. Always clutching a thick SEC 10-K covered in bright yellow highlighter streaks and sticky notes. Drumsticks poking out of his back pocket. Name badge clipped crookedly reading 'BURRYBOT'. Hunched posture, slightly antisocial energy. CRACKED / Mad Magazine ink crosshatch, clearly a satirical -bot parody, NEVER photoreal.",
+    },
+    charlie_mungbot: {
+      role: 'charlie_mungbot',
+      name: 'Cassandra-bot',
+      personality:
+        "Forensic quant. Names every footnote she's read. Trusts numbers more than narratives, pushes back when Burrybot's macro-paranoia threat-detection is running ahead of the data. Sharp, dry, occasionally dismissive of vibes-based theses. Named after the Cassandra account Burry used on message boards.",
+      visual:
+        "Young-ish woman editorial caricature — dark curly hair pulled back severely, rectangular reading glasses enlarged to comic proportion, no-nonsense mouth set in a thin line, arms folded across a chest pocket packed with sharpened pencils. Holding a printout titled 'CASH-FLOW STATEMENT — Q3' with red-pen question marks scrawled across every line. Name badge 'Cassandra-bot'. Mad Magazine caricature ink, sharp angles, clearly satirical.",
+    },
+    analyst: GENERIC_ANALYST,
+    risk: GENERIC_RISK,
+    operations: GENERIC_OPS,
+  },
+};
+
+// Burrybot in guest-analyst mode — same visual as when he's the
+// principal, but the persona injected into the prompt is constrained:
+// speaks 1-3 times, cannot drive final calls, cannot propose policy
+// changes. Used when another firm's active strategy has
+// allowBurryGuest=true. Stored here separately so the cast registration
+// logic doesn't have to introspect the role to change the persona.
+export const BURRY_GUEST_SHEET: CharacterSheet & {
+  role: 'michael_burrybot';
+} = {
+  role: 'michael_burrybot' as const,
+  name: 'Burrybot',
+  personality:
+    "Guest analyst — the firm's new hire they let pour through the books because of his track record. Reads filings other partners skim. Speaks 1-3 times per meeting MAX. When he speaks: specific, narrow, data-driven, often contrarian to the table's consensus. NEVER drives the final call. NEVER proposes policy changes (no authority). CAN suggest a research action item flagging a name worth the firm's deep look. Deferential to the firm's principal even when dissenting — 'you've been doing this longer, but the Q3 filing says…'",
+  visual: BURRY_CAST.characters.warren_buffbot.visual,
+};
+
 const BOGLEHEAD_CAST: CastBundle = {
   strategyKey: 'boglehead_index',
   styleNote:
@@ -221,6 +275,7 @@ const CASTS_BY_STRATEGY: Record<StrategyKey, CastBundle> = {
   quality_compounders: QUALITY_CAST,
   dividend_growth: DIVIDEND_CAST,
   boglehead_index: BOGLEHEAD_CAST,
+  burry_deep_research: BURRY_CAST,
 };
 
 // Infer a strategy key from a free-form active-strategy name. User's
@@ -229,6 +284,10 @@ const CASTS_BY_STRATEGY: Record<StrategyKey, CastBundle> = {
 export function castForStrategyName(name: string | null | undefined): CastBundle {
   if (!name) return DEFAULT_CAST;
   const n = name.toLowerCase();
+  // Burry match comes BEFORE graham/deep-value because Burry's seeded
+  // name is "Burry Deep Research (Contrarian Value)" which also matches
+  // "deep value". Order matters.
+  if (n.includes('burry')) return BURRY_CAST;
   if (n.includes('graham') || n.includes('deep value')) return GRAHAM_CAST;
   if (n.includes('quality') || n.includes('compounder')) return QUALITY_CAST;
   if (n.includes('dividend')) return DIVIDEND_CAST;
@@ -244,9 +303,11 @@ export function castForStrategyKey(key: StrategyKey | null | undefined): CastBun
 
 // Dense description of the cast for the comic image prompt. Renders
 // verbatim into the prompt so every panel in every meeting under this
-// strategy gets consistent silhouettes.
-export function castSheet(bundle: CastBundle): string {
-  const roles: Role[] = [
+// strategy gets consistent silhouettes. When a guest is present
+// (currently only Burrybot), his sheet is appended so the image model
+// renders him alongside the fixed 5-role cast.
+export function castSheet(bundle: CastBundle, guest?: CharacterSheet): string {
+  const roles: CoreRole[] = [
     'warren_buffbot',
     'charlie_mungbot',
     'analyst',
@@ -257,6 +318,9 @@ export function castSheet(bundle: CastBundle): string {
     const c = bundle.characters[r];
     return `• ${c.name}: ${c.visual}`;
   });
+  if (guest) {
+    lines.push(`• ${guest.name} (GUEST ANALYST): ${guest.visual}`);
+  }
   return [
     'CAST (use these EXACT visual descriptions for every panel — consistency across panels AND across meetings is essential):',
     ...lines,
@@ -266,5 +330,6 @@ export function castSheet(bundle: CastBundle): string {
 }
 
 export function nameForRole(bundle: CastBundle, role: Role): string {
-  return bundle.characters[role]?.name ?? role;
+  if (role === 'michael_burrybot') return BURRY_GUEST_SHEET.name;
+  return bundle.characters[role as CoreRole]?.name ?? role;
 }

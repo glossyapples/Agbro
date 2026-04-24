@@ -21,7 +21,13 @@ export type Role =
   | 'charlie_mungbot'
   | 'analyst'
   | 'risk'
-  | 'operations';
+  | 'operations'
+  // Optional 6th role. Only appears when the active strategy has
+  // allowBurryGuest=true (guest mode) or when the firm is the Burry
+  // strategy (in which case he takes the warren_buffbot slot too, see
+  // cast.ts). Guest-mode Burrybot speaks rarely and cannot drive final
+  // decisions or propose policy changes.
+  | 'michael_burrybot';
 
 export type TranscriptTurn = {
   role: Role;

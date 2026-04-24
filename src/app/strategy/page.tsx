@@ -6,6 +6,7 @@ import { MeetingControls } from '@/components/MeetingControls';
 import { MeetingCard } from '@/components/MeetingCard';
 import { ActionItemsList } from '@/components/ActionItemsList';
 import { PolicyChangesList } from '@/components/PolicyChangesList';
+import { BurryGuestToggle } from '@/components/BurryGuestToggle';
 
 export const dynamic = 'force-dynamic';
 
@@ -109,6 +110,11 @@ async function StrategyTab({ userId }: { userId: string }) {
                 </form>
               )}
             </div>
+            <BurryGuestToggle
+              strategyId={s.id}
+              strategyName={s.name}
+              initial={s.allowBurryGuest}
+            />
           </li>
         ))}
       </ul>

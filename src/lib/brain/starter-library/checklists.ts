@@ -67,4 +67,20 @@ Tax / friction reminder: every sale crystallises a taxable event and a spread co
   6. Only after all of the above: consider whether to add, trim, hold, or exit. Default is HOLD when in doubt.`,
     tags: ['seed', 'checklist', 'earnings'],
   },
+  {
+    slug: 'burry-10k-walkthrough',
+    kind: 'checklist',
+    title: "Burrybot's 10-K Walkthrough",
+    body: `The full read before any position >5% of book. Budget 2-3 hours per name — this is the work.
+
+  1. READ THE LETTER TO SHAREHOLDERS first. Note tone, accountability, what management chose to discuss vs skip. A CEO who names mistakes by year is more trustworthy than one who only discusses wins.
+  2. INCOME STATEMENT — map 5 years side-by-side. Revenue growth quality: organic vs acquired vs price. Margins: expanding / flat / compressing (which line?). One-time items: are they really one-time, or recurring dressed up?
+  3. CASH FLOW STATEMENT is the truth serum. Compute free cash flow manually: operating CF − capex. Compare to net income. Ratio < 0.7 is a yellow flag; < 0.5 means earnings are mostly accrual.
+  4. BALANCE SHEET — net debt, current ratio, book value per share. Look for hidden assets: real estate at historical cost, equity stakes at cost, fully depreciated but still-earning PP&E.
+  5. FOOTNOTES — the whole point. Specifically: (a) revenue recognition policy, (b) segment disclosures, (c) off-balance-sheet commitments (leases, JVs), (d) related-party transactions, (e) pension/post-retirement obligations.
+  6. SHAREHOLDER BASE — insider ownership >5% is a green flag; recent insider selling is a red flag; institutional concentration tells you volatility profile.
+  7. RISK FACTORS — SEC-mandated CYA section, but the first 3 risks listed are usually the ones management actually worries about. Cross-reference with the letter's tone.
+  8. WRITE THE ONE-PAGE THESIS into brain via write_brain with category=memory, confidence=medium. Bull case. Bear case. Three facts that would change your mind. Then wait a week before acting — conviction that survives a week of sleep is worth more than Day-1 enthusiasm.`,
+    tags: ['seed', 'checklist', 'burry', 'research', '10-k'],
+  },
 ];

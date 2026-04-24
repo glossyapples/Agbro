@@ -14,7 +14,7 @@ import { log } from '@/lib/logger';
 import { MEETING_SYSTEM_PROMPT, type MeetingOutput } from './schema';
 import { getCurrentRegime } from '@/lib/data/regime';
 import { getUserCredential } from '@/lib/credentials';
-import { castForStrategyName, type CastBundle } from './cast';
+import { castForStrategyName, BURRY_GUEST_SHEET, type CastBundle } from './cast';
 import { estimateCostUsd } from '@/lib/pricing';
 
 const MEETING_MODEL = 'claude-opus-4-7';
@@ -39,13 +39,23 @@ export async function runMeeting(params: {
     // names + personalities get injected into the system prompt so
     // Claude addresses them correctly in transcript turns.
     const cast = castForStrategyName(briefing.activeStrategy?.name ?? null);
+    // Guest-mode Burrybot: when the active strategy opted him in via
+    // allowBurryGuest AND the strategy isn't already Burry's own firm
+    // (he's already the principal there). The flag is per-strategy so
+    // users can have him kibitzing at Buffett Core but silent at
+    // Quality Compounders.
+    const burryGuest =
+      briefing.activeStrategy?.allowBurryGuest === true &&
+      cast.strategyKey !== 'burry_deep_research'
+        ? BURRY_GUEST_SHEET
+        : null;
 
     const client = new Anthropic({ apiKey });
     const startedAt = Date.now();
     const resp = await client.messages.create({
       model: MEETING_MODEL,
       max_tokens: MEETING_MAX_TOKENS,
-      system: buildMeetingSystemPrompt(cast),
+      system: buildMeetingSystemPrompt(cast, burryGuest),
       messages: [
         {
           role: 'user',
@@ -61,7 +71,7 @@ export async function runMeeting(params: {
     // Attach the cast snapshot so the display + comic generator know
     // which characters were on stage, even if cast definitions
     // evolve in the future.
-    parsed.cast = castSnapshot(cast);
+    parsed.cast = castSnapshot(cast, burryGuest);
     const elapsedMs = Date.now() - startedAt;
 
     // Delegate to the shared pricing module so cache-read / cache-write
@@ -387,6 +397,7 @@ async function buildBriefing(userId: string, agendaOverride?: string) {
           id: activeStrategy.id,
           name: activeStrategy.name,
           summary: activeStrategy.summary.slice(0, 400),
+          allowBurryGuest: activeStrategy.allowBurryGuest,
         }
       : null,
     marketRegime: regime,
@@ -579,29 +590,51 @@ function summariseAgentRunCosts(
 // Build a strategy-aware system prompt by injecting the cast's names
 // + personalities into the base MEETING_SYSTEM_PROMPT. Claude then
 // writes the transcript with these specific characters in mind.
-function buildMeetingSystemPrompt(cast: CastBundle): string {
+function buildMeetingSystemPrompt(
+  cast: CastBundle,
+  guest: { role: 'michael_burrybot'; name: string; personality: string } | null
+): string {
   const roster = Object.values(cast.characters)
     .map((c) => `  • role "${c.role}" → ${c.name}: ${c.personality}`)
     .join('\n');
+  // Guest block — when Burrybot is on, add him as a 6th role with
+  // tightly-scoped guest constraints. He speaks, but he does NOT drive
+  // the meeting, he does NOT propose policy changes (no partner
+  // authority), and he is capped at ≤3 turns. If he's absent the block
+  // is empty.
+  const guestBlock = guest
+    ? `\n  • role "${guest.role}" → ${guest.name} (GUEST ANALYST): ${guest.personality}\n\nGUEST RULES (Burrybot):\n  • ≤3 transcript turns across the whole meeting. Every turn must cite a specific number, ticker, or filing detail.\n  • NOT the final decision-maker. The firm's principal decides; Burrybot's role is to inform and dissent productively.\n  • He does NOT propose policyChanges. He MAY suggest actionItems with kind='research' when he flags a name worth the firm's deep-read.\n  • Voice: deferential but direct ("you've been doing this longer, but the Q3 footnote says…"). Introverted, narrow, data-driven. Never schmoozes. Never cheerleads.`
+    : '';
   return `${MEETING_SYSTEM_PROMPT}
 
 The current meeting's cast is:
-${roster}
+${roster}${guestBlock}
 
 When writing transcript turns, use the \`role\` keys above in the role field, but refer to characters by their names inside dialogue (e.g. "I think Mung-bot raised a fair point…"). Stay in character for each role's personality; these are satirical -bot variants, not real people.`;
 }
 
 // Minimal snapshot of the cast to persist on the Meeting row so the
 // display + comic generator can reconstruct which characters were
-// active, even years later.
-function castSnapshot(cast: CastBundle): MeetingOutput['cast'] {
+// active, even years later. When a guest was present, his sheet is
+// folded in under the guest role key so the comic generator can reuse
+// the same visual when rendering.
+function castSnapshot(
+  cast: CastBundle,
+  guest?: { role: 'michael_burrybot'; name: string; personality: string; visual: string } | null
+): MeetingOutput['cast'] {
+  const characters = Object.fromEntries(
+    Object.entries(cast.characters).map(([role, c]) => [
+      role,
+      { name: c.name, personality: c.personality, visual: c.visual },
+    ])
+  ) as NonNullable<MeetingOutput['cast']>['characters'];
+  if (guest) {
+    (characters as Record<string, { name: string; personality: string; visual: string }>)[
+      guest.role
+    ] = { name: guest.name, personality: guest.personality, visual: guest.visual };
+  }
   return {
     strategyKey: String(cast.strategyKey),
-    characters: Object.fromEntries(
-      Object.entries(cast.characters).map(([role, c]) => [
-        role,
-        { name: c.name, personality: c.personality, visual: c.visual },
-      ])
-    ) as NonNullable<MeetingOutput['cast']>['characters'],
+    characters,
   };
 }

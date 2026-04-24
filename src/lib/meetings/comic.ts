@@ -15,7 +15,12 @@ import Anthropic from '@anthropic-ai/sdk';
 import { prisma } from '@/lib/db';
 import { log } from '@/lib/logger';
 import type { MeetingOutput } from './schema';
-import { castForStrategyKey, castSheet, type CastBundle } from './cast';
+import {
+  castForStrategyKey,
+  castSheet,
+  type CastBundle,
+  type CharacterSheet,
+} from './cast';
 
 const SCRIPT_MODEL = 'claude-opus-4-7';
 
@@ -39,18 +44,35 @@ export async function generateMeetingComic(params: {
   const output = meeting.transcriptJson as unknown as MeetingOutput;
   // Resolve the cast from the meeting's snapshot if present (new
   // meetings), else infer from the strategy key. Legacy meetings
-  // without either fall back to the default cast.
+  // without either fall back to the default cast. Guest characters
+  // (currently only michael_burrybot) are peeled out of the snapshot
+  // and passed separately so castSheet can render them alongside the
+  // fixed 5-role roster.
+  const snapshotChars = (output.cast?.characters ?? {}) as Record<
+    string,
+    { name: string; personality: string; visual: string }
+  >;
+  const guestRaw = snapshotChars.michael_burrybot;
+  const guest: CharacterSheet | null = guestRaw
+    ? {
+        role: 'michael_burrybot',
+        name: guestRaw.name,
+        personality: guestRaw.personality,
+        visual: guestRaw.visual,
+      }
+    : null;
   const cast = output.cast
     ? ({
         strategyKey: output.cast.strategyKey,
         styleNote: '',
         // Reconstruct from the snapshot — styleNote is regenerated
         // from the live cast definition below if we can infer the key.
+        // Guest role is excluded from the 5-role bundle and handled
+        // separately.
         characters: Object.fromEntries(
-          Object.entries(output.cast.characters).map(([role, c]) => [
-            role,
-            { role, ...c },
-          ])
+          Object.entries(snapshotChars)
+            .filter(([role]) => role !== 'michael_burrybot')
+            .map(([role, c]) => [role, { role, ...c }])
         ),
       } as unknown as CastBundle)
     : castForStrategyKey(null);
@@ -64,7 +86,7 @@ export async function generateMeetingComic(params: {
   // Step 1: Claude writes a comic script.
   let script: Awaited<ReturnType<typeof writeComicScript>>;
   try {
-    script = await writeComicScript({ anthropicKey, meeting: output, cast });
+    script = await writeComicScript({ anthropicKey, meeting: output, cast, guest });
   } catch (err) {
     const msg = (err as Error).message ?? String(err);
     log.error('comic.script_failed', err, { meetingId, userId });
@@ -136,7 +158,7 @@ export async function generateMeetingComic(params: {
 // cast is injected via buildScriptSystemPrompt() below so each
 // strategy gets its own principals.
 
-function buildScriptSystemPrompt(cast: CastBundle): string {
+function buildScriptSystemPrompt(cast: CastBundle, guest?: CharacterSheet | null): string {
   return `You are a comics writer turning executive meetings at an agentic investment firm into single-page, dialogue-driven editorial comic strips.
 
 STYLE — non-negotiable:
@@ -146,7 +168,7 @@ STYLE — non-negotiable:
 • NEVER photoreal. NEVER cartoony/Saturday-morning-kids style either. The register is "smart satirical weekly" — think a New Yorker long-form graphic feature, or a CRACKED editorial 2-page spread.
 • Every character is clearly a satirical \`-bot\` variant — their names are botified for this reason. Do not mistake them for real people; visuals are exaggerated editorial caricature, dialogue is fictional extrapolation of publicly known investment philosophy.
 
-${castSheet(cast)}
+${castSheet(cast, guest ?? undefined)}
 
 The comic must focus on the ONE turning-point scene the meeting has already identified (in \`comicFocus\`) — a beat with real emotional stakes where a decision flipped or a disagreement was settled. NOT a generic summary of the whole meeting. Real consequences should show up in the last panel (the action item, the decision, the policy change).
 
@@ -211,6 +233,7 @@ async function writeComicScript(params: {
   anthropicKey: string;
   meeting: MeetingOutput;
   cast: CastBundle;
+  guest?: CharacterSheet | null;
 }): Promise<{ title: string; style: string; mood: string; prompt: string; costUsd: number }> {
   const client = new Anthropic({ apiKey: params.anthropicKey });
   // Feed only the parts the comic writer needs. comicFocus is the star —
@@ -239,7 +262,7 @@ async function writeComicScript(params: {
   const resp = await client.messages.create({
     model: SCRIPT_MODEL,
     max_tokens: 4_000,
-    system: buildScriptSystemPrompt(params.cast),
+    system: buildScriptSystemPrompt(params.cast, params.guest),
     messages: [
       {
         role: 'user',

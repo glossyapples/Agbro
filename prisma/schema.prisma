@@ -217,6 +217,12 @@ model Strategy {
   summary      String   @db.Text
   rules        Json     // structured rules: sectors, pe_max, div_min, moat_required, etc.
   buffettScore Int      @default(0) // 0-100 internal "how Buffett-like"
+  // When true, executive meetings under this strategy include Burrybot
+  // as a guest analyst — he speaks 1-3 times, sharp contrarian takes
+  // rooted in filings nobody else read, but cannot drive final calls
+  // or propose policy changes. Toggled per-strategy so users can keep
+  // some firms quiet and let Burrybot kibitz at others.
+  allowBurryGuest Boolean @default(false)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
   turns        StrategyTurn[]

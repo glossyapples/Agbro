@@ -21,7 +21,12 @@ import type { BrainSeed, StrategySeed } from './types';
 //   1.0.0 — initial public brain (principles, checklists, pitfalls,
 //            sector primers, case studies, alternative strategies)
 //   1.1.0 — added 5 crisis playbooks (1987, 2000, 2008, 2020, 2022)
-export const STARTER_BRAIN_VERSION = '1.1.0';
+//   1.2.0 — Burrybot onboarded as the firm's deep-research voice:
+//            new strategy (Burry Deep Research), 4 Burry principles,
+//            1 Burry checklist (10-K walkthrough), 1 Burry case study
+//            (The Big Short). Users on older versions pick these up
+//            via the "↻ Sync" button on /brain.
+export const STARTER_BRAIN_VERSION = '1.2.0';
 
 export const STARTER_BRAIN: BrainSeed[] = [
   ...PRINCIPLES,

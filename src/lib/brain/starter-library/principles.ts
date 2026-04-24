@@ -114,4 +114,46 @@ Server-side caps still bound any single position. Concentration inside the cap; 
 Respect the min cash reserve as a floor, not a target. Above that floor, deploy only when MoS and moat justify it.`,
     tags: ['seed', 'principle', 'risk', 'sizing'],
   },
+  // ─── Burrybot's contributions ──────────────────────────────────────
+  // Seeded principles drawn from Michael Burry's Scion letters + public
+  // writing on "ick" investing. Tagged 'burry' so the agent can filter
+  // to his voice when the active strategy is Burry Deep Research OR
+  // when he's invited as a guest. Confidence=canonical because these
+  // are his published convictions, not hypotheses.
+  {
+    slug: 'burry-ick-is-an-invitation',
+    kind: 'principle',
+    title: "Ick Is an Invitation (Burrybot)",
+    body: `Burrybot's framing, almost verbatim: "Ick investing means taking a special analytical interest in stocks that inspire a first reaction of 'ick.'"
+The names that trigger reflexive dismissal — the private prison, the regional bank mid-scandal, the retailer everyone buried, the pharma with a Phase III failure — are the richest hunting ground precisely because the selling is indiscriminate and price detaches from asset value.
+Ick is not a buy signal on its own. It's a flag to READ. Pick up the 10-K. Read the footnotes. Do the cash-flow math. If the numbers disagree with the vibe, that's where the alpha lives.`,
+    tags: ['seed', 'principle', 'burry', 'contrarian'],
+  },
+  {
+    slug: 'burry-read-the-footnotes',
+    kind: 'principle',
+    title: 'Read the Footnotes Nobody Reads (Burrybot)',
+    body: `The press release is marketing. The income statement is curated. The footnotes are where the real story hides — lease obligations, off-balance-sheet entities, one-time charges that recur, segment disclosures that don't tie to the headline.
+Process: before valuing a name, read the last 10-K + three most recent 10-Qs cover-to-cover. Annotate the footnotes specifically. If you can't name the three biggest accounting choices management made, you don't understand the business yet.
+This is the one habit that separates deep-value research from pattern-matching headlines.`,
+    tags: ['seed', 'principle', 'burry', 'research'],
+  },
+  {
+    slug: 'burry-concentration-follows-conviction',
+    kind: 'principle',
+    title: 'Concentration Follows Conviction (Burrybot)',
+    body: `Scion's book historically ran concentrated — top-3 names routinely 10-15% each. Conviction earned through weeks of reading deserves position size commensurate with the work done.
+But the direction runs one way: conviction EARNS concentration. Concentration does NOT create conviction. If you're sized up on something you can't defend in one page, you're gambling, not investing.
+In practice: for any position >10% of book, write a one-page thesis into the brain with the three facts that would change your mind. Re-read it monthly.`,
+    tags: ['seed', 'principle', 'burry', 'sizing'],
+  },
+  {
+    slug: 'burry-cash-flow-over-earnings',
+    kind: 'principle',
+    title: 'Cash Flow Over Earnings (Burrybot)',
+    body: `P/E is the lazy metric. Earnings include non-cash charges, one-time benefits, stock-based comp the headline ignores, and timing choices that let management smooth the curve.
+Lead with free cash flow. FCF yield (FCF ÷ enterprise value), EV/EBITDA, and the cash-conversion ratio (FCF ÷ net income) tell you whether the business actually generates owner earnings or just GAAP earnings. Two businesses at the same P/E can differ by 3x on cash quality.
+When P/E looks attractive but cash-conversion is weak, the "cheapness" is mostly accrual accounting.`,
+    tags: ['seed', 'principle', 'burry', 'valuation'],
+  },
 ];

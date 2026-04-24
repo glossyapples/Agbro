@@ -212,4 +212,100 @@ export const ALTERNATIVE_STRATEGIES: StrategySeed[] = [
       optionStrategies: [],
     },
   },
+  {
+    // Burry-style deep-research contrarian value. Anchored in his actual
+    // Scion letters + interviews: de-emphasise P/E, obsess over cash
+    // flow + EV/EBITDA + liquidation value, hunt "ick factor" names
+    // others reflexively dismiss, concentrate in top convictions, and
+    // wait. Scion delivered 489% net Nov 2000 → Jun 2008 (S&P ~2%) on
+    // this approach. Retail long-only adaptation: we keep the deep-
+    // research + contrarian + concentration DNA but skip the short /
+    // CDS toolkit. That's what the "guest analyst" mode is for at
+    // other firms — he flags the weird stuff, doesn't drive the book.
+    slug: 'burry-deep-research',
+    name: 'Burry Deep Research (Contrarian Value)',
+    buffettScore: 70,
+    summary:
+      "Obsessive 10-K / 10-Q reader. Hunts 'ick' names — stocks whose name or " +
+      'circumstance triggers immediate dismissal but whose numbers tell a ' +
+      "different story. De-emphasises P/E; leads with cash flow, EV/EBITDA, " +
+      'balance-sheet strength, hidden asset value. Concentrated in highest- ' +
+      'conviction ideas. Low turnover on winners, fast exit on broken theses. ' +
+      'Wakes rarely — this is a reading strategy, not a trading one.',
+    rules: {
+      description:
+        "Contrarian deep value. Read the footnotes. Concentrate where conviction is highest. Don't pay for P/E — pay for cash flow.",
+      // MoS deeper than Graham. Burry wants to be paid to wait through
+      // the ick. 40% is approximately his Scion-era target.
+      minMarginOfSafetyPct: 40,
+      // P/E is explicitly DE-EMPHASISED. He calls out P/E as a misleading
+      // metric when earnings quality is poor. We set it high so it's not
+      // a hard gate; the analyzer's cash-flow yield + EV/EBITDA do the
+      // filtering.
+      maxPERatio: 999,
+      maxPBRatio: 2,
+      // Net-net working capital is a Burry preference — not required,
+      // but if it shows up it's a strong buy signal. Rules engine
+      // doesn't enforce this; the wizard + agent both read the note.
+      preferNetNetWorkingCapital: true,
+      // Cash flow yield (FCF / EV) is the primary filter. 8% is a
+      // generous threshold — anything above is interesting, the depth
+      // of the read decides if it's actionable.
+      minFreeCashFlowYieldPct: 8,
+      maxEvEbitda: 8,
+      // Debt tolerance: higher than Graham if the debt is backed by
+      // durable assets. Agent must READ the footnotes, not just the
+      // ratio.
+      maxDebtToEquity: 2,
+      minMoatSignal: 'none',
+      minROEPct: 0,
+      preferredSectors: [],
+      // Burry famously buys what others avoid — prisons (GEO), coal,
+      // defence, tobacco have all shown up in his books. Zero sector
+      // bans at the rule level; the individual thesis carries the
+      // ethical judgement.
+      avoidedSectors: [],
+      preferDividend: false,
+      minDividendYield: 0,
+      // Higher concentration than any other preset — Scion routinely
+      // runs top-3 weights of 10-15% each. Still capped; a single name
+      // going against you shouldn't end the strategy.
+      maxPosition: 20,
+      minCashReserve: 15,
+      // Low cadence — Burry is slow. 2 trades/day is a ceiling we
+      // expect to rarely approach. Most weeks he makes zero trades.
+      maxDailyTrades: 2,
+      allowDayTrades: false,
+      targetAnnualReturnPct: 25,
+      // Position lifetime is thesis-dependent. A net-net might revert
+      // in 6 months; a macro-paranoid short-adjacent long could sit
+      // for 3 years. Hold signals drive the review cadence.
+      holdingPeriodBias: 'long',
+      thesisReviewDays: 180,
+      // Burry exits fast when the thesis breaks. Fundamentals
+      // degradation → out. Moat doesn't really apply. Target price
+      // exit is on intrinsic-value convergence, not a fixed percent.
+      targetSellPct: null,
+      timeStopDays: 1095, // 3-year soft ceiling on unrealised theses
+      moatBreakExit: false,
+      fundamentalsDegradationExit: true,
+      dividendSafetyExit: false,
+      rebalanceOnly: false,
+      // Options: CSPs on ick names you'd happily own at a lower strike
+      // are on-brand. Covered calls don't fit — Burry's winners run
+      // hard and capping the upside would defeat the concentration
+      // thesis. Real Burry uses puts (long) heavily; we exclude that
+      // from retail long-only in this seed, but the strategy
+      // description flags it as a natural fit for more advanced users.
+      optionsAllowed: true,
+      optionStrategies: ['cash_secured_put'],
+      maxOptionsBookPct: 15,
+      minDTE: 45,
+      maxDTE: 90,
+      maxDeltaAbs: 0.25,
+      // Research budget — this strategy justifies longer agent cadence
+      // because the work is in reading, not reacting.
+      preferredAgentCadenceMinutes: 240,
+    },
+  },
 ];

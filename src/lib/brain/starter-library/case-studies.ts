@@ -84,4 +84,27 @@ Lesson: Some sectors have structural economics that make durable competitive adv
 Applied today: Default to AVOID airlines, most unhedged commodity producers, and high-capex cyclicals. If we ever decide to participate, demand extreme margin-of-safety and size SMALL. Even Buffett learned this one twice.`,
     tags: ['seed', 'case_study', 'buffett', 'airlines', 'sector-avoid'],
   },
+  {
+    slug: 'burry-big-short-2005-2007',
+    kind: 'case_study',
+    title: 'Case Study: The Big Short (Burry, 2005-2007)',
+    body: `Situation: In 2003-04, Burry — running Scion Capital (~$600M AUM) and already a successful deep-value investor — started reading subprime mortgage-backed securities prospectuses line by line. The prospectuses disclosed the underlying loans: low-FICO borrowers, teaser rates resetting in 2-3 years, negative-amortisation, stated-income ("liar loans"). He also dug into home-price-to-income ratios and found them 2-3x historical norms.
+
+Thesis: When the teaser rates reset in 2007-08, a large fraction of these loans would default. Because MBS tranches were rated largely on recent low-default history rather than forward credit assessment, even senior tranches would be impaired.
+
+Action: From May 2005, Burry paid Goldman, Deutsche, and others to create credit default swaps specifically on the riskiest subprime tranches. He bought protection worth billions of notional at ~1-2% annual premiums, assuming underlying tranches valued at par.
+
+Pain period: Through 2005 and most of 2006, home prices kept rising. Scion paid premiums every quarter and the tranches held value. Burry's own investors rebelled — multiple tried to withdraw, some sued. He restricted redemptions. The fund was down materially on mark-to-market losses with no apparent catalyst.
+
+Payoff: From mid-2007, subprime default rates accelerated. CDS values exploded. Scion returned ~+489% net from Nov 2000 - Jun 2008 vs S&P ~+2%. Burry personally made ~$100M, investors ~$700M.
+
+Lessons:
+  1. Public data is undervalued when it's tedious. The MBS prospectuses were freely available. Nobody read them.
+  2. Time is the tax on being early. A correct thesis with a 2-year lag feels identical to a wrong thesis for those 2 years. Capital structure (long lockups) matters.
+  3. The market's consensus view is usually a narrative, not a calculation. When you can math your way to a different answer, size accordingly and wait.
+  4. Contrarian positioning creates social cost BEFORE financial payoff. Design your firm (or your mental model) to absorb the social cost.
+
+Applied today: When you see an asset class where everyone cites the same "strong historical base rate" (e.g. "low-vol equities always recover") without disclosing the forward cash-flow math, it's a candidate for a Burry-style read. The work isn't finding the answer — it's caring enough to do the math that nobody else will.`,
+    tags: ['seed', 'case_study', 'burry', 'contrarian', 'macro', 'subprime'],
+  },
 ];

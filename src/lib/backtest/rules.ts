@@ -9,7 +9,8 @@ export type StrategyKey =
   | 'deep_value_graham'
   | 'quality_compounders'
   | 'dividend_growth'
-  | 'boglehead_index';
+  | 'boglehead_index'
+  | 'burry_deep_research';
 
 export type BacktestRuleset = {
   // Day-zero + rebalance targets. For value strategies that receive an
@@ -98,6 +99,17 @@ export function resolveRuleset(key: StrategyKey): BacktestRuleset {
         rebalanceBandPct: 5,
         rebalanceCadenceDays: 90,
       };
+    case 'burry_deep_research':
+      // Contrarian deep-value backtest approximation. P/E filter is
+      // explicitly omitted — Burry de-emphasises it. Low P/B + low D/E
+      // is as close as the backtester can get to "ick + balance-sheet
+      // strength" without the fundamentals-read the agent does live.
+      // ROE bar stays low because Burry buys turnarounds.
+      return {
+        maxPE: 999,
+        maxDE: 1.5,
+        minROE: 0,
+      };
   }
 }
 
@@ -107,6 +119,7 @@ export const STRATEGY_KEYS: StrategyKey[] = [
   'quality_compounders',
   'dividend_growth',
   'boglehead_index',
+  'burry_deep_research',
 ];
 
 export const STRATEGY_LABELS: Record<StrategyKey, string> = {
@@ -115,6 +128,7 @@ export const STRATEGY_LABELS: Record<StrategyKey, string> = {
   quality_compounders: 'Quality Compounders',
   dividend_growth: 'Dividend Growth',
   boglehead_index: 'Boglehead Index',
+  burry_deep_research: 'Burry Deep Research',
 };
 
 // Default universes per strategy. Users can override when starting a
@@ -129,4 +143,9 @@ export const DEFAULT_UNIVERSES: Record<StrategyKey, string[]> = {
   quality_compounders: ['AAPL', 'MSFT', 'V', 'MA', 'GOOGL', 'COST'],
   dividend_growth: ['JNJ', 'PG', 'KO', 'PEP', 'MCD', 'ADP'],
   boglehead_index: ['VTI', 'VXUS', 'BND'],
+  // Burry's actual book over the years has included defence (GEO),
+  // energy (XOM, CVX), pharma on "ick" momentum (BMY, GILD), and
+  // retail he thought was misunderstood (M, GPS). Deliberate mix of
+  // unloved names with long histories.
+  burry_deep_research: ['GEO', 'BMY', 'GILD', 'M', 'GPS', 'CVX'],
 };
