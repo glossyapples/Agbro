@@ -105,6 +105,21 @@ export function CryptoPerformanceChart({ initial }: { initial: Payload }) {
                 {summary.rangePnl >= 0 ? '+' : ''}
                 {summary.rangePnl.toFixed(2)} ({summary.rangePnlPct >= 0 ? '+' : ''}
                 {summary.rangePnlPct.toFixed(2)}%)
+                <span className="ml-1 text-[11px] font-normal text-ink-400">
+                  {range === '1D'
+                    ? 'today'
+                    : range === '1W'
+                      ? 'this week'
+                      : range === '1M'
+                        ? 'this month'
+                        : range === '3M'
+                          ? 'past 3 months'
+                          : range === 'YTD'
+                            ? 'YTD'
+                            : range === '1Y'
+                              ? 'past year'
+                              : 'all time'}
+                </span>
               </p>
               {vsBtcPct != null && (
                 <p className="mt-0.5 text-xs text-ink-400">

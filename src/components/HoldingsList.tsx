@@ -46,8 +46,8 @@ const MODE_LABEL: Record<Mode, string> = {
   change_today_pct: 'Today %',
   equity: 'Your equity',
   today_return: "Today's return",
-  total_return: 'Total return',
-  total_pct: 'Total %',
+  total_return: 'Unrealized P/L ($)',
+  total_pct: 'Unrealized P/L (%)',
 };
 
 function centsToUsd(str: string): string {

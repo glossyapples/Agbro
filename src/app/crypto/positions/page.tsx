@@ -53,7 +53,7 @@ export default async function CryptoPositionsPage() {
             </p>
           </div>
           <div className="text-right">
-            <p className="stat-label">Total return</p>
+            <p className="stat-label">Unrealized P/L</p>
             <p
               className={`mt-0.5 text-sm font-semibold tabular-nums ${
                 totalPl >= 0n ? 'text-emerald-400' : 'text-rose-400'
@@ -63,6 +63,7 @@ export default async function CryptoPositionsPage() {
               {formatUsd(totalPl)} ({totalPlPct >= 0 ? '+' : ''}
               {totalPlPct.toFixed(2)}%)
             </p>
+            <p className="text-[10px] text-ink-400">since cost basis</p>
           </div>
         </div>
       </section>

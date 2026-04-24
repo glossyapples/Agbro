@@ -63,6 +63,18 @@ export function PerformanceChart({ initial }: { initial: Payload }) {
   const up = (data.summary?.rangePnl ?? 0) >= 0;
   const colorClass = up ? 'text-brand-400' : 'text-red-400';
   const lineColor = up ? 'var(--chart-up, #44e39c)' : 'var(--chart-down, #f87171)';
+  // Range-specific suffix so "▼ $22 (-0.02%)" isn't read as total
+  // return. This P/L is a window delta, not an all-time number —
+  // the Holdings page shows unrealized-since-cost for that view.
+  const rangeLabel: Record<Range, string> = {
+    '1D': 'today',
+    '1W': 'this week',
+    '1M': 'this month',
+    '3M': 'past 3 months',
+    'YTD': 'YTD',
+    '1Y': 'past year',
+    'ALL': 'all time',
+  };
 
   return (
     <section className="card">
@@ -85,6 +97,9 @@ export function PerformanceChart({ initial }: { initial: Payload }) {
           <>
             {up ? '▲' : '▼'} {formatUsd(BigInt(Math.round(Math.abs(data.summary.rangePnl) * 100)))}{' '}
             ({up ? '+' : ''}{data.summary.rangePnlPct.toFixed(2)}%)
+            <span className="ml-1 text-[11px] font-normal text-ink-400">
+              {rangeLabel[range]}
+            </span>
             {data.summary.spyPnlPct != null && (
               <span className="ml-2 text-[11px] font-normal text-ink-400">
                 vs SPY {data.summary.spyPnlPct >= 0 ? '+' : ''}
