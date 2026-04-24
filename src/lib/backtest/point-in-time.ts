@@ -33,7 +33,9 @@ const memoryCache = new Map<string, PointInTimeFundamentals | null>();
 // a runId) through every lookup / reset and the cache becomes
 // per-run-safe without any thread-pool heroics. Missing scope falls
 // back to 'default' so non-grid callers keep their old behaviour.
-function cacheKey(
+// Exported for property tests (Phase 2). Pure function; no callers
+// outside this module and the test file colocated with it.
+export function cacheKey(
   scope: string,
   symbol: string,
   asOfYmd: string,

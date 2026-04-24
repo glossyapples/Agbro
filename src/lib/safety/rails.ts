@@ -57,78 +57,133 @@ export async function checkKillSwitches(userId: string): Promise<RailVerdict> {
     };
   }
 
-  // Track whether the Alpaca-sourced checks were actually evaluated.
-  // If a rail is enabled but its fetch fails, we return
-  // triggeredBy:'data_unavailable' so the scheduler SKIPS this tick
-  // rather than flying blind — used to fail open, which meant during
-  // an Alpaca outage (which correlates with market stress) the agent
-  // kept trading uncapped. Retry on the next tick.
-  const rails: string[] = [];
-  let dataUnavailable = false;
+  // Fetch both portfolio-history windows in parallel; each fetch is
+  // wrapped so a failure records dataUnavailable instead of throwing.
+  // The actual decision logic is split out into classifyRailVerdict
+  // (pure function, property-tested) so the DB + Alpaca I/O here can
+  // stay thin.
+  const dailyEnabled = !!account.dailyLossKillPct && account.dailyLossKillPct < 0;
+  const drawdownEnabled =
+    !!account.drawdownPauseThresholdPct && account.drawdownPauseThresholdPct < 0;
 
-  // Daily P&L check. Uses Alpaca portfolio-history 1D range — same
-  // data source as the home-page chart, so "what the user sees" and
-  // "what triggers the kill" stay aligned.
-  if (account.dailyLossKillPct && account.dailyLossKillPct < 0) {
-    rails.push('daily_loss');
+  let dayBars: { equity: number }[] | undefined;
+  let monthBars: { equity: number }[] | undefined;
+  let dailyFetchFailed = false;
+  let drawdownFetchFailed = false;
+
+  if (dailyEnabled) {
     try {
-      const dayBars = await getPortfolioHistory('1D');
-      if (dayBars.length >= 2) {
-        const open = dayBars[0].equity;
-        const now = dayBars[dayBars.length - 1].equity;
-        if (open > 0) {
-          const pct = ((now - open) / open) * 100;
-          if (pct <= account.dailyLossKillPct) {
-            const reason = `Daily loss ${pct.toFixed(2)}% reached kill threshold (${account.dailyLossKillPct}%)`;
-            log.warn('safety.daily_loss_kill', { userId, pct, threshold: account.dailyLossKillPct });
-            return { ok: false, reason, triggeredBy: 'daily_loss' };
-          }
-        }
-      }
+      dayBars = await getPortfolioHistory('1D');
     } catch (err) {
-      dataUnavailable = true;
+      dailyFetchFailed = true;
       log.warn('safety.daily_loss_fetch_failed', { userId, err: (err as Error).message });
     }
   }
-
-  // Drawdown from 30-day high. Also Alpaca-sourced so the trigger
-  // matches what the user would compute by eyeballing the chart.
-  if (account.drawdownPauseThresholdPct && account.drawdownPauseThresholdPct < 0) {
-    rails.push('drawdown');
+  if (drawdownEnabled) {
     try {
-      const monthBars = await getPortfolioHistory('1M');
-      if (monthBars.length >= 2) {
-        let peak = 0;
-        for (const p of monthBars) if (p.equity > peak) peak = p.equity;
-        const now = monthBars[monthBars.length - 1].equity;
-        if (peak > 0) {
-          const pct = ((now - peak) / peak) * 100;
-          if (pct <= account.drawdownPauseThresholdPct) {
-            const reason = `30-day drawdown ${pct.toFixed(2)}% passed threshold (${account.drawdownPauseThresholdPct}%)`;
-            log.warn('safety.drawdown_kill', {
-              userId,
-              pct,
-              threshold: account.drawdownPauseThresholdPct,
-            });
-            return { ok: false, reason, triggeredBy: 'drawdown' };
-          }
-        }
-      }
+      monthBars = await getPortfolioHistory('1M');
     } catch (err) {
-      dataUnavailable = true;
+      drawdownFetchFailed = true;
       log.warn('safety.drawdown_fetch_failed', { userId, err: (err as Error).message });
     }
   }
 
-  // At least one enabled rail couldn't run because Alpaca threw — fail
-  // CLOSED for this tick. The scheduler treats this as a skip (not a
-  // persisted trip), so the next tick retries. If Alpaca is down for
-  // hours, the agent stays quiet for hours — that's the correct
-  // behaviour during a data-feed outage.
-  if (dataUnavailable && rails.length > 0) {
+  const verdict = classifyRailVerdict({
+    dailyLossKillPct: account.dailyLossKillPct,
+    drawdownPauseThresholdPct: account.drawdownPauseThresholdPct,
+    dayBars,
+    monthBars,
+    dailyFetchFailed,
+    drawdownFetchFailed,
+  });
+  // Log trip-level events (not data-unavailable, which is a transient
+  // skip, not a trip).
+  if (!verdict.ok && verdict.triggeredBy === 'daily_loss') {
+    log.warn('safety.daily_loss_kill', { userId, reason: verdict.reason });
+  } else if (!verdict.ok && verdict.triggeredBy === 'drawdown') {
+    log.warn('safety.drawdown_kill', { userId, reason: verdict.reason });
+  }
+  return verdict;
+}
+
+// Pure decision logic for the kill-switch. Split from the I/O in
+// checkKillSwitches so property tests can enumerate every state
+// transition without mocking Prisma + Alpaca.
+//
+// Ordering rule (matters for the `first trigger wins` invariant):
+//   1. daily_loss fires first (intraday is the faster signal)
+//   2. drawdown second
+//   3. data_unavailable returned last if at least one enabled rail
+//      couldn't evaluate — fails CLOSED (skip the tick) rather than
+//      OPEN (continue trading blind).
+export function classifyRailVerdict(input: {
+  dailyLossKillPct: number | null | undefined;
+  drawdownPauseThresholdPct: number | null | undefined;
+  dayBars?: { equity: number }[];
+  monthBars?: { equity: number }[];
+  dailyFetchFailed?: boolean;
+  drawdownFetchFailed?: boolean;
+}): RailVerdict {
+  const dailyEnabled =
+    typeof input.dailyLossKillPct === 'number' && input.dailyLossKillPct < 0;
+  const drawdownEnabled =
+    typeof input.drawdownPauseThresholdPct === 'number' &&
+    input.drawdownPauseThresholdPct < 0;
+  const enabledRails: string[] = [];
+  if (dailyEnabled) enabledRails.push('daily_loss');
+  if (drawdownEnabled) enabledRails.push('drawdown');
+
+  // Daily loss check.
+  if (
+    dailyEnabled &&
+    input.dayBars &&
+    input.dayBars.length >= 2
+  ) {
+    const open = input.dayBars[0].equity;
+    const now = input.dayBars[input.dayBars.length - 1].equity;
+    if (open > 0) {
+      const pct = ((now - open) / open) * 100;
+      const threshold = input.dailyLossKillPct as number;
+      if (pct <= threshold) {
+        return {
+          ok: false,
+          reason: `Daily loss ${pct.toFixed(2)}% reached kill threshold (${threshold}%)`,
+          triggeredBy: 'daily_loss',
+        };
+      }
+    }
+  }
+
+  // Drawdown check.
+  if (
+    drawdownEnabled &&
+    input.monthBars &&
+    input.monthBars.length >= 2
+  ) {
+    let peak = 0;
+    for (const p of input.monthBars) if (p.equity > peak) peak = p.equity;
+    const now = input.monthBars[input.monthBars.length - 1].equity;
+    if (peak > 0) {
+      const pct = ((now - peak) / peak) * 100;
+      const threshold = input.drawdownPauseThresholdPct as number;
+      if (pct <= threshold) {
+        return {
+          ok: false,
+          reason: `30-day drawdown ${pct.toFixed(2)}% passed threshold (${threshold}%)`,
+          triggeredBy: 'drawdown',
+        };
+      }
+    }
+  }
+
+  // At least one enabled rail couldn't run → fail CLOSED for this tick.
+  const anyFailed =
+    (dailyEnabled && input.dailyFetchFailed) ||
+    (drawdownEnabled && input.drawdownFetchFailed);
+  if (anyFailed && enabledRails.length > 0) {
     return {
       ok: false,
-      reason: `Safety-check data unavailable (Alpaca fetch failed for ${rails.join(
+      reason: `Safety-check data unavailable (Alpaca fetch failed for ${enabledRails.join(
         ' + '
       )}). Skipping this tick to avoid trading blind.`,
       triggeredBy: 'data_unavailable',

@@ -55,7 +55,7 @@ const TAGS = {
   bookValue: ['StockholdersEquity'],
 };
 
-type Fact = {
+export type Fact = {
   end: string; // period end YYYY-MM-DD
   start?: string; // period start YYYY-MM-DD (present for flow/duration facts)
   val: number;
@@ -130,7 +130,9 @@ function groupByFiled(facts: Fact[]): Map<string, Fact> {
 // Duration classifiers. We can't trust `fp` alone: some filers report
 // YTD values (6-month, 9-month) tagged Q2/Q3 that would double-count if
 // summed. The authoritative signal is `start`..`end` duration.
-function durationDays(f: Fact): number | null {
+// Exported for property tests (Phase 2). Pure function; no callers
+// outside this module and the test file colocated with it.
+export function durationDays(f: Fact): number | null {
   if (!f.start) return null;
   const s = new Date(f.start + 'T00:00:00Z').getTime();
   const e = new Date(f.end + 'T00:00:00Z').getTime();
@@ -138,12 +140,12 @@ function durationDays(f: Fact): number | null {
   return Math.round((e - s) / 86_400_000);
 }
 
-function isQuarterDuration(f: Fact): boolean {
+export function isQuarterDuration(f: Fact): boolean {
   const d = durationDays(f);
   return d != null && d >= 80 && d <= 100;
 }
 
-function isAnnualDuration(f: Fact): boolean {
+export function isAnnualDuration(f: Fact): boolean {
   const d = durationDays(f);
   return d != null && d >= 350 && d <= 380;
 }
@@ -452,7 +454,7 @@ function buildRows(factsJson: FactsJson): RowAtFiled[] {
 // The `fp` field is unreliable for distinguishing 3-month from YTD
 // values (some filers tag YTD as Q2/Q3); duration-on-start/end is the
 // authoritative signal.
-function rollingTTM(facts: Fact[]): Map<string, number> {
+export function rollingTTM(facts: Fact[]): Map<string, number> {
   const quarters = dedupeByEnd(facts.filter(isQuarterDuration));
   // Sort annuals by filing date so the forward-fill pass below finds
   // the most recent annual ≤ a given quarterly filing in O(log n) via
