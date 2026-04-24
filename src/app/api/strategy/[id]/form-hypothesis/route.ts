@@ -35,13 +35,14 @@ export async function POST(
       select: {
         id: true,
         name: true,
+        presetKey: true,
         allowBurryGuest: true,
       },
     });
     if (!strategy) {
       return NextResponse.json({ error: 'not found' }, { status: 404 });
     }
-    const isBurryFirm = strategy.name.toLowerCase().includes('burry');
+    const isBurryFirm = strategy.presetKey === 'burry_deep_research';
     if (!isBurryFirm && !strategy.allowBurryGuest) {
       return NextResponse.json(
         {

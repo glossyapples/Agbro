@@ -123,13 +123,20 @@ export async function seedBrainForUser(userId: string): Promise<SeedBrainResult>
     const id = strategyRowId(userId, strat.slug);
     const existing = await prisma.strategy.findUnique({
       where: { id },
-      select: { name: true, summary: true, rules: true, buffettScore: true },
+      select: {
+        name: true,
+        summary: true,
+        rules: true,
+        buffettScore: true,
+        presetKey: true,
+      },
     });
     await prisma.strategy.upsert({
       where: { id },
       create: {
         id,
         userId,
+        presetKey: strat.presetKey,
         name: strat.name,
         summary: strat.summary,
         rules: strat.rules as Prisma.InputJsonValue,
@@ -138,6 +145,11 @@ export async function seedBrainForUser(userId: string): Promise<SeedBrainResult>
         version: 1,
       },
       update: {
+        // presetKey is stamped on every sync so pre-existing rows from
+        // before the column existed pick it up — critical for cast
+        // inference + Burry-firm detection to stop string-matching the
+        // user-renameable `name` column.
+        presetKey: strat.presetKey,
         name: strat.name,
         summary: strat.summary,
         rules: strat.rules as Prisma.InputJsonValue,

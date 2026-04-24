@@ -212,6 +212,15 @@ model Strategy {
   userId       String
   user         User     @relation(fields: [userId], references: [id])
   name         String
+  // Stable identifier for seeded preset strategies — 'buffett_core',
+  // 'deep_value_graham', 'quality_compounders', 'dividend_growth',
+  // 'boglehead_index', 'burry_deep_research'. Null for user-created
+  // wizard strategies. Used everywhere the code needs to key off
+  // which PRESET a strategy is (cast inference, backtest ruleset,
+  // Burry firm detection) so renames don't break identification.
+  // Previously we substring-matched on `name` in 5+ places, which
+  // broke on user renames and locale differences.
+  presetKey    String?
   isActive     Boolean  @default(false)
   version      Int      @default(1)
   summary      String   @db.Text
@@ -226,6 +235,8 @@ model Strategy {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
   turns        StrategyTurn[]
+
+  @@index([userId, presetKey])
 }
 
 // Conversational history for collaborative strategy wizard.

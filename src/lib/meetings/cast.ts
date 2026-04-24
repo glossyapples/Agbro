@@ -280,7 +280,24 @@ const CASTS_BY_STRATEGY: Record<StrategyKey, CastBundle> = {
 
 // Infer a strategy key from a free-form active-strategy name. User's
 // Strategy.name comes from the wizard and isn't guaranteed to be one
-// of our preset keys, so we do a substring match.
+// Prefer the stable presetKey when available — falls back to name
+// substring matching only for user-wizard strategies that don't carry
+// a preset. This kills a whole class of fragility (user renames,
+// locale, unicode) at the source.
+export function castForStrategy(opts: {
+  presetKey?: string | null;
+  name?: string | null;
+}): CastBundle {
+  if (opts.presetKey) {
+    const bundle = CASTS_BY_STRATEGY[opts.presetKey as StrategyKey];
+    if (bundle) return bundle;
+  }
+  return castForStrategyName(opts.name);
+}
+
+// Legacy name-only inference. Retained because user-wizard strategies
+// don't carry a presetKey, and the cast-snapshot comic reader receives
+// only a name historically. New code should prefer castForStrategy().
 export function castForStrategyName(name: string | null | undefined): CastBundle {
   if (!name) return DEFAULT_CAST;
   const n = name.toLowerCase();

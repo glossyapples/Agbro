@@ -8,6 +8,7 @@ import type { StrategySeed } from './types';
 export const ALTERNATIVE_STRATEGIES: StrategySeed[] = [
   {
     slug: 'deep-value-graham',
+    presetKey: 'deep_value_graham',
     name: 'Deep Value (Graham)',
     buffettScore: 65,
     summary:
@@ -60,6 +61,7 @@ export const ALTERNATIVE_STRATEGIES: StrategySeed[] = [
   },
   {
     slug: 'quality-compounders',
+    presetKey: 'quality_compounders',
     name: 'Quality Compounders (Late-Era Buffett / Munger)',
     buffettScore: 90,
     summary:
@@ -113,6 +115,7 @@ export const ALTERNATIVE_STRATEGIES: StrategySeed[] = [
   },
   {
     slug: 'dividend-growth',
+    presetKey: 'dividend_growth',
     name: 'Dividend Growth (Aristocrats)',
     buffettScore: 80,
     summary:
@@ -170,6 +173,7 @@ export const ALTERNATIVE_STRATEGIES: StrategySeed[] = [
   },
   {
     slug: 'boglehead-index',
+    presetKey: 'boglehead_index',
     name: 'Boglehead Index-Only',
     buffettScore: 75,
     summary:
@@ -223,6 +227,7 @@ export const ALTERNATIVE_STRATEGIES: StrategySeed[] = [
     // CDS toolkit. That's what the "guest analyst" mode is for at
     // other firms — he flags the weird stuff, doesn't drive the book.
     slug: 'burry-deep-research',
+    presetKey: 'burry_deep_research',
     name: 'Burry Deep Research (Contrarian Value)',
     buffettScore: 70,
     summary:

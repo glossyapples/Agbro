@@ -14,7 +14,7 @@ import { log } from '@/lib/logger';
 import { MEETING_SYSTEM_PROMPT, type MeetingOutput } from './schema';
 import { getCurrentRegime } from '@/lib/data/regime';
 import { getUserCredential } from '@/lib/credentials';
-import { castForStrategyName, BURRY_GUEST_SHEET, type CastBundle } from './cast';
+import { castForStrategy, BURRY_GUEST_SHEET, type CastBundle } from './cast';
 import { estimateCostUsd } from '@/lib/pricing';
 
 const MEETING_MODEL = 'claude-opus-4-7';
@@ -37,8 +37,13 @@ export async function runMeeting(params: {
     const briefing = await buildBriefing(userId, agendaOverride);
     // Pick the cast for the user's active strategy. Characters'
     // names + personalities get injected into the system prompt so
-    // Claude addresses them correctly in transcript turns.
-    const cast = castForStrategyName(briefing.activeStrategy?.name ?? null);
+    // Claude addresses them correctly in transcript turns. Prefer the
+    // stable presetKey; fall back to the name only for user-wizard
+    // strategies that don't carry a preset.
+    const cast = castForStrategy({
+      presetKey: briefing.activeStrategy?.presetKey ?? null,
+      name: briefing.activeStrategy?.name ?? null,
+    });
     // Guest-mode Burrybot: when the active strategy opted him in via
     // allowBurryGuest AND the strategy isn't already Burry's own firm
     // (he's already the principal there). The flag is per-strategy so
@@ -412,6 +417,7 @@ async function buildBriefing(userId: string, agendaOverride?: string) {
     activeStrategy: activeStrategy
       ? {
           id: activeStrategy.id,
+          presetKey: activeStrategy.presetKey,
           name: activeStrategy.name,
           summary: activeStrategy.summary.slice(0, 400),
           allowBurryGuest: activeStrategy.allowBurryGuest,

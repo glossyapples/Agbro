@@ -16,11 +16,15 @@ import { useRouter } from 'next/navigation';
 
 export function BurryGuestToggle({
   strategyId,
-  strategyName,
+  isBurryFirm,
   initial,
 }: {
   strategyId: string;
-  strategyName: string;
+  // Computed server-side from Strategy.presetKey so user renames don't
+  // break the toggle's visibility. True when presetKey ===
+  // 'burry_deep_research' — the firm where Burrybot is the principal
+  // and a guest toggle would be meaningless.
+  isBurryFirm: boolean;
   initial: boolean;
 }) {
   const router = useRouter();
@@ -30,9 +34,6 @@ export function BurryGuestToggle({
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
-  // The Burry firm doesn't need a guest toggle — he's the principal.
-  // Detect it by name match, mirroring the cast inference logic.
-  const isBurryFirm = strategyName.toLowerCase().includes('burry');
   if (isBurryFirm) {
     return (
       <p className="mt-2 text-[11px] text-ink-500">

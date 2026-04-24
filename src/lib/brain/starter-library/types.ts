@@ -3,6 +3,7 @@
 // seeder + the /api/brain/load-defaults endpoint.
 
 import type { BrainCategory, BrainConfidence } from '@prisma/client';
+import type { StrategyKey } from '@/lib/backtest/rules';
 
 export type BrainSeed = {
   // Stable slug. Stable IDs become `${userId}-seed-brain-${kind}-${slug}`
@@ -27,6 +28,10 @@ export type BrainSeed = {
 
 export type StrategySeed = {
   slug: string;
+  // Stable identifier stamped onto Strategy.presetKey — used for cast
+  // inference, backtest ruleset lookup, Burry firm detection, etc.
+  // Must match the StrategyKey union so a typo surfaces at compile time.
+  presetKey: StrategyKey;
   name: string;
   summary: string;
   buffettScore: number; // 0..100

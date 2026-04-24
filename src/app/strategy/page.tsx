@@ -139,10 +139,11 @@ async function StrategyTab({ userId }: { userId: string }) {
             </div>
             <BurryGuestToggle
               strategyId={s.id}
-              strategyName={s.name}
+              isBurryFirm={s.presetKey === 'burry_deep_research'}
               initial={s.allowBurryGuest}
             />
-            {(s.allowBurryGuest || s.name.toLowerCase().includes('burry')) && (
+            {(s.allowBurryGuest ||
+              s.presetKey === 'burry_deep_research') && (
               <>
                 <FormHypothesisButton
                   strategyId={s.id}
