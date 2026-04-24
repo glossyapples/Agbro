@@ -140,6 +140,8 @@ Every pre-trade decision now routes through a **structured reason-code Governor*
 
 **Your Plan** (`/onboarding`) — one-time setup capturing `timeHorizonYears`, `planningAssumption` (% /yr — *a planning input, not a forecast*), `maxPositionPct`, `drawdownPauseThresholdPct`, `autonomyLevel`, `forbiddenSectors[]`, `forbiddenSymbols[]`. Middleware-level redirect routes first-time users here before they can reach the trading surface. A "Your Plan" card on the home dashboard summarises the chosen values.
 
+**Behavior-alpha card** (`/analytics`) — rolls the `GovernorDecision` audit trail into a 7-day summary: trades approved / blocked / queued, dollar notional protected from size + cash + cap breaches, approval-queue lifecycle (pending / approved / rejected / expired), collapsible per-reason breakdown. Served by `getGovernorStats(userId, windowDays)` (three index-covered queries) and exposed via `GET /api/governor/stats?days=N` for future widgets. The feature that turns the Sprint 1 refactor from invisible plumbing into a product surface.
+
 ---
 
 ## Strategies (6 presets + custom)
@@ -242,7 +244,7 @@ Bottom nav: Home · Trades · Strategy · Brain · Settings (5 tabs, iOS-optimiz
 ## Testing
 
 - **Vitest** suite, colocated `*.test.ts` files next to source, `node` environment
-- **313 passing tests across 29 files, full suite runs in ~4s**
+- **331 passing tests across 31 files, full suite runs in ~4s**
 - `npm test` (watch) · `npm run test:run` (one-shot) · `npm run test:ci` (with v8 coverage)
 - **Phase 1 — pure-function coverage** (shipped):
   - **Pricing math** (`pricing.test.ts`) — cache-aware cost per model tier (Opus/Sonnet/Haiku), env-var rate overrides, unknown-model → 0, rounding
@@ -265,7 +267,8 @@ Bottom nav: Home · Trades · Strategy · Brain · Settings (5 tabs, iOS-optimiz
   - **Pending approval factory** (`safety/pending-approval.test.ts`) — atomic Governor-decision + approval-row write, TTL defaults, bigint field persistence, governor-version stamping
   - **Expiry sweep** (`safety/approval-sweep.test.ts`) — pending → expired with `resolvedBy='timeout'`, swallows DB errors to never block the tick
   - **Cost-budget classifier** (`safety/budget.test.ts`) — `classifyBudgetState` with property-based monotonicity, UTC month boundary
-  - **API handlers** (`src/app/api/**/*.test.ts`) — GET `/api/approvals` filters + BigInt serialisation · POST `/api/approvals/[id]/approve` with idempotency (404/403/409/410) + `runTool` dispatch with `bypassAutonomyLadder=true` · POST `/api/approvals/[id]/reject` with state-machine guards · POST `/api/onboarding` validation + forbidden-list normalisation · POST `/api/settings/budget` with nullable-cap semantics
+  - **API handlers** (`src/app/api/**/*.test.ts`) — GET `/api/approvals` filters + BigInt serialisation · POST `/api/approvals/[id]/approve` with idempotency (404/403/409/410) + `runTool` dispatch with `bypassAutonomyLadder=true` · POST `/api/approvals/[id]/reject` with state-machine guards · POST `/api/onboarding` validation + forbidden-list normalisation · POST `/api/settings/budget` with nullable-cap semantics · GET `/api/governor/stats` with days-clamp + BigInt serialisation
+  - **Behavior-alpha aggregator** (`safety/governor-stats.test.ts`) — decision-total rollup, multi-reason rejection attribution (each code once per rejection), dollar-protected summation once-per-rejection semantics, approval-queue lifecycle mapping, headline-picker singular/plural agreement, reason-bucket coverage meta-test (every declared reason has a bucket)
 - **Scoped but not yet shipped**:
   - **Phase 3** — integration tests with a test DB (`seedBrainForUser` idempotency, `backfillBrainTaxonomy`, `writeBrain` validation, policy-change apply boundary, AgentRun stale-sweep, daily-cap exclusion, cascade FK chain)
   - **Phase 4** — chaos tests with mocked externals (Alpaca/Anthropic/OpenAI/EDGAR failure modes)
@@ -287,4 +290,4 @@ Bottom nav: Home · Trades · Strategy · Brain · Settings (5 tabs, iOS-optimiz
 
 ---
 
-**TL;DR**: Value-investing paper-trading app that treats itself as a five-to-six-bot "firm" with institutional memory, weekly exec meetings rendered as Mad Magazine comics, a **Governor-routed defense-in-depth trade gate** with structured reason codes + audit trail, a **three-level autonomy ladder** (Observe / Propose / Auto) feeding a **user approval queue**, a **BYOK API cost-governor** that pauses the agent before surprise bills, a **Your Plan onboarding wizard** every user must complete before trading, six preset strategies + a custom wizard, point-in-time-fundamentals backtesting, rule-based crypto DCA, BYOK on every model provider, a growing brain library you resync from the repo, and a **313-test mutation-verified Vitest suite** (property tests + HTTP handler tests) pinning the critical behaviour invariants.
+**TL;DR**: Value-investing paper-trading app that treats itself as a five-to-six-bot "firm" with institutional memory, weekly exec meetings rendered as Mad Magazine comics, a **Governor-routed defense-in-depth trade gate** with structured reason codes + audit trail + **behavior-alpha activity card** that makes the blocks it fired visible, a **three-level autonomy ladder** (Observe / Propose / Auto) feeding a **user approval queue**, a **BYOK API cost-governor** that pauses the agent before surprise bills, a **Your Plan onboarding wizard** every user must complete before trading, six preset strategies + a custom wizard, point-in-time-fundamentals backtesting, rule-based crypto DCA, BYOK on every model provider, a growing brain library you resync from the repo, and a **331-test mutation-verified Vitest suite** (property tests + HTTP handler tests) pinning the critical behaviour invariants.
