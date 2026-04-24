@@ -9,7 +9,7 @@ import { UpcomingEventsCard } from '@/components/UpcomingEventsCard';
 import { LocalTime } from '@/components/LocalTime';
 import { MoodStrip } from '@/components/MoodStrip';
 import { KillSwitchBanner } from '@/components/KillSwitchBanner';
-import { getPortfolioHistory, getBars } from '@/lib/alpaca';
+import { getPortfolioHistory, getBars, getBrokerAccount } from '@/lib/alpaca';
 import { getUpcomingEvents } from '@/lib/data/events';
 import {
   classifyMarketMood,
@@ -26,7 +26,18 @@ import type { Regime } from '@/lib/data/regime';
 // handles that with a "waiting for data" state.
 async function getInitialChartPayload(userId: string) {
   try {
-    const portfolio = await getPortfolioHistory('1D').catch(() => []);
+    // Fetch history (for the series shape) AND the live broker state
+    // (for the current-equity scalar) in parallel. Alpaca's
+    // portfolio_history refreshes at their internal cadence — it
+    // frequently lags real-time deposits, positions transferred
+    // between accounts, and post-close equity movements. Using
+    // portfolio_value for the scalar keeps the headline honest when
+    // the user opens the app outside market hours or right after a
+    // deposit, while the history drives the shape of the curve.
+    const [portfolio, broker] = await Promise.all([
+      getPortfolioHistory('1D').catch(() => []),
+      getBrokerAccount().catch(() => null),
+    ]);
     if (portfolio.length === 0) {
       return { range: '1D' as const, summary: null, portfolio: [], spy: [] };
     }
@@ -67,12 +78,21 @@ async function getInitialChartPayload(userId: string) {
       pct: spyBasis && spyBasis > 0 ? ((b.close - spyBasis) / spyBasis) * 100 : 0,
     }));
     const last = stocksPortfolio[stocksPortfolio.length - 1];
+    // Prefer the live broker portfolio_value (minus current crypto
+    // book) for the headline. If the broker read failed, fall back
+    // to the last history point so we still render something.
+    const liveCrypto = cryptoAt(Date.now());
+    const liveStocksEquity =
+      broker != null
+        ? Number(broker.portfolioValueCents) / 100 - liveCrypto
+        : last.v;
+    const currentEquity = liveStocksEquity;
     return {
       range: '1D' as const,
       summary: {
-        currentEquity: last.v,
-        rangePnl: last.v - basis,
-        rangePnlPct: basis > 0 ? ((last.v - basis) / basis) * 100 : 0,
+        currentEquity,
+        rangePnl: currentEquity - basis,
+        rangePnlPct: basis > 0 ? ((currentEquity - basis) / basis) * 100 : 0,
         spyPnlPct: spySeries[spySeries.length - 1]?.pct ?? null,
       },
       portfolio: portfolioSeries,

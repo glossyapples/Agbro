@@ -28,7 +28,14 @@
   .pill-good { @apply pill bg-brand-900/60 text-brand-300; }
   .pill-bad { @apply pill bg-red-900/60 text-red-300; }
   .pill-warn { @apply pill bg-amber-900/60 text-amber-300; }
-  input, textarea, select {
+  /* Text-style inputs stretch to fill the container. Checkbox + radio
+     are explicitly excluded — the base rule used to hit them too,
+     which made radio/checkbox inputs blow up to full-width and push
+     their sibling labels off-screen (onboarding wizard Autonomy
+     cards + budget form "Enable monthly cap"). */
+  input:not([type='checkbox']):not([type='radio']),
+  textarea,
+  select {
     @apply w-full rounded-xl border border-ink-700 bg-ink-800 px-3 py-2 text-sm text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none;
   }
   label { @apply block text-sm font-medium text-ink-200; }

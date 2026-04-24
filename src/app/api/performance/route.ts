@@ -16,6 +16,7 @@ import { z } from 'zod';
 import {
   getPortfolioHistory,
   getBars,
+  getBrokerAccount,
   type PortfolioHistoryRange,
 } from '@/lib/alpaca';
 import { apiError, requireUser } from '@/lib/api';
@@ -73,10 +74,21 @@ export async function GET(req: Request) {
   const range = parsed.data.range;
 
   try {
-    const portfolio = await getPortfolioHistory(range).catch((err) => {
-      log.warn('performance.portfolio_history_failed', { range }, err);
-      return [];
-    });
+    const [portfolio, broker] = await Promise.all([
+      getPortfolioHistory(range).catch((err) => {
+        log.warn('performance.portfolio_history_failed', { range }, err);
+        return [];
+      }),
+      // Live broker state for the current-equity scalar. Alpaca's
+      // portfolio_history lags real-time deposits + post-close
+      // movements; using portfolio_value keeps the headline honest
+      // when users check outside market hours or right after a
+      // deposit. Falls back to the series last point if unavailable.
+      getBrokerAccount().catch((err) => {
+        log.warn('performance.broker_read_failed', { range }, err);
+        return null;
+      }),
+    ]);
 
     // Crypto subtraction. Alpaca's portfolio_history returns TOTAL account
     // equity (cash + stocks + options + crypto). The stocks-tab chart
@@ -133,14 +145,24 @@ export async function GET(req: Request) {
     }
 
     const last = stocksPortfolio[stocksPortfolio.length - 1];
-    const summary = last
-      ? {
-          currentEquity: last.equity,
-          rangePnl: last.equity - (basis ?? last.equity),
-          rangePnlPct: basis && basis > 0 ? ((last.equity - basis) / basis) * 100 : 0,
-          spyPnlPct: spySeries[spySeries.length - 1]?.pct ?? null,
-        }
-      : null;
+    // Prefer live broker portfolio_value (minus current crypto book)
+    // for the headline; fall back to the last history point when
+    // broker read fails.
+    const liveCrypto = subtractCryptoAt(Date.now(), snapshots);
+    const currentEquity =
+      broker != null
+        ? Number(broker.portfolioValueCents) / 100 - liveCrypto
+        : last?.equity ?? null;
+    const summary =
+      last && currentEquity != null
+        ? {
+            currentEquity,
+            rangePnl: currentEquity - (basis ?? currentEquity),
+            rangePnlPct:
+              basis && basis > 0 ? ((currentEquity - basis) / basis) * 100 : 0,
+            spyPnlPct: spySeries[spySeries.length - 1]?.pct ?? null,
+          }
+        : null;
 
     return NextResponse.json({
       range,

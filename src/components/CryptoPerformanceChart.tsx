@@ -140,8 +140,12 @@ export function CryptoPerformanceChart({ initial }: { initial: Payload }) {
           <path d={path} fill="none" stroke="currentColor" strokeWidth="2" className="text-brand-400" />
         </svg>
       ) : (
-        <div className="mt-3 flex h-32 items-center justify-center rounded-md border border-dashed border-ink-700/60 text-xs text-ink-400">
-          Need at least two daily snapshots to render.
+        <div className="mt-3 flex h-32 flex-col items-center justify-center gap-1 rounded-md border border-dashed border-ink-700/60 px-4 text-center text-xs text-ink-400">
+          <p>Chart fills in after the first daily snapshot.</p>
+          <p>
+            The crypto engine takes one snapshot per tick once DCA is active —
+            give it a day or two and a line will appear.
+          </p>
         </div>
       )}
 
