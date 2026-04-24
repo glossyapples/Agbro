@@ -43,6 +43,7 @@ model User {
   meetings      Meeting[]
   watchlist     UserWatchlist[]
   governorDecisions GovernorDecision[]
+  pendingApprovals PendingApproval[]
 }
 
 // BYOK — per-user API keys for third-party providers. The raw key is
@@ -300,6 +301,7 @@ model Trade {
   closedAt      DateTime?
   realizedPnlCents BigInt?  // set when closed
   notifications Notification[]
+  pendingApproval PendingApproval?
 
   @@index([userId, submittedAt])
 }
@@ -406,6 +408,7 @@ model AgentRun {
   researchNotes ResearchNote[]
   brainEntries  BrainEntry[]
   governorDecisions GovernorDecision[]
+  pendingApprovals PendingApproval[]
 
   @@index([userId, startedAt])
 }
@@ -1030,4 +1033,68 @@ model GovernorDecision {
   @@index([userId, createdAt])
   @@index([userId, decision, createdAt])
   @@index([agentRunId])
+}
+
+// User-facing approval queue. One row per trade proposal awaiting
+// user sign-off. Created when the gate emits a requires_approval
+// verdict — either because the account is at 'observe' autonomy
+// (every proposal intercepted upstream of the gates) or 'propose'
+// autonomy (every gate-approved trade queued for review) or a
+// future Mandate rule that escalates specific kinds to approval.
+//
+// Lifecycle:
+//   pending  → user hasn't acted yet (created status)
+//   approved → user clicked Approve; tradeId populated with the
+//              Trade row that was placed on the broker
+//   rejected → user clicked Reject; agent sees this feedback next run
+//   expired  → a sweep moved it past expiresAt without action
+//
+// Design rule: the PendingApproval row is ALWAYS paired with a
+// GovernorDecision audit row — they're written together in a
+// transaction. The audit row is immutable; the pending row is the
+// mutable lifecycle state. This keeps the audit trail append-only
+// regardless of how the approval resolves.
+model PendingApproval {
+  id                 String   @id @default(cuid())
+  userId             String
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  agentRunId         String?
+  agentRun           AgentRun? @relation(fields: [agentRunId], references: [id], onDelete: SetNull)
+  governorDecisionId String   @unique
+
+  // Trade fields — duplicated from the audit row for index-scan
+  // read efficiency and so the UI doesn't need a join to render.
+  symbol             String
+  side               String   // 'buy' | 'sell'
+  qty                Float
+  orderType          String
+  limitPriceCents    BigInt?
+
+  // Agent's rationale so the user has enough context to sign off.
+  bullCase           String   @db.Text
+  bearCase           String   @db.Text
+  thesis             String   @db.Text
+  confidence         Float
+  intrinsicValuePerShareCents BigInt?
+  marginOfSafetyPct  Float?
+
+  // Lifecycle
+  status             String   @default("pending")
+  expiresAt          DateTime
+  resolvedAt         DateTime?
+  // 'user' | 'timeout' | 'system' — who triggered the resolution.
+  resolvedBy         String?
+  userNote           String?  @db.Text
+  // If user approved AND the downstream broker call succeeded, this
+  // points at the resulting Trade row. Null for pending / rejected /
+  // expired / broker-failure paths.
+  tradeId            String?  @unique
+  trade              Trade?   @relation(fields: [tradeId], references: [id], onDelete: SetNull)
+
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([userId, status])
+  @@index([expiresAt])
+  @@index([userId, createdAt])
 }

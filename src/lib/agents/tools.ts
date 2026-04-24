@@ -34,6 +34,7 @@ import { isInEarningsBlackout } from '@/lib/data/earnings';
 import { checkWashSaleBlock } from '@/lib/data/tax';
 import { computeSpendable } from '@/lib/wallet';
 import { recordGovernorDecision } from '@/lib/safety/governor';
+import { createPendingApproval } from '@/lib/safety/pending-approval';
 import { parseAutonomyLevel } from '@/lib/safety/autonomy';
 import type { CodedReason } from '@/lib/safety/reason-codes';
 import { getCurrentRegime } from '@/lib/data/regime';
@@ -760,6 +761,43 @@ async function placeTradeTool(ctx: ToolContext, input: Record<string, unknown>) 
     );
   }
 
+  // Observe autonomy: intercept upstream of every gate. The agent's
+  // proposal is logged as a pending approval (audit row marked
+  // requires_approval) and the tool returns "queued" without running
+  // MOS / earnings / wallet / notional — the user will review raw.
+  // Propose autonomy runs the gates first and diverts after they
+  // pass (see below).
+  if (autonomyLevel === 'observe') {
+    const approval = await createPendingApproval({
+      userId: ctx.userId,
+      agentRunId: ctx.agentRunId ?? null,
+      symbol,
+      side: p.side,
+      qty: p.qty,
+      orderType,
+      limitPriceCents:
+        typeof p.limitPrice === 'number' ? BigInt(Math.round(p.limitPrice * 100)) : null,
+      bullCase: p.bullCase,
+      bearCase: p.bearCase,
+      thesis: p.thesis,
+      confidence: p.confidence,
+      intrinsicValuePerShareCents:
+        p.intrinsicValuePerShare && p.intrinsicValuePerShare > 0
+          ? toCents(p.intrinsicValuePerShare)
+          : null,
+      marginOfSafetyPct: p.marginOfSafetyPct ?? null,
+      reasons: [{ code: 'OBSERVE_MODE_INTERCEPTED', params: { symbol } }],
+      autonomyLevel,
+    });
+    return {
+      status: 'queued_for_approval',
+      approvalId: approval.approvalId,
+      symbol,
+      expiresAt: approval.expiresAt.toISOString(),
+      message: `In Observe mode, the ${p.side} proposal for ${symbol} was logged for user review. No gate was run — the user will sign off (or decline) before anything hits the broker.`,
+    };
+  }
+
   // MOS gate for buys — schema guarantees both fields are present on
   // buy orders; enforce the active strategy's minMarginOfSafetyPct
   // here rather than at Zod level so the error message can name the
@@ -961,6 +999,41 @@ async function placeTradeTool(ctx: ToolContext, input: Record<string, unknown>) 
         throw walletErr;
       }
     }
+  }
+
+  // Propose autonomy: every gate-approved trade routes to the queue
+  // instead of the broker. We DO NOT reserve a pending Trade row or
+  // a daily-cap slot here — the user's approval will re-enter the
+  // tx path below. Sell-side proposals queue too.
+  if (autonomyLevel === 'propose') {
+    const approval = await createPendingApproval({
+      userId: ctx.userId,
+      agentRunId: ctx.agentRunId ?? null,
+      symbol,
+      side: p.side,
+      qty: p.qty,
+      orderType,
+      limitPriceCents:
+        typeof p.limitPrice === 'number' ? BigInt(Math.round(p.limitPrice * 100)) : null,
+      bullCase: p.bullCase,
+      bearCase: p.bearCase,
+      thesis: p.thesis,
+      confidence: p.confidence,
+      intrinsicValuePerShareCents:
+        p.intrinsicValuePerShare && p.intrinsicValuePerShare > 0
+          ? toCents(p.intrinsicValuePerShare)
+          : null,
+      marginOfSafetyPct: p.marginOfSafetyPct ?? null,
+      reasons: [{ code: 'PROPOSE_MODE_REQUIRES_APPROVAL', params: { symbol } }],
+      autonomyLevel,
+    });
+    return {
+      status: 'queued_for_approval',
+      approvalId: approval.approvalId,
+      symbol,
+      expiresAt: approval.expiresAt.toISOString(),
+      message: `${symbol} ${p.side} passed every safety check and is waiting for user approval (Propose autonomy). It will expire at ${approval.expiresAt.toISOString()} if no action is taken.`,
+    };
   }
 
   // Atomically: take a per-user write lock, re-read pause/stop + cap under the
