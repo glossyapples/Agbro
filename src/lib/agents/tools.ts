@@ -568,7 +568,7 @@ export async function runTool(
     case 'place_trade':
       return placeTradeTool(ctx, input);
     case 'update_stock_fundamentals':
-      return updateStockFundamentalsTool(input);
+      return updateStockFundamentalsTool(ctx, input);
     case 'refresh_fundamentals':
       return refreshFundamentalsForSymbol(String(input.symbol));
     case 'screen_universe': {
@@ -1097,7 +1097,10 @@ async function placeTradeTool(ctx: ToolContext, input: Record<string, unknown>) 
   return { tradeId: trade.id, alpacaOrderId: order.id, status: 'submitted' };
 }
 
-async function updateStockFundamentalsTool(input: Record<string, unknown>) {
+async function updateStockFundamentalsTool(
+  ctx: ToolContext,
+  input: Record<string, unknown>
+) {
   const parsed = UpdateStockFundamentalsInput.safeParse(input);
   if (!parsed.success) {
     throw new Error(`update_stock_fundamentals: invalid input — ${parsed.error.message}`);
@@ -1117,15 +1120,30 @@ async function updateStockFundamentalsTool(input: Record<string, unknown>) {
   // be used as a back-door to bypass the user-gated candidate promotion
   // flow (the screen_universe → user-approve path). To actually put a
   // name on the watchlist, the user promotes it from /candidates.
+  // B2.3: Stock is now the global catalog only. Per-user watchlist
+  // state (including onWatchlist for this user) lives on UserWatchlist
+  // and is only created when the user explicitly promotes the symbol
+  // via /candidates. New Stock rows land in the catalog without any
+  // per-user side effect — the promote/reject UI handles surfacing.
   const stock = await prisma.stock.upsert({
     where: { symbol: sym },
     update: data,
-    create: { symbol: sym, name: sym, onWatchlist: false, ...data },
+    create: { symbol: sym, name: sym, ...data },
   });
+
+  // Resolve the per-user onWatchlist flag by looking up THIS user's
+  // UserWatchlist row (absent row = not on watchlist). Preserves the
+  // shape the agent + prompt expect in the tool response.
+  const userRow = await prisma.userWatchlist
+    .findUnique({
+      where: { userId_symbol: { userId: ctx.userId, symbol: sym } },
+      select: { onWatchlist: true },
+    })
+    .catch(() => null);
 
   return {
     symbol: stock.symbol,
-    onWatchlist: stock.onWatchlist,
+    onWatchlist: userRow?.onWatchlist ?? false,
     updatedFields: Object.keys(patch).filter(
       (k) => patch[k as keyof typeof patch] !== undefined
     ),

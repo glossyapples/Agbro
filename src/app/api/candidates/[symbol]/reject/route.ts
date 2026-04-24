@@ -19,25 +19,26 @@ export async function POST(
 
   try {
     const symbol = params.symbol.toUpperCase();
-    const existing = await prisma.stock.findUnique({ where: { symbol } });
+    // B2.3: Stock is the global catalog — only verify existence; the
+    // pending-candidate status is per-user and lives on UserWatchlist.
+    const existing = await prisma.stock.findUnique({
+      where: { symbol },
+      select: { symbol: true },
+    });
     if (!existing) {
       return NextResponse.json({ error: 'not_found' }, { status: 404 });
     }
-    if (existing.candidateSource !== 'screener') {
+    const watchlistRow = await prisma.userWatchlist.findUnique({
+      where: { userId_symbol: { userId: user.id, symbol } },
+      select: { candidateSource: true },
+    });
+    if (watchlistRow?.candidateSource !== 'screener') {
       return NextResponse.json(
         { error: 'not a pending candidate' },
         { status: 400 }
       );
     }
 
-    await prisma.stock.update({
-      where: { symbol },
-      data: {
-        onWatchlist: false,
-        candidateSource: 'rejected',
-      },
-    });
-    // B2.1 dual-write.
     await markRejected(user.id, symbol);
     await prisma.auditLog.create({
       data: {

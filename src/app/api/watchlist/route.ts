@@ -60,10 +60,12 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
     }
     const symbol = parsed.data.symbol.toUpperCase();
+    // B2.3: Stock is the global catalog. This upsert only maintains
+    // global fields (name/sector/industry/notes) — per-user state
+    // (onWatchlist) is written to UserWatchlist exclusively.
     const stock = await prisma.stock.upsert({
       where: { symbol },
       update: {
-        onWatchlist: true,
         ...(parsed.data.name ? { name: parsed.data.name } : {}),
         ...(parsed.data.sector ? { sector: parsed.data.sector } : {}),
         ...(parsed.data.industry ? { industry: parsed.data.industry } : {}),
@@ -75,12 +77,8 @@ export async function POST(req: Request) {
         sector: parsed.data.sector,
         industry: parsed.data.industry,
         notes: parsed.data.notes,
-        onWatchlist: true,
       },
     });
-    // B2.1 dual-write: mirror the per-user state into UserWatchlist.
-    // Stock.onWatchlist is still the read-authoritative source; this
-    // keeps the two in sync so B2.2 can flip reads cleanly.
     await markOnWatchlist(user.id, symbol);
     revalidatePath('/watchlist');
     revalidatePath('/analytics');
@@ -102,11 +100,8 @@ export async function DELETE(req: Request) {
     if (!symbol) {
       return NextResponse.json({ error: 'symbol required' }, { status: 400 });
     }
-    await prisma.stock.update({
-      where: { symbol },
-      data: { onWatchlist: false },
-    });
-    // B2.1 dual-write: mirror the removal to UserWatchlist.
+    // B2.3: per-user state (onWatchlist=false) written to UserWatchlist
+    // only. Stock row stays untouched — it's just the global catalog.
     await removeFromWatchlist(user.id, symbol);
     revalidatePath('/watchlist');
     revalidatePath('/analytics');

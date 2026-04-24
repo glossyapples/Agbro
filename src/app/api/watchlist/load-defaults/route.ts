@@ -20,13 +20,14 @@ export async function POST() {
     const results: Array<{ symbol: string; created: boolean }> = [];
     for (const s of STARTER_UNIVERSE) {
       const existing = await prisma.stock.findUnique({ where: { symbol: s.symbol } });
+      // B2.3: Stock write is catalog-only (name, sector, industry,
+      // notes from the starter universe). Per-user onWatchlist
+      // state goes to UserWatchlist via markOnWatchlist below.
       await prisma.stock.upsert({
         where: { symbol: s.symbol },
-        update: { ...s, onWatchlist: true, lastAnalyzedAt: new Date() },
-        create: { ...s, onWatchlist: true, lastAnalyzedAt: new Date() },
+        update: { ...s, lastAnalyzedAt: new Date() },
+        create: { ...s, lastAnalyzedAt: new Date() },
       });
-      // B2.1 dual-write: seed-universe additions become per-user
-      // watchlist entries for the calling user.
       await markOnWatchlist(user.id, s.symbol);
       results.push({ symbol: s.symbol, created: !existing });
     }

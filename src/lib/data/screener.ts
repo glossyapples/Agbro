@@ -314,6 +314,11 @@ export async function runScreen(
       snap != null &&
       passesHighConvictionBar(snap, c.minRoePct);
 
+    // B2.3: Stock is the global catalog. Only write global catalog
+    // fields here (name, businessDescription, fundamentals). Per-user
+    // state (candidateSource, discoveredAt, autoPromotedAt, the
+    // candidateNotes this user attached) lives on UserWatchlist —
+    // written right below via markCandidate.
     await prisma.stock.upsert({
       where: { symbol },
       create: {
@@ -321,12 +326,7 @@ export async function runScreen(
         // Use the model's company name if we parsed one, else the ticker —
         // a later EDGAR refresh can overwrite with the canonical filing name.
         name: displayName,
-        onWatchlist: highConviction,
-        candidateSource: highConviction ? 'watchlist' : 'screener',
-        candidateNotes: thesis,
         businessDescription: description,
-        discoveredAt: new Date(),
-        autoPromotedAt: highConviction ? new Date() : null,
         lastAnalyzedAt: snap ? new Date() : null,
         ...(snap
           ? {
@@ -344,21 +344,14 @@ export async function runScreen(
           : {}),
       },
       update: {
-        // Only touch candidate metadata; preserve anything user or prior
-        // runs have set. Do NOT auto-promote existing rows — if a name is
-        // already in the DB, there's a reason (including a past user reject).
-        candidateSource: 'screener',
-        candidateNotes: thesis,
+        // Only refresh the global description from a newer screener hit;
+        // per-user candidate metadata lives on UserWatchlist now.
         businessDescription: description,
-        discoveredAt: new Date(),
       },
     });
 
-    // B2.1 dual-write: mirror screener state to UserWatchlist. We do
-    // this AFTER the Stock upsert so a UserWatchlist row never exists
-    // without its Stock catalog counterpart (FK relation). userId is
-    // optional on this function for migration; once all callers pass
-    // it, it becomes required in B2.3.
+    // Per-user candidate state goes to UserWatchlist. Requires userId
+    // now that the Stock write no longer mirrors it.
     if (userId) {
       const { markCandidate } = await import('./user-watchlist');
       await markCandidate(userId, symbol, {
