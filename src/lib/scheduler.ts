@@ -62,6 +62,49 @@ export function getSchedulerStatus(): SchedulerStatus {
   return { ...status };
 }
 
+// Staleness threshold — if a tick hasn't completed in this long while
+// the scheduler claims to be started, the watchdog treats it as dead
+// and asks the boot helper to re-kick it. 5 minutes gives 2x the tick
+// interval (2 min) plus headroom for a slow tick (analyzer runs can
+// take 30s). Exported for tests.
+export const STALE_AFTER_MS = 5 * 60 * 1000;
+
+// True when the scheduler claims to be running but hasn't completed a
+// tick recently enough. Null-tick-time state (just booted, boot delay
+// hasn't fired yet) is NOT stale — startedAt within the boot-delay
+// window is a grace period.
+export function isSchedulerStale(nowMs: number = Date.now()): boolean {
+  if (!status.started) return false; // never started, not "stale" — just off
+  // Still inside the initial boot delay: give it time.
+  if (status.lastTickCompletedAt == null) {
+    if (status.startedAt == null) return false;
+    const sinceStart = nowMs - new Date(status.startedAt).getTime();
+    return sinceStart > BOOT_DELAY_MS + STALE_AFTER_MS;
+  }
+  const sinceTick = nowMs - new Date(status.lastTickCompletedAt).getTime();
+  return sinceTick > STALE_AFTER_MS;
+}
+
+// Stop any active timers and reset module state so a subsequent call
+// to startScheduler() is a clean slate. Safe to call at any time —
+// no-op if nothing is running. Used by the watchdog + the manual
+// restart endpoint.
+export function restartScheduler(): void {
+  if (bootTimer != null) {
+    clearTimeout(bootTimer);
+    bootTimer = null;
+  }
+  if (timer != null) {
+    clearInterval(timer);
+    timer = null;
+  }
+  status.started = false;
+  // Preserve tickCount so /api/scheduler/status can show whether
+  // ticks ever happened pre-restart — useful for debugging.
+  status.lastTickError = null;
+  console.log('[scheduler] restart — cleared timers, ready to start again');
+}
+
 async function tickOnce(): Promise<void> {
   if (status.running) {
     console.log('[scheduler] skipped tick — previous still running');

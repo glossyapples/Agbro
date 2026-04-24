@@ -11,7 +11,7 @@
 
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
-import { bootSchedulerOnce } from '@/lib/scheduler-boot';
+import { ensureSchedulerAlive } from '@/lib/scheduler-boot';
 
 export const runtime = 'nodejs';
 // Disable all caching — health responses must be fresh.
@@ -19,9 +19,12 @@ export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
 export async function GET() {
-  // Start the scheduler the first time this handler runs per process.
-  // Idempotent — subsequent requests no-op.
-  bootSchedulerOnce();
+  // Start the scheduler the first time this handler runs per process,
+  // and self-heal it on every subsequent probe when it's gone stale.
+  // Railway's health probe hits this endpoint every ~30s, so this is
+  // the primary watchdog hook — a pod resume that kills setInterval
+  // gets caught within one probe cycle.
+  const watchdogFired = ensureSchedulerAlive();
 
   const startedAt = Date.now();
   let dbOk = false;
@@ -43,6 +46,7 @@ export async function GET() {
     uptimeSeconds: Math.round(process.uptime()),
     checkedAt: new Date().toISOString(),
     elapsedMs: Date.now() - startedAt,
+    schedulerWatchdogFired: watchdogFired,
   };
 
   return NextResponse.json(body, { status: dbOk ? 200 : 503 });

@@ -7,6 +7,7 @@ import { SignOutButton } from '@/components/SignOutButton';
 import { CredentialManager } from '@/components/CredentialManager';
 import { SafetyRailsForm } from '@/components/SafetyRailsForm';
 import { BudgetForm } from '@/components/BudgetForm';
+import { RebootSchedulerButton } from '@/components/RebootSchedulerButton';
 import { checkApiBudget } from '@/lib/safety/budget';
 
 export default async function SettingsPage() {
@@ -75,6 +76,8 @@ export default async function SettingsPage() {
           state: budget.state,
         }}
       />
+
+      <RebootSchedulerButton />
 
       <CredentialManager />
 

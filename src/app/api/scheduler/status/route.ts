@@ -12,6 +12,7 @@
 
 import { NextResponse } from 'next/server';
 import { getSchedulerStatus } from '@/lib/scheduler';
+import { ensureSchedulerAlive } from '@/lib/scheduler-boot';
 
 export const runtime = 'nodejs';
 
@@ -35,9 +36,14 @@ function envStatus() {
 }
 
 export async function GET() {
+  // Side-effect watchdog. Every status probe is a chance to resurrect
+  // the scheduler if it's died silently — debug-focused operators are
+  // the most likely to hit this route during an outage, so let the
+  // diagnostic be the fix too.
+  const watchdogFired = ensureSchedulerAlive();
   const status = getSchedulerStatus();
   return NextResponse.json(
-    { ...status, env: envStatus() },
+    { ...status, env: envStatus(), watchdogFired },
     {
       headers: {
         // Never cache — the whole point is to see live state.
