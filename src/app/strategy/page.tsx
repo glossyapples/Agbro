@@ -7,6 +7,7 @@ import { MeetingCard } from '@/components/MeetingCard';
 import { ActionItemsList } from '@/components/ActionItemsList';
 import { PolicyChangesList } from '@/components/PolicyChangesList';
 import { BurryGuestToggle } from '@/components/BurryGuestToggle';
+import { FormHypothesisButton } from '@/components/FormHypothesisButton';
 import { StrategySyncNudge } from '@/components/StrategySyncNudge';
 import { missingStarterStrategySlugs } from '@/lib/brain/seed-brain';
 
@@ -81,6 +82,25 @@ async function StrategyTab({ userId }: { userId: string }) {
     }),
     missingStarterStrategySlugs(userId),
   ]);
+  // One DB round-trip to learn which strategies have already had a
+  // Burrybot first-research session run — used to hide the button on
+  // completed cards. Groups by the `onboard-<strategyId>` tag that
+  // formBurryHypotheses stamps on every entry it writes.
+  const onboardedTags = await prisma.brainEntry.findMany({
+    where: {
+      userId,
+      tags: { hasSome: strategies.map((s) => `onboard-${s.id}`) },
+    },
+    select: { tags: true },
+  });
+  const onboardedStrategyIds = new Set<string>();
+  for (const row of onboardedTags) {
+    for (const t of row.tags) {
+      if (t.startsWith('onboard-')) {
+        onboardedStrategyIds.add(t.slice('onboard-'.length));
+      }
+    }
+  }
   return (
     <>
       <StrategySyncNudge missingSlugs={missingSlugs} />
@@ -121,6 +141,13 @@ async function StrategyTab({ userId }: { userId: string }) {
               strategyName={s.name}
               initial={s.allowBurryGuest}
             />
+            {(s.allowBurryGuest || s.name.toLowerCase().includes('burry')) && (
+              <FormHypothesisButton
+                strategyId={s.id}
+                strategyName={s.name}
+                alreadyFormed={onboardedStrategyIds.has(s.id)}
+              />
+            )}
           </li>
         ))}
       </ul>
