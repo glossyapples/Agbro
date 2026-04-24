@@ -134,8 +134,17 @@ export const TOOL_DEFS: Anthropic.Tool[] = [
           items: { type: 'string' },
           description: 'Optional tag filter — rows must have ALL listed tags.',
         },
+        symbols: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'Optional ticker filter — returns entries whose relatedSymbols intersects this list. Cheapest way to pull "everything we have on AAPL" without over-fetching. Case-insensitive.',
+        },
         includeSuperseded: { type: 'boolean' },
-        limit: { type: 'number' },
+        limit: {
+          type: 'number',
+          description: 'Max entries to return (default 20, clamped to 100).',
+        },
       },
       required: [],
     },
@@ -480,7 +489,12 @@ export async function runTool(
         orderBy: [{ buffettScore: 'desc' }],
       });
     case 'read_brain': {
-      const limit = typeof input.limit === 'number' ? input.limit : 20;
+      // Clamp limit so an agent emitting limit=10000 can't dump every
+      // row, blow the 60KB tool-output cap, and waste tokens. 100 is
+      // more than enough for any wake-up phase; read_brain can be
+      // called multiple times with different filters.
+      const rawLimit = typeof input.limit === 'number' ? input.limit : 20;
+      const limit = Math.max(1, Math.min(Math.floor(rawLimit), 100));
       const kinds = Array.isArray(input.kinds) ? (input.kinds as string[]) : undefined;
       const categories = Array.isArray(input.categories)
         ? (input.categories as Array<
@@ -491,6 +505,15 @@ export async function runTool(
         ? (input.confidence as Array<'canonical' | 'high' | 'medium' | 'low'>)
         : undefined;
       const tags = Array.isArray(input.tags) ? (input.tags as string[]) : undefined;
+      // Symbol filter — hits relatedSymbols with `hasSome` so agents
+      // can pull "anything we've written about AAPL" in one call
+      // instead of over-fetching then client-side-filtering.
+      const rawSymbols = Array.isArray(input.symbols)
+        ? (input.symbols as string[])
+        : undefined;
+      const symbols = rawSymbols
+        ?.map((s) => String(s).toUpperCase())
+        .filter((s) => s.length > 0);
       const includeSuperseded = input.includeSuperseded === true;
       return prisma.brainEntry.findMany({
         where: {
@@ -499,6 +522,9 @@ export async function runTool(
           ...(categories ? { category: { in: categories } } : {}),
           ...(confidence ? { confidence: { in: confidence } } : {}),
           ...(tags && tags.length > 0 ? { tags: { hasEvery: tags } } : {}),
+          ...(symbols && symbols.length > 0
+            ? { relatedSymbols: { hasSome: symbols } }
+            : {}),
           ...(includeSuperseded ? {} : { supersededById: null }),
         },
         orderBy: { createdAt: 'desc' },
@@ -1062,17 +1088,23 @@ async function updateStockFundamentalsTool(input: Record<string, unknown>) {
     if (v !== undefined) data[k] = v;
   }
 
-  // upsert so the agent can also discover and add new tickers (we still
-  // require the symbol; name defaults to the symbol if the row is new).
+  // upsert so the agent can refresh any ticker it's researching. If the
+  // row is new, we create it with onWatchlist=false so this tool can't
+  // be used as a back-door to bypass the user-gated candidate promotion
+  // flow (the screen_universe → user-approve path). To actually put a
+  // name on the watchlist, the user promotes it from /candidates.
   const stock = await prisma.stock.upsert({
     where: { symbol: sym },
     update: data,
-    create: { symbol: sym, name: sym, onWatchlist: true, ...data },
+    create: { symbol: sym, name: sym, onWatchlist: false, ...data },
   });
 
   return {
     symbol: stock.symbol,
-    updatedFields: Object.keys(patch).filter((k) => patch[k as keyof typeof patch] !== undefined),
+    onWatchlist: stock.onWatchlist,
+    updatedFields: Object.keys(patch).filter(
+      (k) => patch[k as keyof typeof patch] !== undefined
+    ),
     lastAnalyzedAt: stock.lastAnalyzedAt,
   };
 }

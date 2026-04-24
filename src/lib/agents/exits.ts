@@ -122,6 +122,30 @@ export async function evaluateExits(userId: string): Promise<ExitAssessment[]> {
   const out: ExitAssessment[] = [];
   const now = Date.now();
 
+  // Pre-fetch latest prices for every held symbol in parallel. The
+  // loop below used to call getLatestPrice serially for each position
+  // whose rules triggered a price-target or tax-harvest check — for a
+  // 30-position portfolio that's 60 sequential Alpaca calls, chewing
+  // through quota + adding seconds of latency. Promise.allSettled
+  // means one symbol's failure doesn't poison the batch; null-on-
+  // failure is already the semantic the callers expected from the
+  // catch(() => null) pattern.
+  const symbolsToPrice = Array.from(
+    new Set(
+      bp
+        .filter((p) => Number(p.qty) > 0)
+        .map((p) => p.symbol)
+    )
+  );
+  const priceResults = await Promise.allSettled(
+    symbolsToPrice.map((s) => getLatestPrice(s))
+  );
+  const priceMap = new Map<string, number | null>();
+  symbolsToPrice.forEach((s, i) => {
+    const r = priceResults[i];
+    priceMap.set(s, r.status === 'fulfilled' ? r.value : null);
+  });
+
   for (const bpos of bp) {
     const symbol = bpos.symbol;
     const qty = Number(bpos.qty);
@@ -145,10 +169,11 @@ export async function evaluateExits(userId: string): Promise<ExitAssessment[]> {
       }
     }
 
-    // Price target (Graham mean-reversion style).
+    // Price target (Graham mean-reversion style). Price is pre-fetched
+    // above in a single concurrent batch to avoid N serial Alpaca calls.
     if (rules.targetSellPct != null && dbPos) {
       const costBasis = Number(dbPos.avgCostCents) / 100;
-      const price = await getLatestPrice(symbol).catch(() => null);
+      const price = priceMap.get(symbol) ?? null;
       if (price != null && costBasis > 0) {
         const gainPct = ((price - costBasis) / costBasis) * 100;
         if (gainPct >= rules.targetSellPct) {
@@ -239,7 +264,8 @@ export async function evaluateExits(userId: string): Promise<ExitAssessment[]> {
       const heldDays = (now - dbPos.openedAt.getTime()) / 86_400_000;
       if (heldDays >= MIN_HARVEST_HELD_DAYS) {
         const avgCostPerShare = Number(dbPos.avgCostCents) / 100;
-        const currentPrice = await getLatestPrice(symbol).catch(() => null);
+        // Reuse the batched price from priceMap — no extra Alpaca call.
+        const currentPrice = priceMap.get(symbol) ?? null;
         if (currentPrice != null && currentPrice > 0 && avgCostPerShare > 0) {
           const unrealizedLossUsd = (avgCostPerShare - currentPrice) * qty;
           if (unrealizedLossUsd >= MIN_HARVEST_LOSS_USD) {
