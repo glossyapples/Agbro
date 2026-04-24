@@ -193,7 +193,7 @@ model Account {
 model Deposit {
   id              String   @id @default(cuid())
   accountId       String
-  account         Account  @relation(fields: [accountId], references: [id])
+  account         Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
   // Client-supplied (UUID). NULL for legacy rows created before idempotency
   // shipped; Postgres unique indexes treat NULLs as distinct by default, so
   // old rows never collide with each other or with new keyed rows.
@@ -243,7 +243,7 @@ model Strategy {
 model StrategyTurn {
   id         String   @id @default(cuid())
   strategyId String
-  strategy   Strategy @relation(fields: [strategyId], references: [id])
+  strategy   Strategy @relation(fields: [strategyId], references: [id], onDelete: Cascade)
   role       String   // "user" | "agent"
   content    String   @db.Text
   createdAt  DateTime @default(now())
@@ -278,7 +278,7 @@ model Trade {
   // 'stock' | 'crypto'. Default keeps all pre-existing rows correct.
   assetClass    String     @default("stock")
   agentRunId    String?
-  agentRun      AgentRun?   @relation(fields: [agentRunId], references: [id])
+  agentRun      AgentRun?   @relation(fields: [agentRunId], references: [id], onDelete: SetNull)
   strategyId    String?
   closedAt      DateTime?
   realizedPnlCents BigInt?  // set when closed
@@ -396,7 +396,7 @@ model AgentRun {
 model AgentDecision {
   id         String   @id @default(cuid())
   agentRunId String
-  agentRun   AgentRun @relation(fields: [agentRunId], references: [id])
+  agentRun   AgentRun @relation(fields: [agentRunId], references: [id], onDelete: Cascade)
   kind       String   // "tool_call" | "thought" | "final"
   payload    Json
   createdAt  DateTime @default(now())
@@ -405,7 +405,7 @@ model AgentDecision {
 model ResearchNote {
   id          String    @id @default(cuid())
   agentRunId  String?
-  agentRun    AgentRun? @relation(fields: [agentRunId], references: [id])
+  agentRun    AgentRun? @relation(fields: [agentRunId], references: [id], onDelete: SetNull)
   symbol      String?
   topic       String
   source      String    // "perplexity" | "google" | "internal" | "claude"
@@ -565,7 +565,7 @@ model Stock {
 model PriceSnapshot {
   id         String   @id @default(cuid())
   symbol     String
-  stock      Stock    @relation(fields: [symbol], references: [symbol])
+  stock      Stock    @relation(fields: [symbol], references: [symbol], onDelete: Restrict)
   at         DateTime @default(now())
   priceCents BigInt
   source     String   @default("alpaca")
