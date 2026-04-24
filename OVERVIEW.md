@@ -11,14 +11,14 @@ AgBro is a paper-trading app modeled as a small **Berkshire-style agentic invest
 ## Stack
 
 - **Framework**: Next.js 14 App Router + TypeScript + Tailwind, mobile-first (iOS PWA)
-- **DB**: Postgres on Railway, Prisma ORM
+- **DB**: Postgres on Railway, Prisma ORM (watchlist authoritative in per-user `UserWatchlist` — the legacy global `Stock` catalog is now read-only cache, ending the multi-tenant leak risk)
 - **LLM**: Claude Opus 4.7 for the agent / meetings / chats · OpenAI gpt-image-2 for comics
 - **Broker**: Alpaca paper trading (free tier, IEX feed)
 - **Data**: SEC EDGAR `companyfacts` for historical fundamentals, Alpaca for prices/bars
 - **Research**: Perplexity + Google Custom Search (both optional, BYOK)
-- **Auth**: Auth.js magic links + operator bypass key
+- **Auth**: Auth.js magic links + operator bypass key (secret passed via POST body + header, never the URL query string)
 - **Credentials**: AES-256-GCM per-record IV, validated master key env var, never logged
-- **Scheduler**: In-process 2-minute cron (Railway-hosted), regime-triggered force-wake on SPY crisis moves
+- **Scheduler**: In-process 2-minute cron (Railway-hosted), regime-triggered force-wake on SPY crisis moves, **multi-replica safe via `SchedulerLease` leader-election row** (TTL'd lease; only the leaseholder runs the tick)
 
 Everything is BYOK on API keys — Anthropic (required), OpenAI (optional for comics), Perplexity + Google (optional for research). User pays providers directly; AgBro doesn't markup.
 
@@ -218,7 +218,7 @@ Bottom nav: Home · Trades · Strategy · Brain · Settings (5 tabs, iOS-optimiz
 ## Testing
 
 - **Vitest** suite, colocated `*.test.ts` files next to source, `node` environment
-- **201 passing tests across 14 files, full suite runs in ~2.5s**
+- **252 passing tests across 19 files, full suite runs in ~4s**
 - `npm test` (watch) · `npm run test:run` (one-shot) · `npm run test:ci` (with v8 coverage)
 - **Phase 1 — pure-function coverage** (shipped):
   - **Pricing math** (`pricing.test.ts`) — cache-aware cost per model tier (Opus/Sonnet/Haiku), env-var rate overrides, unknown-model → 0, rounding
@@ -229,8 +229,13 @@ Bottom nav: Home · Trades · Strategy · Brain · Settings (5 tabs, iOS-optimiz
   - **Cost-summary drag math** (`meetings/cost-summary.test.ts`) — canonical $39.37/wk × $100.1k × 30% → 6.82% drag-on-target math pinned, division-by-zero guards, monotonicity invariants
   - **Cross-cutting concerns** (`api.test.ts`, `ratelimit.test.ts`, `logger.test.ts`, `money.test.ts`, `time.test.ts`, `analyzer.test.ts`, `strategy-diff.test.ts`, `data/sec-edgar.test.ts`) — cron-secret auth, bucket isolation + windowing, log level filtering, currency formatting, ET time helpers, analyzer verdict shape, strategy diff renderer, EDGAR XBRL parsing
 - **Mutation-verified** — four deliberate regressions were reintroduced and confirmed caught: Burry rotation rules, dividend yield filter, MOS superRefine removal, drag-math formula error
+- **Phase 2 — property tests (shipped, fast-check)**:
+  - **`classifyRailVerdict` state machine** (`safety/rails.test.ts`) — extracted pure function (the I/O-coupled `checkKillSwitches` delegates to it) with generative coverage of enable/disable, priority ordering (`daily_loss` > `drawdown` > `data_unavailable`), fail-CLOSED on Alpaca outage, "first trigger wins"
+  - **Fundamentals parser** (`backtest/historical-fundamentals.test.ts`) — `durationDays` round-trip, classifier disjointness + boundary drift guard (80-100 / 350-380 days), `rollingTTM` forward-fill pinned via Visa / off-calendar-filer scenario
+  - **Point-in-time cache key** (`backtest/point-in-time.test.ts`) — determinism, per-scope isolation (pins the parallel-grid-cell fix), price-bucket rounding
+  - **Rate-limit bucket meta-test** (`ratelimit.buckets.test.ts`) — static scan of every `checkLimit()` call site in `src/` asserting the bucket is in the declared union; a typo now fails CI rather than silently bypassing rate limits
+  - **PlaceTradeInput superRefine** (`agents/schemas.property.test.ts`) — generative coverage of the buy-side IV + MOS gate; any buy missing either field is rejected, sells pass without them
 - **Scoped but not yet shipped**:
-  - **Phase 2** — property tests (fast-check) on trade-gate ordering, supersession invariants, equity-series monotonicity, kill-switch state machine
   - **Phase 3** — integration tests with a test DB (`seedBrainForUser` idempotency, `backfillBrainTaxonomy`, `writeBrain` validation, policy-change apply boundary, AgentRun stale-sweep, daily-cap exclusion, cascade FK chain)
   - **Phase 4** — chaos tests with mocked externals (Alpaca/Anthropic/OpenAI/EDGAR failure modes)
 - No UI/component tests, no E2E browser tests — deliberate scope choice for a mobile-first app; Vitest node-environment focuses on the pure logic that matters
@@ -239,9 +244,6 @@ Bottom nav: Home · Trades · Strategy · Brain · Settings (5 tabs, iOS-optimiz
 
 ## What's aspirational / known gaps (honest)
 
-- **Multi-replica scheduler** — duplicates ticks if Railway scales beyond 1 replica (Tier 0 critical)
-- **Global Stock table** — not user-scoped; multi-tenant deploy would leak watchlists between users
-- **Owner-auth secret in URL** — should move to POST body + header
 - **Real ACH in/out** — flagged "coming when live"
 - **Crypto send/receive** — same
 - **No subscription/pricing tier** — BYOK + paper-trading means no revenue path yet
@@ -251,4 +253,4 @@ Bottom nav: Home · Trades · Strategy · Brain · Settings (5 tabs, iOS-optimiz
 
 ---
 
-**TL;DR**: Value-investing paper-trading app that treats itself as a five-to-six-bot "firm" with institutional memory, weekly exec meetings rendered as Mad Magazine comics, a serious safety-rails + defense-in-depth trade gate, six preset strategies + a custom wizard, point-in-time-fundamentals backtesting, rule-based crypto DCA, BYOK on every model provider, a growing brain library you resync from the repo, and a 201-test mutation-verified Vitest suite pinning the critical behaviour invariants.
+**TL;DR**: Value-investing paper-trading app that treats itself as a five-to-six-bot "firm" with institutional memory, weekly exec meetings rendered as Mad Magazine comics, a serious safety-rails + defense-in-depth trade gate, six preset strategies + a custom wizard, point-in-time-fundamentals backtesting, rule-based crypto DCA, BYOK on every model provider, a growing brain library you resync from the repo, and a 252-test mutation-verified Vitest suite (including fast-check property tests on the safety-rail state machine + fundamentals parser + trade-input gate) pinning the critical behaviour invariants.
