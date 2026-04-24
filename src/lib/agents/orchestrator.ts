@@ -37,7 +37,14 @@ const TRUNCATION_MARKER = '\n…[truncated by orchestrator]';
 // Soft-lock window. A run that hasn't terminated within this window is treated
 // as orphaned (process crash mid-run) and ignored by the inflight check. Must
 // be >= the longest we'd expect the orchestrator to take, with headroom.
-const INFLIGHT_STALE_MS = 10 * 60_000; // 10 minutes
+// 30 minutes. A healthy research-heavy run with 16 turns + multiple
+// Perplexity/Google round-trips + fundamentals backfill can legitimately
+// take 15-20 minutes; the previous 10-minute window risked sweeping a
+// live run to 'errored' mid-flight, letting a concurrent trigger spawn
+// a parallel run while the original was still working. 30 minutes is
+// comfortably above observed worst-case without making a truly crashed
+// run linger too long before the next cron can recover.
+const INFLIGHT_STALE_MS = 30 * 60_000;
 
 export class AgentRunInflightError extends Error {
   readonly inflightRunId: string;
