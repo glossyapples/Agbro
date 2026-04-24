@@ -89,17 +89,53 @@ export async function PATCH(
   }
 }
 
-// ─── Bounds validation ──────────────────────────────────────────────────
-// Hard caps on values a meeting can propose. Prevents a
-// hallucinated policyChange from nuking safety rails. Rejects rather
-// than clamps — user should see the rejection and propose something
-// reasonable next meeting.
+// Hard caps on values a meeting can propose. Prevents a hallucinated
+// policyChange from nuking safety rails. Rejects rather than clamps —
+// user sees the rejection and the next meeting proposes something
+// reasonable.
+//
+// We also REJECT kinds that aren't wired to any apply surface. Previously
+// `crypto_config` / `strategy_param` / `universe` passed bounds, then
+// threw at `applyChange`, then surfaced as a 500. That meant a proposal
+// the prompt shouldn't have emitted sat in 'proposed' forever with no
+// user recourse. Now bounds rejects these with a clear 400, and the
+// meeting prompt's allowlist has been tightened in schema.ts so they
+// shouldn't be emitted at all.
+const APPLIABLE_KINDS = new Set(['account', 'cadence']);
+const CADENCE_ALLOWED_KEYS = new Set(['agentCadenceMinutes']);
+const ACCOUNT_ALLOWED_KEYS = new Set([
+  'maxPositionPct',
+  'maxDailyTrades',
+  'minCashReservePct',
+  'maxCryptoAllocationPct',
+  'dailyLossKillPct',
+  'drawdownPauseThresholdPct',
+  'expectedAnnualPct',
+]);
 
 function validateBounds(
   kind: string,
   targetKey: string,
   after: unknown
 ): { ok: true } | { ok: false; reason: string } {
+  if (!APPLIABLE_KINDS.has(kind)) {
+    return {
+      ok: false,
+      reason: `policy-change kind '${kind}' isn't applyable. Strategy rules go through the Strategy Wizard; crypto config lives on /crypto; watchlist changes are user-managed. Reject this proposal — the meeting prompt shouldn't have emitted it.`,
+    };
+  }
+  if (kind === 'cadence' && !CADENCE_ALLOWED_KEYS.has(targetKey)) {
+    return {
+      ok: false,
+      reason: `cadence kind only accepts targetKey=agentCadenceMinutes (got '${targetKey}').`,
+    };
+  }
+  if (kind === 'account' && !ACCOUNT_ALLOWED_KEYS.has(targetKey)) {
+    return {
+      ok: false,
+      reason: `account kind doesn't accept targetKey '${targetKey}'. Allowed: ${[...ACCOUNT_ALLOWED_KEYS].join(', ')}.`,
+    };
+  }
   if (kind === 'cadence' && targetKey === 'agentCadenceMinutes') {
     const v = Number(after);
     if (!Number.isFinite(v) || v < 15 || v > 1440) {
@@ -136,9 +172,6 @@ function validateBounds(
       return { ok: false, reason: 'dailyLossKillPct must be -50..0' };
     }
   }
-  // strategy_param, crypto_config, universe — route through but without
-  // tight numeric bounds for now; they're JSON-shaped and the caller's
-  // own validation handles them.
   return { ok: true };
 }
 
@@ -148,40 +181,17 @@ async function applyChange(
   targetKey: string,
   after: unknown
 ): Promise<void> {
-  if (kind === 'account' || kind === 'cadence') {
-    // Account columns: maxPositionPct, maxDailyTrades, minCashReservePct,
-    // maxCryptoAllocationPct, dailyLossKillPct, agentCadenceMinutes, etc.
-    const allowed = new Set([
-      'maxPositionPct',
-      'maxDailyTrades',
-      'minCashReservePct',
-      'maxCryptoAllocationPct',
-      'dailyLossKillPct',
-      'drawdownPauseThresholdPct',
-      'agentCadenceMinutes',
-      'expectedAnnualPct',
-    ]);
-    if (!allowed.has(targetKey)) {
-      throw new Error(`targetKey ${targetKey} not accepted for account kind`);
-    }
+  // validateBounds already rejected every non-appliable kind and every
+  // targetKey outside the allowed set, so we only need to handle the
+  // two wired paths. A future second edit surface (crypto / strategy
+  // rules / universe) should grow here plus in validateBounds +
+  // schema.ts's allowlist in lockstep.
+  if (kind === 'cadence' || kind === 'account') {
     await prisma.account.update({
       where: { userId },
       data: { [targetKey]: Number(after) } as Record<string, unknown>,
     });
     return;
-  }
-  if (kind === 'crypto_config') {
-    // CryptoConfig targets: dcaAmountCents, dcaCadenceDays, maxAllocationPct, etc.
-    // TODO: enumerate allowed keys as we wire each one.
-    throw new Error('crypto_config policy changes not yet supported — reject for now');
-  }
-  if (kind === 'strategy_param') {
-    // Strategy.rules JSON mutation. Requires surgery on a JSON column;
-    // route through the existing strategy wizard for now.
-    throw new Error('strategy_param policy changes should go through the strategy wizard');
-  }
-  if (kind === 'universe') {
-    throw new Error('universe policy changes not yet supported');
   }
   throw new Error(`unknown policy-change kind: ${kind}`);
 }

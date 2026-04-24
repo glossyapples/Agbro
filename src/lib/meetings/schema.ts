@@ -67,7 +67,11 @@ export type MeetingOutput = {
   // Reject" control per change. The agent will NOT apply these
   // automatically; the user has to opt in.
   policyChanges: Array<{
-    kind: 'strategy_param' | 'crypto_config' | 'account' | 'cadence' | 'universe';
+    // Narrowed to what the apply endpoint actually supports. Strategy /
+    // crypto / universe edits belong on their own surfaces (wizard,
+    // /crypto, candidates page) — surfacing them as policyChange just
+    // produced ghosts that never applied.
+    kind: 'account' | 'cadence';
     targetKey: string;
     before: unknown;
     after: unknown;
@@ -130,11 +134,14 @@ CRITICAL — action items carry over across meetings. The briefing includes \`op
   - Deprioritised → status: 'on_hold' with why
 Only create NEW actionItems when the meeting identifies NEW work — not when an existing item can be updated to cover it.
 
-POLICY CHANGES — the partners may propose adjustments to the firm's risk posture or strategy, shown in \`policyChanges\`. Allowed targets (kind='account' unless noted):
-  • maxPositionPct, maxDailyTrades, minCashReservePct, maxCryptoAllocationPct, dailyLossKillPct, drawdownPauseThresholdPct
-  • agentCadenceMinutes (kind='cadence')
-  • expectedAnnualPct
-  • strategy rules (kind='strategy_param' — routes through the strategy wizard for user review)
+POLICY CHANGES — the partners may propose adjustments to the firm's risk posture, shown in \`policyChanges\`. The SERVER rejects anything outside this allowlist with a 400, so don't emit wider kinds. Allowed:
+  • kind='account', targetKey ∈ { maxPositionPct, maxDailyTrades, minCashReservePct, maxCryptoAllocationPct, dailyLossKillPct, drawdownPauseThresholdPct, expectedAnnualPct }
+  • kind='cadence', targetKey='agentCadenceMinutes'
+
+Things that are NOT policy-changeable from meetings (use actionItems with kind='adjust_strategy' if the partners want the user to revisit them):
+  • Strategy rules — JSON-shaped, goes through the Strategy Wizard for user review.
+  • Crypto config — DCA amount / cadence / presets live on /crypto; user-managed.
+  • Watchlist / universe — user promotes candidates from the Candidates page.
 
 GROUNDING — when a policy-change rationale OR transcript dialogue cites a number (cost per run, weekly spend, drag %, position size, drawdown, yield, etc.), that number MUST come directly from the briefing. NEVER derive ratios in your head — when a ratio is available precomputed, cite IT, not a recalculation.
 
