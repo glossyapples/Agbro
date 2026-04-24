@@ -111,9 +111,13 @@ export async function runSimulation(config: SimulatorConfig): Promise<SimulatorR
   const filtersActive = config.mode === 'tier2' && hasAnyFilter(filterSpec);
   const startMs = config.startDate.getTime();
   const endMs = config.endDate.getTime();
-  // Fresh cache per run — previous runs may have queried different
-  // (symbol, price) combinations that no longer apply.
-  resetPointInTimeCache();
+  // Scope for the module-level point-in-time cache. Unique per call
+  // so parallel grid cells (which all run simulate() concurrently via
+  // Promise.all in the grid route) can't race each other when
+  // resetting the cache — previously any cell's reset wiped every
+  // other cell's entries, causing redundant DB hits.
+  const cacheScope = `sim-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  resetPointInTimeCache(cacheScope);
 
   // Backfill EDGAR historical fundamentals for every universe symbol
   // before we need them. Idempotent: returns immediately if already
@@ -241,8 +245,20 @@ export async function runSimulation(config: SimulatorConfig): Promise<SimulatorR
     const passed: string[] = [];
     for (const sym of config.universe) {
       const price = symbolPrice(sym, day0, symbolBars);
-      if (price == null) continue;
-      const result = await evaluateFilter(sym, decisionDate, price, filterSpec);
+      if (price == null) {
+        // Audit event — previously this branch silently dropped the
+        // symbol from `passed` with no trace, leaving the grid with
+        // fewer holdings than the universe and no explanation. Emit
+        // a data_warning so the UI banner can surface it and the
+        // user can tell "no data" from "filtered out".
+        eventLog.push({
+          date: day0,
+          event: 'data_warning',
+          details: { symbol: sym, reason: 'no_day0_price' },
+        });
+        continue;
+      }
+      const result = await evaluateFilter(sym, decisionDate, price, filterSpec, cacheScope);
       if (result.pass) {
         passed.push(sym);
         eventLog.push({
@@ -334,7 +350,7 @@ export async function runSimulation(config: SimulatorConfig): Promise<SimulatorR
         for (const [sym, pos] of positions) {
           const price = symbolPrice(sym, date, symbolBars);
           if (price == null) continue;
-          const result = await evaluateFilter(sym, decisionDate, price, filterSpec);
+          const result = await evaluateFilter(sym, decisionDate, price, filterSpec, cacheScope);
           // Don't eject on data gaps — pipeline issue, not a signal.
           if (!result.pass && !result.passedWithoutData) {
             toSell.push({ symbol: sym, qty: pos.qty, price, reason: result.reason ?? 'no longer qualifies' });
@@ -368,7 +384,7 @@ export async function runSimulation(config: SimulatorConfig): Promise<SimulatorR
           }
           const price = symbolPrice(sym, date, symbolBars);
           if (price == null || price <= 0) continue;
-          const result = await evaluateFilter(sym, decisionDate, price, filterSpec);
+          const result = await evaluateFilter(sym, decisionDate, price, filterSpec, cacheScope);
           // Only admit on explicit pass with data. passedWithoutData
           // means we couldn't evaluate — don't blind-buy on re-check.
           if (result.pass && !result.passedWithoutData) {

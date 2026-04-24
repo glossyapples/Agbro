@@ -27,9 +27,20 @@ export type PointInTimeFundamentals = {
 
 const memoryCache = new Map<string, PointInTimeFundamentals | null>();
 
-function cacheKey(symbol: string, asOfYmd: string, price: number): string {
+// Scope prefix keeps parallel grid cells from racing each other on a
+// single module-level Map — each cell's reset used to wipe every
+// other in-flight cell's entries. Pass a stable `scope` string (e.g.
+// a runId) through every lookup / reset and the cache becomes
+// per-run-safe without any thread-pool heroics. Missing scope falls
+// back to 'default' so non-grid callers keep their old behaviour.
+function cacheKey(
+  scope: string,
+  symbol: string,
+  asOfYmd: string,
+  price: number
+): string {
   // Round price to cents so micro differences don't blow up cache entries.
-  return `${symbol}|${asOfYmd}|${Math.round(price * 100)}`;
+  return `${scope}|${symbol}|${asOfYmd}|${Math.round(price * 100)}`;
 }
 
 // Look up the latest known fundamentals for a symbol as of `decisionDate`.
@@ -50,10 +61,11 @@ function cacheKey(symbol: string, asOfYmd: string, price: number): string {
 export async function lookupFundamentalsAt(
   symbol: string,
   decisionDate: Date,
-  priceAtDate: number
+  priceAtDate: number,
+  scope: string = 'default'
 ): Promise<PointInTimeFundamentals | null> {
   const ymd = decisionDate.toISOString().slice(0, 10);
-  const key = cacheKey(symbol, ymd, priceAtDate);
+  const key = cacheKey(scope, symbol, ymd, priceAtDate);
   const cached = memoryCache.get(key);
   if (cached !== undefined) return cached;
 
@@ -132,7 +144,8 @@ export async function evaluateFilter(
   symbol: string,
   decisionDate: Date,
   priceAtDate: number,
-  spec: FilterSpec
+  spec: FilterSpec,
+  scope: string = 'default'
 ): Promise<FilterResult> {
   const hasAnyFilter =
     spec.minROE != null ||
@@ -144,11 +157,11 @@ export async function evaluateFilter(
   if (!hasAnyFilter) {
     // Lookup is still useful for the caller (logging), but pass is
     // automatic.
-    const f = await lookupFundamentalsAt(symbol, decisionDate, priceAtDate);
+    const f = await lookupFundamentalsAt(symbol, decisionDate, priceAtDate, scope);
     return { symbol, pass: true, fundamentals: f };
   }
 
-  const f = await lookupFundamentalsAt(symbol, decisionDate, priceAtDate);
+  const f = await lookupFundamentalsAt(symbol, decisionDate, priceAtDate, scope);
   if (!f) {
     return {
       symbol,
@@ -215,6 +228,17 @@ export async function evaluateFilter(
 
 // Reset the in-process cache. Called between distinct backtest runs so
 // a prior run's price-derived P/E doesn't leak into a different run.
-export function resetPointInTimeCache(): void {
-  memoryCache.clear();
+// Reset only the scope's entries so parallel grid cells don't wipe
+// each other's caches. Omit scope (or pass undefined) to clear
+// everything — still useful for test teardown.
+export function resetPointInTimeCache(scope?: string): void {
+  if (!scope) {
+    memoryCache.clear();
+    return;
+  }
+  const prefix = `${scope}|`;
+  for (const key of memoryCache.keys()) {
+    if (key.startsWith(prefix)) memoryCache.delete(key);
+  }
+  return;
 }

@@ -105,18 +105,23 @@ export function resolveRuleset(key: StrategyKey): BacktestRuleset {
         rebalanceCadenceDays: 90,
       };
     case 'burry_deep_research':
-      // No Tier-2 pre-screen. This is the honest backtest approximation
-      // of Burry's actual style — he explicitly ignores P/E, treats D/E
-      // as a read-the-footnotes question rather than a ratio gate, and
-      // buys ROE-poor turnarounds when the balance sheet hides value.
-      // With no gate, the backtest becomes equal-weight buy-and-hold of
-      // the seeded "ick" universe (GEO, BMY, GILD, M, GPS, CVX) — a
-      // crude but faithful proxy for "Burry picks, held". The agent's
-      // live behaviour still uses the deeper rules in the starter-
-      // library strategy row (minFreeCashFlowYieldPct, maxEvEbitda,
-      // preferNetNetWorkingCapital) — those can't run in backtest
-      // without point-in-time FCF/EV data we don't cache.
-      return {};
+      // No Tier-2 pre-screen — Burry ignores P/E, treats D/E as a
+      // read-the-footnotes question, and buys ROE-poor turnarounds
+      // when the balance sheet hides value. But without rotation
+      // rules the backtest was pure equal-weight buy-and-hold of
+      // the day-0 "ick" universe with no exits, which overstates
+      // what Burry actually does: his winners do run for years, but
+      // losers get cut fast. Add a mean-reversion target-sell (25%
+      // is below Graham's 30 since Burry leans on the initial MOS
+      // being deeper) and a 3-year soft time-stop matching the
+      // live strategy's rules.timeStopDays. With these, the backtest
+      // can at least rotate into successor names as exits fire — a
+      // crude but faithful proxy for "Burry picks, held, recycled
+      // when the thesis pays off or ages out."
+      return {
+        targetSellPct: 25,
+        timeStopDays: 1095,
+      };
   }
 }
 
