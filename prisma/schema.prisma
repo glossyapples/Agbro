@@ -42,6 +42,7 @@ model User {
   apiCredentials UserApiCredential[]
   meetings      Meeting[]
   watchlist     UserWatchlist[]
+  governorDecisions GovernorDecision[]
 }
 
 // BYOK — per-user API keys for third-party providers. The raw key is
@@ -404,6 +405,7 @@ model AgentRun {
   decisions     AgentDecision[]
   researchNotes ResearchNote[]
   brainEntries  BrainEntry[]
+  governorDecisions GovernorDecision[]
 
   @@index([userId, startedAt])
 }
@@ -977,4 +979,55 @@ model UserWatchlist {
   @@unique([userId, symbol])
   @@index([userId, onWatchlist])
   @@index([userId, candidateSource])
+}
+
+// Structured audit trail for every pre-trade gate decision the
+// Governor (safety rails + MOS + earnings + wash-sale + wallet +
+// notional + daily-cap + Mandate) makes. One row per call to the
+// gate — approved, rejected, or requires_approval. Powers:
+//   • the /approvals queue (queries requires_approval rows)
+//   • the future behavior-alpha dashboard ("blocked 3 trades this
+//     week, kept $2,400 in reserve, zero wash-sale violations")
+//   • legal audit ("every decision was rule-driven, not LLM whim").
+//
+// NOT the place to log tool-level errors or agent retries; that's
+// AgentDecision + structured logs. This table is exclusively the
+// trade-gate decision trail.
+model GovernorDecision {
+  id               String   @id @default(cuid())
+  userId           String
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  agentRunId       String?
+  agentRun         AgentRun? @relation(fields: [agentRunId], references: [id], onDelete: SetNull)
+
+  // The trade the agent (or user, if we later open a manual path here)
+  // asked for. Keep it flat — this row is the canonical record, not
+  // a pointer into Trade (which may or may not exist depending on
+  // whether the gate approved).
+  symbol             String
+  side               String   // 'buy' | 'sell'
+  qty                Float
+  orderType          String   // 'market' | 'limit'
+  limitPriceCents    BigInt?
+  estimatedCostCents BigInt?
+
+  // The verdict.
+  decision           String   // 'approved' | 'rejected' | 'requires_approval'
+  // Array of reason codes from src/lib/safety/reason-codes.ts. Empty
+  // on approved verdicts; ≥1 on rejected / requires_approval.
+  reasonCodes        String[] @default([])
+  // Human-readable summary (first reason rendered). Stored so legacy
+  // rows don't need the render map replayed to display.
+  userExplanation    String   @db.Text
+
+  // Snapshot fields so the row stays readable if config changes later.
+  autonomyLevel      String
+  governorVersion    String   // semver of the governor module; bump on invariant-affecting changes
+  mandateVersion     String?  // filled in when the Mandate table lands
+
+  createdAt          DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([userId, decision, createdAt])
+  @@index([agentRunId])
 }
