@@ -172,6 +172,20 @@ async function runTickBody(): Promise<TickResult> {
 
   const outcomes: TickOutcome[] = [];
   for (const account of accounts) {
+    // BYOK cost-governor — enforces monthlyApiBudgetUsd by setting
+    // the kill switch when MTD spend crosses 100%. Runs FIRST so
+    // we don't even fetch rails or agent context for a halted user.
+    const { enforceApiBudget } = await import('@/lib/safety/budget');
+    const budget = await enforceApiBudget(account.userId);
+    if (budget.state === 'exceeded') {
+      outcomes.push({
+        userId: account.userId,
+        skipped: true,
+        reason: 'budget_exceeded',
+      });
+      continue;
+    }
+
     // Safety rails — daily loss kill switch + 30-day drawdown
     // threshold. Runs BEFORE trading-hours + cadence checks so that
     // a bad day halts the agent even during a regime-forced wake.

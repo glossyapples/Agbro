@@ -144,6 +144,17 @@ model Account {
   // for audit/history but can't be applied. Useful if the user
   // wants meetings as pure advisory without any write path.
   allowAgentPolicyProposals Boolean @default(true)
+  // BYOK cost-governor budget. Null = alarm disabled (no cap). The
+  // scheduler aggregates AgentRun.costUsd since the start of the
+  // current UTC month; at alarmThresholdPct of the cap a banner
+  // appears on home + email is sent; at 100% the account is paused
+  // with killSwitchReason="BUDGET_EXCEEDED: ..." which clears the
+  // same way every other kill switch does (manual action in
+  // Settings). Raising the budget does NOT auto-resume — user must
+  // clear the kill switch explicitly, same pattern as daily-loss /
+  // drawdown kills.
+  monthlyApiBudgetUsd     Float?   @default(50)
+  budgetAlarmThresholdPct Float    @default(80)
   // Autonomy ladder for agent trade execution:
   //   observe — agent analyzes + meets + writes brain, but every
   //             place_trade call is intercepted upstream of the gate

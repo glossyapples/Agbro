@@ -176,7 +176,8 @@ async function getOverview() {
   const user = await maybeCurrentUser();
   if (!user || !user.account) return null;
 
-  const [recentTrades, lastRun, activeStrategy, notifications, brainLatest, watchlistCount, candidateCount, pendingApprovalCount, chart, upcomingEvents, moodInputs] =
+  const { checkApiBudget } = await import('@/lib/safety/budget');
+  const [recentTrades, lastRun, activeStrategy, notifications, brainLatest, watchlistCount, candidateCount, pendingApprovalCount, chart, upcomingEvents, moodInputs, budgetStatus] =
     await Promise.all([
       prisma.trade.findMany({
         where: { userId: user.id },
@@ -206,6 +207,7 @@ async function getOverview() {
       getInitialChartPayload(user.id),
       getUpcomingEvents({ horizonDays: 14, userId: user.id }),
       getMoodInputs(user.id),
+      checkApiBudget(user.id),
     ]);
 
   // Numeric target (invested principal × (1 + expectedAnnualPct / 100)) for
@@ -224,6 +226,7 @@ async function getOverview() {
     watchlistCount,
     candidateCount,
     pendingApprovalCount,
+    budgetStatus,
     target,
     chart,
     upcomingEvents,
@@ -254,6 +257,7 @@ export default async function OverviewPage() {
     watchlistCount,
     candidateCount,
     pendingApprovalCount,
+    budgetStatus,
     chart,
     upcomingEvents,
     moodInputs,
@@ -330,6 +334,20 @@ export default async function OverviewPage() {
           <p className="mt-1 text-xs">
             The agent has no research universe. Tap here to add tickers or load the 29
             Buffett-style starter stocks in one click.
+          </p>
+        </Link>
+      )}
+
+      {budgetStatus.state === 'warning' && (
+        <Link
+          href="/settings"
+          className="card border border-amber-500/40 bg-amber-500/10 text-sm text-amber-200"
+        >
+          <p className="font-semibold">
+            API budget at {((budgetStatus.mtdUsd / (budgetStatus.budgetUsd || 1)) * 100).toFixed(0)}% (${budgetStatus.mtdUsd.toFixed(2)} of ${budgetStatus.budgetUsd?.toFixed(0)})
+          </p>
+          <p className="mt-1 text-xs text-ink-300">
+            You'll be paused automatically at 100% to prevent surprise bills. Raise the budget in Settings if this is expected.
           </p>
         </Link>
       )}

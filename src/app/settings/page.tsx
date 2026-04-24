@@ -6,10 +6,13 @@ import { DepositForm } from '@/components/DepositForm';
 import { SignOutButton } from '@/components/SignOutButton';
 import { CredentialManager } from '@/components/CredentialManager';
 import { SafetyRailsForm } from '@/components/SafetyRailsForm';
+import { BudgetForm } from '@/components/BudgetForm';
+import { checkApiBudget } from '@/lib/safety/budget';
 
 export default async function SettingsPage() {
   const user = await requirePageUser('/settings');
   const a = user.account!;
+  const budget = await checkApiBudget(user.id);
 
   return (
     <div className="flex flex-col gap-4 p-4">
@@ -61,6 +64,15 @@ export default async function SettingsPage() {
           killSwitchTriggeredAt: a.killSwitchTriggeredAt?.toISOString() ?? null,
           killSwitchReason: a.killSwitchReason,
           allowAgentPolicyProposals: a.allowAgentPolicyProposals,
+        }}
+      />
+
+      <BudgetForm
+        initial={{
+          monthlyApiBudgetUsd: a.monthlyApiBudgetUsd,
+          budgetAlarmThresholdPct: a.budgetAlarmThresholdPct,
+          mtdUsd: budget.mtdUsd,
+          state: budget.state,
         }}
       />
 
