@@ -1,9 +1,12 @@
 'use client';
 
-// Action items from meetings — each row has a status pill and a
-// context-sensitive "Execute now" button for research items. Users
-// can manually cycle status (started ↔ on_hold ↔ completed ↔ blocked)
-// via the pill menu for the non-executable types.
+// Action items from meetings. Each row has a status pill + a status
+// switcher (started ↔ on_hold ↔ completed ↔ blocked). No "Execute now"
+// button — the orchestrator's priorities loop already picks up every
+// research + review_position item with status='started' on the next
+// wake, so keeping an execute action would either duplicate work or
+// mislead the user about what the button does. Status transitions are
+// the user's lever.
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -18,30 +21,30 @@ type ActionItem = {
   meetingAt: string;
 };
 
-const KIND_META: Record<string, { label: string; executable: boolean; detail: string }> = {
+const KIND_META: Record<string, { label: string; autoExec: boolean; detail: string }> = {
   research: {
     label: 'Research',
-    executable: true,
-    detail: 'Force the agent to research this on its next wake',
+    autoExec: true,
+    detail: 'Auto-queued for the agent while status is "started". Mark on_hold to pause it.',
   },
   adjust_strategy: {
     label: 'Adjust strategy',
-    executable: false,
+    autoExec: false,
     detail: 'Pending user decision via the linked PolicyChange',
   },
   review_position: {
     label: 'Review position',
-    executable: true,
-    detail: 'Flag for the evaluator on the next wake',
+    autoExec: true,
+    detail: 'Auto-queued for the exit evaluator while status is "started". Mark on_hold to pause it.',
   },
   wait_for_data: {
     label: 'Wait for data',
-    executable: false,
+    autoExec: false,
     detail: 'Passive — resolves when the data arrives',
   },
   note: {
     label: 'Note',
-    executable: false,
+    autoExec: false,
     detail: 'Informational only',
   },
 };
@@ -79,24 +82,12 @@ export function ActionItemsList({ items }: { items: ActionItem[] }) {
     }
   }
 
-  async function execute(id: string) {
-    setBusyId(id);
-    try {
-      await fetch(`/api/meetings/action-items/${id}/execute`, {
-        method: 'POST',
-      });
-      router.refresh();
-    } finally {
-      setBusyId(null);
-    }
-  }
-
   return (
     <ul className="flex flex-col divide-y divide-ink-700/60">
       {items.map((item) => {
         const meta = KIND_META[item.kind] ?? {
           label: item.kind,
-          executable: false,
+          autoExec: false,
           detail: '',
         };
         const statusClass = STATUS_COLORS[item.status] ?? 'pill';
@@ -110,22 +101,17 @@ export function ActionItemsList({ items }: { items: ActionItem[] }) {
                     {item.status.replace('_', ' ')}
                   </span>
                   <span className="pill">{meta.label}</span>
+                  {meta.autoExec && item.status === 'started' && (
+                    <span className="pill-good text-[9px] uppercase tracking-wider">
+                      queued
+                    </span>
+                  )}
                 </div>
                 <p className="mt-1 text-[12px] text-ink-100">{item.description}</p>
                 <p className="mt-0.5 text-[10px] text-ink-500">{meta.detail}</p>
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-1.5">
-              {meta.executable && item.status === 'started' && (
-                <button
-                  type="button"
-                  onClick={() => execute(item.id)}
-                  disabled={busy}
-                  className="btn-primary text-[10px]"
-                >
-                  {busy ? '…' : 'Execute on next wake'}
-                </button>
-              )}
               {(['started', 'on_hold', 'completed', 'blocked'] as const).map((s) => (
                 <button
                   key={s}
