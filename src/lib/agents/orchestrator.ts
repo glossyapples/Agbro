@@ -72,6 +72,19 @@ export async function runAgent(args: RunAgentArgs): Promise<RunAgentResult> {
   if (account.isPaused) {
     return skipRun(args.userId, args.trigger, 'account_paused');
   }
+  // Kill-switch gate — the cron path already runs checkKillSwitches
+  // before dispatching, but the manual /api/agents/run path previously
+  // skipped it, letting a user "Run now" click through to a halted
+  // account whose isPaused flag hadn't been re-set. Checking the
+  // persisted trigger fields here means every run-start honours the
+  // halt, regardless of how it was invoked.
+  if (account.killSwitchTriggeredAt != null) {
+    return skipRun(
+      args.userId,
+      args.trigger,
+      `kill_switch_active: ${account.killSwitchReason ?? 'unspecified'}`.slice(0, 200)
+    );
+  }
 
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY missing');
@@ -248,10 +261,16 @@ export async function runAgent(args: RunAgentArgs): Promise<RunAgentResult> {
         if (truncated) {
           log.warn('agent.tool_output_truncated', { tool: use.name, bytes: serialized.length });
         }
+        // Deep-convert bigints in the output before Prisma sees it.
+        // Previously `output: result` went into InputJsonValue raw, and
+        // any nested bigint (e.g. evaluate_exits' unrealizedLossCents)
+        // crashed the agentDecision insert. Re-parsing the already-
+        // bigint-safe serialized form guarantees a JSON-clean object.
+        const safeResultForStorage = JSON.parse(serialized);
         const decisionPayload = {
           name: use.name,
           input: use.input,
-          output: result,
+          output: safeResultForStorage,
           isError,
           truncated,
           outputBytes: serialized.length,

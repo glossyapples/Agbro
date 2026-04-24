@@ -735,11 +735,26 @@ async function placeTradeTool(ctx: ToolContext, input: Record<string, unknown>) 
           alpacaCashCents: broker.cashCents,
           walletBalanceCents: acct.walletBalanceCents,
         });
-        // Estimate order cost: use the last price if we have it. No price
-        // means we can't pre-check — let Alpaca be the arbiter.
-        const price = await getLatestPrice(symbol).catch(() => null);
-        if (price != null && price > 0) {
-          const estimatedCostCents = BigInt(Math.round(price * p.qty * 100));
+        // Estimate order cost. Prefer live price; fall back to the
+        // limit price on limit orders so the notional cap can still
+        // apply. If we have neither, fail CLOSED on buys — previously
+        // the whole wallet + notional check block was nested inside
+        // `if (price != null)`, so a failed price fetch silently
+        // bypassed both gates and let an uncapped order through to
+        // Alpaca.
+        const livePrice = await getLatestPrice(symbol).catch(() => null);
+        const priceForEstimate =
+          livePrice != null && livePrice > 0
+            ? livePrice
+            : p.orderType === 'limit' &&
+              typeof p.limitPrice === 'number' &&
+              p.limitPrice > 0
+              ? p.limitPrice
+              : null;
+        if (priceForEstimate != null) {
+          const estimatedCostCents = BigInt(
+            Math.round(priceForEstimate * p.qty * 100)
+          );
           if (estimatedCostCents > spendable.spendableCents) {
             log.info('trade.blocked_by_wallet', {
               userId: ctx.userId,
@@ -753,9 +768,8 @@ async function placeTradeTool(ctx: ToolContext, input: Record<string, unknown>) 
             );
           }
           // Per-trade notional kill: defensive cap on absolute dollar
-          // amount regardless of portfolio size. Protects against a
-          // bad price fetch or runaway sizing math. Only applies to
-          // buys — sells reduce exposure so we don't cap their size.
+          // amount regardless of portfolio size. Only applies to buys —
+          // sells reduce exposure so we don't cap their size.
           if (p.side === 'buy') {
             const { checkTradeNotional } = await import('@/lib/safety/rails');
             const notional = await checkTradeNotional(ctx.userId, estimatedCostCents);
@@ -768,16 +782,29 @@ async function placeTradeTool(ctx: ToolContext, input: Record<string, unknown>) 
               throw new Error(`place_trade: ${notional.reason}. Raise maxTradeNotionalCents in Settings or split the order.`);
             }
           }
+        } else if (p.side === 'buy') {
+          // No price for estimation: fail closed on buys so the
+          // notional cap can't be silently bypassed by a data-feed
+          // hiccup. Sells still fall through (they reduce exposure).
+          log.info('trade.blocked_no_price_for_cap', {
+            userId: ctx.userId,
+            symbol,
+            orderType: p.orderType,
+          });
+          throw new Error(
+            `place_trade: cannot estimate order cost for ${symbol} (live price unavailable, no limit price supplied). Retry when market data is healthy, or submit as a limit order so the per-trade notional cap has a price to check against.`
+          );
         }
       }
     } catch (walletErr) {
-      // Only re-throw the wallet-specific or notional-specific blocks.
-      // Anything else (Alpaca hiccup, DB glitch) falls through to the
-      // broker call which will be authoritative.
+      // Only re-throw the explicit rail throws. Anything else (Alpaca
+      // hiccup reading the broker account, DB glitch) falls through to
+      // the broker call which will be authoritative.
       if (
         walletErr instanceof Error &&
         (walletErr.message.startsWith('place_trade: insufficient') ||
-          walletErr.message.startsWith('place_trade: trade notional'))
+          walletErr.message.startsWith('place_trade: trade notional') ||
+          walletErr.message.startsWith('place_trade: cannot estimate'))
       ) {
         throw walletErr;
       }

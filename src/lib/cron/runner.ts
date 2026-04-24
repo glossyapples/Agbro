@@ -132,7 +132,14 @@ export async function runScheduledTick(): Promise<TickResult> {
     // a bad day halts the agent even during a regime-forced wake.
     const safety = await checkKillSwitches(account.userId);
     if (!safety.ok) {
-      await applyKillSwitch(account.userId, safety.reason);
+      // data_unavailable means the Alpaca-sourced check couldn't
+      // complete — treat as a transient skip, NOT a persisted trip.
+      // Next tick retries. Real trips (daily_loss / drawdown / other)
+      // persist via applyKillSwitch so they survive restarts and
+      // require manual clear.
+      if (safety.triggeredBy !== 'data_unavailable') {
+        await applyKillSwitch(account.userId, safety.reason);
+      }
       outcomes.push({
         userId: account.userId,
         skipped: true,

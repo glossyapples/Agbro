@@ -20,7 +20,21 @@ import { log } from '@/lib/logger';
 
 export type RailVerdict =
   | { ok: true }
-  | { ok: false; reason: string; triggeredBy: 'daily_loss' | 'drawdown' | 'trade_notional' | 'other' };
+  | {
+      ok: false;
+      reason: string;
+      // 'data_unavailable' signals a transient safety-check failure
+      // (e.g. Alpaca 5xx) — caller should SKIP this tick without
+      // persisting a kill-switch trip, so the next tick can retry.
+      // The other variants are real trips and should persist via
+      // applyKillSwitch.
+      triggeredBy:
+        | 'daily_loss'
+        | 'drawdown'
+        | 'trade_notional'
+        | 'data_unavailable'
+        | 'other';
+    };
 
 // ─── Kill-switch gate for the scheduler ────────────────────────────────
 // Called once per user per tick, BEFORE runAgent. Two independent checks:
@@ -43,10 +57,20 @@ export async function checkKillSwitches(userId: string): Promise<RailVerdict> {
     };
   }
 
+  // Track whether the Alpaca-sourced checks were actually evaluated.
+  // If a rail is enabled but its fetch fails, we return
+  // triggeredBy:'data_unavailable' so the scheduler SKIPS this tick
+  // rather than flying blind — used to fail open, which meant during
+  // an Alpaca outage (which correlates with market stress) the agent
+  // kept trading uncapped. Retry on the next tick.
+  const rails: string[] = [];
+  let dataUnavailable = false;
+
   // Daily P&L check. Uses Alpaca portfolio-history 1D range — same
   // data source as the home-page chart, so "what the user sees" and
   // "what triggers the kill" stay aligned.
   if (account.dailyLossKillPct && account.dailyLossKillPct < 0) {
+    rails.push('daily_loss');
     try {
       const dayBars = await getPortfolioHistory('1D');
       if (dayBars.length >= 2) {
@@ -62,8 +86,7 @@ export async function checkKillSwitches(userId: string): Promise<RailVerdict> {
         }
       }
     } catch (err) {
-      // Fail-open on data errors — a broken Alpaca call shouldn't
-      // silently halt trading. Log it so the operator notices.
+      dataUnavailable = true;
       log.warn('safety.daily_loss_fetch_failed', { userId, err: (err as Error).message });
     }
   }
@@ -71,6 +94,7 @@ export async function checkKillSwitches(userId: string): Promise<RailVerdict> {
   // Drawdown from 30-day high. Also Alpaca-sourced so the trigger
   // matches what the user would compute by eyeballing the chart.
   if (account.drawdownPauseThresholdPct && account.drawdownPauseThresholdPct < 0) {
+    rails.push('drawdown');
     try {
       const monthBars = await getPortfolioHistory('1M');
       if (monthBars.length >= 2) {
@@ -91,8 +115,24 @@ export async function checkKillSwitches(userId: string): Promise<RailVerdict> {
         }
       }
     } catch (err) {
+      dataUnavailable = true;
       log.warn('safety.drawdown_fetch_failed', { userId, err: (err as Error).message });
     }
+  }
+
+  // At least one enabled rail couldn't run because Alpaca threw — fail
+  // CLOSED for this tick. The scheduler treats this as a skip (not a
+  // persisted trip), so the next tick retries. If Alpaca is down for
+  // hours, the agent stays quiet for hours — that's the correct
+  // behaviour during a data-feed outage.
+  if (dataUnavailable && rails.length > 0) {
+    return {
+      ok: false,
+      reason: `Safety-check data unavailable (Alpaca fetch failed for ${rails.join(
+        ' + '
+      )}). Skipping this tick to avoid trading blind.`,
+      triggeredBy: 'data_unavailable',
+    };
   }
 
   return { ok: true };
