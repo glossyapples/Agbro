@@ -95,10 +95,20 @@ async function StrategyTab({ userId }: { userId: string }) {
     select: { tags: true },
   });
   const onboardedStrategyIds = new Set<string>();
+  // Per-strategy hypothesis counts so the card can link to /brain
+  // with a count badge when Burrybot has written something — both
+  // self-tests the write (if the link appears, entries exist) and
+  // solves the "where are my hypotheses?" discoverability gap.
+  const hypothesisCountByStrategyId = new Map<string, number>();
   for (const row of onboardedTags) {
     for (const t of row.tags) {
       if (t.startsWith('onboard-')) {
-        onboardedStrategyIds.add(t.slice('onboard-'.length));
+        const sid = t.slice('onboard-'.length);
+        onboardedStrategyIds.add(sid);
+        hypothesisCountByStrategyId.set(
+          sid,
+          (hypothesisCountByStrategyId.get(sid) ?? 0) + 1
+        );
       }
     }
   }
@@ -150,6 +160,18 @@ async function StrategyTab({ userId }: { userId: string }) {
                   strategyName={s.name}
                   alreadyFormed={onboardedStrategyIds.has(s.id)}
                 />
+                {(hypothesisCountByStrategyId.get(s.id) ?? 0) > 0 && (
+                  <Link
+                    href="/brain?category=hypothesis"
+                    className="mt-1 self-start text-[11px] text-brand-400 hover:underline"
+                  >
+                    View {hypothesisCountByStrategyId.get(s.id)} Burrybot
+                    {(hypothesisCountByStrategyId.get(s.id) ?? 0) === 1
+                      ? ' hypothesis'
+                      : ' hypotheses'}{' '}
+                    →
+                  </Link>
+                )}
                 <AskBurrybotChat
                   strategyId={s.id}
                   strategyName={s.name}

@@ -25,7 +25,12 @@ export function AskBurrybotChat({
   const endRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    if (open) endRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (!open) return;
+    // block:'nearest' stays inside the scroll container (see the
+    // overflow-y-auto wrapper below) instead of bubbling to the page.
+    // Without this + the wrapper, every message sent or received
+    // yanked the page's scroll position.
+    endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }, [messages, open]);
 
   async function send() {
@@ -115,24 +120,37 @@ export function AskBurrybotChat({
           own doctrine.
         </p>
       ) : (
-        <ul className="flex flex-col gap-2">
-          {messages.map((m, i) => (
-            <li
-              key={i}
-              className={`rounded-md p-2 text-[11px] leading-relaxed ${
-                m.role === 'user'
-                  ? 'border border-brand-500/30 bg-brand-500/10 text-ink-100'
-                  : 'border border-ink-700/50 bg-ink-900/60 text-ink-200'
-              }`}
-            >
-              <p className="mb-1 text-[9px] font-semibold uppercase tracking-wide text-ink-500">
-                {m.role === 'user' ? 'You' : 'Burrybot'}
-              </p>
-              <pre className="whitespace-pre-wrap break-words font-sans">{m.content}</pre>
-            </li>
-          ))}
-          <div ref={endRef} />
-        </ul>
+        // Fixed-height scroll container — without this, the
+        // scrollIntoView below reaches up to the document and pulls
+        // the entire page down every time a message lands, losing the
+        // user's scroll position. The inner `<ul>` owns the scrollbar,
+        // so scrollIntoView only moves this container's scrollTop.
+        <div
+          className="max-h-[60vh] overflow-y-auto rounded-md border border-ink-700/40 bg-ink-950/40 p-1"
+          // Prevent the parent page from scrolling when the inner list
+          // bottoms out or tops out — iOS Safari scroll-chains by
+          // default; overscroll-contain keeps the momentum local.
+          style={{ overscrollBehavior: 'contain' }}
+        >
+          <ul className="flex flex-col gap-2">
+            {messages.map((m, i) => (
+              <li
+                key={i}
+                className={`rounded-md p-2 text-[11px] leading-relaxed ${
+                  m.role === 'user'
+                    ? 'border border-brand-500/30 bg-brand-500/10 text-ink-100'
+                    : 'border border-ink-700/50 bg-ink-900/60 text-ink-200'
+                }`}
+              >
+                <p className="mb-1 text-[9px] font-semibold uppercase tracking-wide text-ink-500">
+                  {m.role === 'user' ? 'You' : 'Burrybot'}
+                </p>
+                <pre className="whitespace-pre-wrap break-words font-sans">{m.content}</pre>
+              </li>
+            ))}
+            <div ref={endRef} />
+          </ul>
+        </div>
       )}
 
       {error && (

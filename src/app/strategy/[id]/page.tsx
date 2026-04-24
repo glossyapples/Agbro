@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { prisma } from '@/lib/db';
 import { requirePageUser } from '@/lib/auth';
@@ -13,7 +14,13 @@ export default async function StrategyDetail({ params }: { params: { id: string 
 
   return (
     <div className="flex flex-col gap-4 p-4">
-      <header className="pt-2">
+      <Link
+        href="/strategy"
+        className="self-start text-xs text-brand-400 hover:underline"
+      >
+        ← Back to strategies
+      </Link>
+      <header className="pt-1">
         <h1 className="text-xl font-semibold">{strategy.name}</h1>
         <p className="text-xs text-ink-400">
           v{strategy.version} · Buffett-fit {strategy.buffettScore}/100 ·{' '}

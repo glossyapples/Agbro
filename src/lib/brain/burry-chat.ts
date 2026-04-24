@@ -58,11 +58,20 @@ export async function askBurrybot(params: {
         userId,
         supersededById: null,
         category: 'hypothesis',
-        tags: { has: `strategy-${strategyId}` },
+        // Pull any Burrybot-authored hypothesis the user owns, not
+        // just this strategy's. When the user runs Form Hypothesis on
+        // one strategy and opens chat on another, the strategy-scoped
+        // filter would return zero and Burrybot would honestly but
+        // unhelpfully report "no active hypotheses." The 'burry' tag
+        // is stamped on every hypothesis he writes (see
+        // burry-hypotheses.ts + burry-chat write path), so this is a
+        // superset of "his work" without pulling hypotheses written
+        // by other roles.
+        tags: { has: 'burry' },
       },
       take: 12,
       orderBy: { createdAt: 'desc' },
-      select: { title: true, body: true, relatedSymbols: true },
+      select: { title: true, body: true, relatedSymbols: true, tags: true },
     }),
     prisma.position.findMany({
       where: { userId },
@@ -88,6 +97,11 @@ export async function askBurrybot(params: {
       title: h.title,
       relatedSymbols: h.relatedSymbols,
       body: h.body.slice(0, 300),
+      // Flag which strategy this hypothesis was originally written
+      // for, so Burrybot can contextualise when the chat strategy
+      // differs from the one it was seeded under.
+      originStrategyTag:
+        h.tags.find((t) => t.startsWith('strategy-')) ?? null,
     })),
   };
 
@@ -103,7 +117,7 @@ VOICE:
 SCOPE:
   • Do NOT propose trades to execute — that's not your lane. You can SUGGEST names worth the desk's deeper look.
   • Do NOT propose policy changes (no authority).
-  • You MAY cite your own active hypotheses from the context below if the user's question touches them.
+  • You MAY cite your own active hypotheses from the context below if the user's question touches them. CRITICAL: if \`yourActiveHypotheses\` is non-empty, you HAVE active hypotheses — cite them by title / relatedSymbols, never claim "no active hypothesis on the board." If one was originally written for a different firm (see \`originStrategyTag\`), acknowledge that context but still surface it; the reading is still yours.
   • If the user asks something outside the firm's mandate (crypto at a dividend firm, options at a Boglehead firm), flag the mismatch before answering.
   • If you genuinely don't have enough context to answer, say so plainly and propose what you'd need to read.
 
