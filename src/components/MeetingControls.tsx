@@ -136,13 +136,21 @@ function pollForComic(meetingId: string, router: ReturnType<typeof useRouter>) {
   const start = Date.now();
   const MAX_MS = 120_000;
   const INTERVAL_MS = 4_000;
+  const FIRST_POLL_MS = 2_000;
+  const expired = () => Date.now() - start > MAX_MS;
   const poll = async () => {
+    if (expired()) return;
     try {
       const res = await fetch(`/api/meetings/${meetingId}/comic-status`, {
         cache: 'no-store',
       });
-      if (!res.ok) return;
-      const body = (await res.json()) as {
+      // Transient non-200 (5xx, auth hiccup) — retry on the normal
+      // interval until expiry, don't bail the whole poll.
+      if (!res.ok) {
+        setTimeout(poll, INTERVAL_MS);
+        return;
+      }
+      const body = (await res.json().catch(() => ({}))) as {
         comicUrl?: string | null;
         comicError?: string | null;
       };
@@ -150,21 +158,18 @@ function pollForComic(meetingId: string, router: ReturnType<typeof useRouter>) {
         router.refresh();
         return; // done
       }
-      if (Date.now() - start > MAX_MS) {
-        // Give up polling — user can hit Generate comic manually if
-        // the fire-and-forget silently died.
-        return;
-      }
+      // Empty body (comic still pending) → keep polling until expiry.
       setTimeout(poll, INTERVAL_MS);
     } catch {
-      // Network blip — try again next interval.
-      if (Date.now() - start < MAX_MS) {
-        setTimeout(poll, INTERVAL_MS);
-      }
+      // Network blip — try again next interval unless expired.
+      setTimeout(poll, INTERVAL_MS);
     }
   };
-  // First poll after a short delay; comic gen typically takes 15-60s.
-  setTimeout(poll, 8_000);
+  // Comic now runs in-band inside the meeting POST, so the first poll
+  // fires sooner — the common case is "already done, stop on first
+  // tick". Keep the interval for the edge case where the server bailed
+  // early (process restart, OpenAI timeout beyond the route budget).
+  setTimeout(poll, FIRST_POLL_MS);
 }
 
 // Subtle "danger zone" action — wipes all meetings + action items +

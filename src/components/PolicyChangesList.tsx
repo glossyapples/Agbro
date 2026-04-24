@@ -90,11 +90,11 @@ export function PolicyChangesList({
                   <p className="mt-1 text-ink-200">{p.rationale}</p>
                   <p className="mt-1.5 text-[11px] text-ink-400">
                     <span className="line-through text-ink-500">
-                      {formatValue(p.before)}
+                      {formatValue(p.before, p.targetKey)}
                     </span>
                     <span className="mx-1.5">→</span>
                     <span className="font-semibold text-brand-300">
-                      {formatValue(p.after)}
+                      {formatValue(p.after, p.targetKey)}
                     </span>
                   </p>
                   <p className="mt-0.5 text-[10px] text-ink-500">
@@ -134,9 +134,19 @@ export function PolicyChangesList({
   );
 }
 
-function formatValue(v: unknown): string {
+// Unit-aware formatter. The agent emits raw numbers; without a unit
+// hint the diff read as "12 → 8" which is ambiguous — is that 12% →
+// 8%, 12 minutes → 8 minutes, $12 → $8? The targetKey tells us which.
+// Falls back to the old stringification for keys we don't recognise.
+function formatValue(v: unknown, targetKey?: string): string {
   if (v === null || v === undefined) return '—';
-  if (typeof v === 'number') return String(v);
+  if (typeof v === 'number') {
+    const k = targetKey ?? '';
+    if (k.endsWith('Pct') || k === 'expectedAnnualPct') return `${v}%`;
+    if (k === 'agentCadenceMinutes') return `${v} min`;
+    if (k.endsWith('Cents')) return `$${(v / 100).toLocaleString()}`;
+    return String(v);
+  }
   if (typeof v === 'boolean') return v ? 'true' : 'false';
   if (typeof v === 'string') return v;
   try {

@@ -387,7 +387,12 @@ function SaveComicButton({
       setError(`${stage} step failed: ${msg}. Long-press the image instead to save.`);
     } finally {
       setBusy(false);
-      if (toast) setTimeout(() => setToast(null), 2500);
+      // Always arm the auto-clear. The previous `if (toast)` check read
+      // the toast value captured at function-entry (always null since
+      // `save` starts with setToast(null)), so the auto-dismiss never
+      // fired and success toasts stayed on screen forever. Unconditional
+      // timeout is cheap and covers both success + no-op paths.
+      setTimeout(() => setToast(null), 2500);
     }
   }
 

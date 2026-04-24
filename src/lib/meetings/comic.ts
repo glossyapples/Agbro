@@ -14,6 +14,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { prisma } from '@/lib/db';
 import { log } from '@/lib/logger';
+import { estimateCostUsd } from '@/lib/pricing';
 import type { MeetingOutput } from './schema';
 import {
   castForStrategyKey,
@@ -286,9 +287,22 @@ async function writeComicScript(params: {
     mood: string;
     prompt: string;
   };
-  const costUsd =
-    ((resp.usage?.input_tokens ?? 0) / 1_000_000) * 15 +
-    ((resp.usage?.output_tokens ?? 0) / 1_000_000) * 75;
+  // Delegate to the shared pricing module so cache-aware rates apply
+  // if/when we add cache_control to the script call. Previously
+  // hardcoded $15/$75 per-Mtok here, which would have drifted silently
+  // from the runner's own math the moment we started caching.
+  const usage = resp.usage as unknown as {
+    input_tokens?: number;
+    output_tokens?: number;
+    cache_read_input_tokens?: number;
+    cache_creation_input_tokens?: number;
+  } | undefined;
+  const costUsd = estimateCostUsd(SCRIPT_MODEL, {
+    inputTokens: usage?.input_tokens ?? 0,
+    outputTokens: usage?.output_tokens ?? 0,
+    cacheReadTokens: usage?.cache_read_input_tokens ?? 0,
+    cacheWriteTokens: usage?.cache_creation_input_tokens ?? 0,
+  });
   return { ...parsed, costUsd };
 }
 
