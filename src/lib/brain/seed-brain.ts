@@ -221,24 +221,30 @@ export async function missingStarterStrategySlugs(userId: string): Promise<strin
   ).map((s) => s.slug);
 }
 
-// One-shot taxonomy backfill. After the schema added category +
-// confidence with defaults of memory/medium, any pre-existing row whose
-// kind unambiguously belongs to a different bucket (principle,
-// checklist, pitfall, crisis_playbook, sector_primer, case_study) is
-// sitting on the wrong label. The seed re-sync fixes the 30+ canonical
-// rows; this helper catches hand-written or legacy entries the user may
-// have with a matching kind. Safe to run on every sync — it only
-// touches rows whose category is still the default AND whose kind has
-// a non-default mapping.
+// Taxonomy backfill — re-label any row whose (category, confidence)
+// disagrees with the canonical map for its kind. Originally gated on
+// category='memory' because that was the schema default, but that
+// silently left rows with a different stale category (e.g. a legacy
+// 'note'-categorised pitfall, or a hand-written principle that landed
+// with the wrong confidence) alone. Now we fetch every row and update
+// only when kind has an authoritative mapping AND the current values
+// differ — so the update count is tight and users running sync
+// repeatedly don't thrash uninvolved rows.
 export async function backfillBrainTaxonomy(userId: string): Promise<number> {
   const rows = await prisma.brainEntry.findMany({
-    where: { userId, category: 'memory' },
-    select: { id: true, kind: true },
+    where: { userId },
+    select: { id: true, kind: true, category: true, confidence: true },
   });
   let fixed = 0;
   for (const row of rows) {
     const taxonomy = BRAIN_KIND_TAXONOMY[row.kind];
-    if (!taxonomy || taxonomy.category === 'memory') continue;
+    if (!taxonomy) continue;
+    if (
+      row.category === taxonomy.category &&
+      row.confidence === taxonomy.confidence
+    ) {
+      continue;
+    }
     await prisma.brainEntry.update({
       where: { id: row.id },
       data: {

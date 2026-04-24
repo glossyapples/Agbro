@@ -71,15 +71,20 @@ export function resolveRuleset(key: StrategyKey): BacktestRuleset {
         maxDE: 1.5,
       };
     case 'dividend_growth':
-      // Aristocrats-style bar — moderate ROE, modest leverage, meaningful
-      // yield. The live strategy's 25-year-streak requirement can't be
-      // evaluated from EDGAR alone (requires dividend history data);
-      // we approximate via minDividendYieldPct.
+      // Aristocrats-style bar — moderate ROE, modest leverage. The live
+      // strategy's 25-year-streak + yield requirement CAN'T be evaluated
+      // from cached fundamentals: historical-fundamentals.ts deliberately
+      // stores dividendYield=null because deriving it requires point-in-
+      // time dividend events we don't cache (would need Alpaca corp-
+      // actions). Leaving minDividendYieldPct=2 in here meant every
+      // symbol failed the filter ("passedWithoutData" was the only path
+      // in) — silent garbage backtests. Live trading enforces yield
+      // against real-time Alpaca data; backtest falls back to ROE +
+      // leverage as the closest proxy for durable-payer quality.
       return {
         minROE: 12,
         maxPE: 25,
         maxDE: 2,
-        minDividendYieldPct: 2,
       };
     case 'deep_value_graham':
       // Target sell at +30% from cost, hard time stop at 730 days.
