@@ -117,10 +117,27 @@ CONTEXT PACK (snapshot of the firm + your brain as of this conversation):
 ${JSON.stringify(contextBlock, null, 2)}`;
 
   const client = new Anthropic({ apiKey });
+  // Prompt caching — the system block is long (doctrine + active
+  // hypotheses + positions + regime, ~2-3k tokens) and identical
+  // across every turn of a chat. Marking it with
+  // `cache_control: ephemeral` makes turns 2+ within the 5-min cache
+  // window read it at $1.50/MTok (Opus cache-read) instead of $15/MTok
+  // (input). First turn pays a one-time write premium; from turn 2 on
+  // the per-turn cost drops to primarily the user message + response.
   const resp = await client.messages.create({
     model: MODEL,
     max_tokens: MAX_TOKENS,
-    system,
+    // cache_control is GA on the main messages endpoint but the SDK
+    // 0.30.1 types only surface it on the /beta endpoints. The runtime
+    // shape below is correct; the cast bypasses stale SDK types.
+    // See: https://docs.anthropic.com/en/docs/prompt-caching
+    system: [
+      {
+        type: 'text',
+        text: system,
+        cache_control: { type: 'ephemeral' },
+      },
+    ] as unknown as string,
     messages: history.map((m) => ({ role: m.role, content: m.content })),
   });
   const text = resp.content

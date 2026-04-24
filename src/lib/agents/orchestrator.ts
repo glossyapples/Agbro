@@ -184,13 +184,27 @@ export async function runAgent(args: RunAgentArgs): Promise<RunAgentResult> {
 
   const totalUsage: TokenUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
 
+  // Prompt caching — the system prompt (~5k tokens) + tool definitions
+  // (~1.2k tokens) are static across every turn of every run. Marking
+  // the last tool with `cache_control: ephemeral` caches the entire
+  // request prefix (system + all tools) so turns 2+ and subsequent
+  // runs within the 5-min window read it at $1.50/MTok (Opus cache-
+  // read) instead of $15/MTok (input). Typical calm run saves 60-70%
+  // on input cost; first turn pays the one-time write premium
+  // ($18.75/MTok) and breaks even after one cache hit.
+  const cachedTools: Anthropic.Tool[] = TOOL_DEFS.map((t, i, arr) =>
+    i === arr.length - 1
+      ? ({ ...t, cache_control: { type: 'ephemeral' as const } } as Anthropic.Tool)
+      : t
+  );
+
   try {
     for (let turn = 0; turn < MAX_TURNS; turn++) {
       const resp = await client.messages.create({
         model: TRADE_DECISION_MODEL,
         max_tokens: 4096,
         system: AGBRO_PRINCIPLES,
-        tools: TOOL_DEFS,
+        tools: cachedTools,
         messages,
       });
 
