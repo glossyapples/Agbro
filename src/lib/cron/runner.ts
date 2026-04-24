@@ -114,6 +114,14 @@ export async function runScheduledTick(): Promise<TickResult> {
 }
 
 async function runTickBody(): Promise<TickResult> {
+  // Sweep expired pending approvals first — self-contained, no
+  // per-user loop. Cheap UPDATE by the expiresAt index. Errors here
+  // are logged but don't block the rest of the tick.
+  await (async () => {
+    const { sweepExpiredApprovals } = await import('@/lib/safety/approval-sweep');
+    await sweepExpiredApprovals();
+  })();
+
   // Crypto runs 24/7 — fire it on every tick regardless of weekend /
   // market hours. The engine self-rate-limits via
   // CryptoConfig.dcaCadenceDays so calling it frequently is a no-op

@@ -466,9 +466,32 @@ export const TOOL_DEFS: Anthropic.Tool[] = [
 ];
 
 export type ToolContext = {
-  agentRunId: string;
+  // Non-null when the tool is called from inside an agent wake-up
+  // run. Null when called from an approval-queue execution (user
+  // clicked Approve on a queued proposal — no fresh run) or another
+  // system path. Tools that require an agent run (finalize_run,
+  // record_research_note's auto-mirror, etc.) assert non-null on
+  // entry; placeTradeTool tolerates null and still writes
+  // Trade.agentRunId when present.
+  agentRunId: string | null;
   userId: string;
+  // Escape hatch used by the approval queue's execute path. When
+  // true, placeTradeTool skips the observe/propose autonomy
+  // divergence and runs the full gate + broker path. Never set from
+  // the agent loop.
+  bypassAutonomyLadder?: boolean;
 };
+
+// Assert an agent-bound context. Throws if null agentRunId was
+// smuggled into an agent-only tool (finalize_run, etc.). Narrows the
+// type so downstream code can dereference safely.
+function requireAgentRun(ctx: ToolContext): asserts ctx is ToolContext & { agentRunId: string } {
+  if (ctx.agentRunId == null) {
+    throw new Error(
+      'internal: this tool requires an agent run context but was called without one'
+    );
+  }
+}
 
 type Json = unknown;
 
@@ -766,8 +789,10 @@ async function placeTradeTool(ctx: ToolContext, input: Record<string, unknown>) 
   // requires_approval) and the tool returns "queued" without running
   // MOS / earnings / wallet / notional — the user will review raw.
   // Propose autonomy runs the gates first and diverts after they
-  // pass (see below).
-  if (autonomyLevel === 'observe') {
+  // pass (see below). The bypassAutonomyLadder flag (set only by
+  // the approval-queue executor) skips both divergences so an
+  // already-approved proposal can reach the broker.
+  if (autonomyLevel === 'observe' && !ctx.bypassAutonomyLadder) {
     const approval = await createPendingApproval({
       userId: ctx.userId,
       agentRunId: ctx.agentRunId ?? null,
@@ -1004,8 +1029,9 @@ async function placeTradeTool(ctx: ToolContext, input: Record<string, unknown>) 
   // Propose autonomy: every gate-approved trade routes to the queue
   // instead of the broker. We DO NOT reserve a pending Trade row or
   // a daily-cap slot here — the user's approval will re-enter the
-  // tx path below. Sell-side proposals queue too.
-  if (autonomyLevel === 'propose') {
+  // tx path below. Sell-side proposals queue too. Bypass flag
+  // (approval executor) skips the divergence.
+  if (autonomyLevel === 'propose' && !ctx.bypassAutonomyLadder) {
     const approval = await createPendingApproval({
       userId: ctx.userId,
       agentRunId: ctx.agentRunId ?? null,
@@ -1438,6 +1464,7 @@ async function recordResearchNoteTool(
 }
 
 async function finalizeRunTool(ctx: ToolContext, input: Record<string, unknown>) {
+  requireAgentRun(ctx);
   const decision = String(input.decision);
   const summary = String(input.summary);
   await prisma.agentRun.update({

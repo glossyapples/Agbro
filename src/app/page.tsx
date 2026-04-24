@@ -176,7 +176,7 @@ async function getOverview() {
   const user = await maybeCurrentUser();
   if (!user || !user.account) return null;
 
-  const [recentTrades, lastRun, activeStrategy, notifications, brainLatest, watchlistCount, candidateCount, chart, upcomingEvents, moodInputs] =
+  const [recentTrades, lastRun, activeStrategy, notifications, brainLatest, watchlistCount, candidateCount, pendingApprovalCount, chart, upcomingEvents, moodInputs] =
     await Promise.all([
       prisma.trade.findMany({
         where: { userId: user.id },
@@ -196,6 +196,13 @@ async function getOverview() {
       // B2.2: per-user counts from UserWatchlist.
       prisma.userWatchlist.count({ where: { userId: user.id, onWatchlist: true } }),
       prisma.userWatchlist.count({ where: { userId: user.id, candidateSource: 'screener' } }),
+      prisma.pendingApproval.count({
+        where: {
+          userId: user.id,
+          status: 'pending',
+          expiresAt: { gt: new Date() },
+        },
+      }),
       getInitialChartPayload(user.id),
       getUpcomingEvents({ horizonDays: 14, userId: user.id }),
       getMoodInputs(user.id),
@@ -216,6 +223,7 @@ async function getOverview() {
     brainLatest,
     watchlistCount,
     candidateCount,
+    pendingApprovalCount,
     target,
     chart,
     upcomingEvents,
@@ -245,6 +253,7 @@ export default async function OverviewPage() {
     target,
     watchlistCount,
     candidateCount,
+    pendingApprovalCount,
     chart,
     upcomingEvents,
     moodInputs,
@@ -321,6 +330,20 @@ export default async function OverviewPage() {
           <p className="mt-1 text-xs">
             The agent has no research universe. Tap here to add tickers or load the 29
             Buffett-style starter stocks in one click.
+          </p>
+        </Link>
+      )}
+
+      {pendingApprovalCount > 0 && (
+        <Link
+          href="/approvals"
+          className="card border border-amber-500/40 bg-amber-500/10 text-sm text-amber-200"
+        >
+          <p className="font-semibold">
+            {pendingApprovalCount} trade{pendingApprovalCount === 1 ? '' : 's'} waiting for your approval
+          </p>
+          <p className="mt-1 text-xs text-ink-300">
+            The agent proposed {pendingApprovalCount === 1 ? 'a trade' : 'these trades'} — sign off or decline before they expire.
           </p>
         </Link>
       )}
