@@ -19,6 +19,7 @@ import { startOfDayET } from '@/lib/time';
 import { log } from '@/lib/logger';
 import {
   AcknowledgeThesisReviewInput,
+  AddToWatchlistInput,
   GetEventCalendarInput,
   GetOptionChainInput,
   PlaceOptionTradeInput,
@@ -360,6 +361,27 @@ export const TOOL_DEFS: Anthropic.Tool[] = [
     },
   },
   {
+    name: 'add_to_watchlist',
+    description:
+      "Add a single specific name to the user's watchlist after your research has formed a real thesis on it. Use this when your research_perplexity / research_google / refresh_fundamentals work has produced a name worth tracking ongoing — NOT for speculative noise. Distinct from screen_universe (which casts a broad net into a Tier-2 candidate queue): this tool puts the symbol DIRECTLY onto the active watchlist with onWatchlist=true so it shows up in your next wake's evaluate_exits universe and the user's watchlist UI. The rationale is persisted both as the row's note AND as a brain hypothesis entry so any future audit can answer 'why is this on the list?'. Capped at 3 adds per wake — pick your best ideas. Adding a symbol already on the watchlist is a no-op that returns the existing row.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        symbol: { type: 'string', description: 'Ticker (US-listed equity or ETF).' },
+        rationale: {
+          type: 'string',
+          description:
+            "Why this name belongs on the desk — 1-3 sentences. Cite the evidence (moat, fundamentals, valuation gap, catalyst). Vague reasons will degrade the audit trail and the user's trust.",
+        },
+        conviction: {
+          type: 'number',
+          description: 'Your confidence in the thesis, 0..1. ≥0.7 surfaces an emphasized badge in the UI.',
+        },
+      },
+      required: ['symbol', 'rationale', 'conviction'],
+    },
+  },
+  {
     name: 'evaluate_exits',
     description:
       'Returns a per-open-position exit assessment: { symbol, signal: "hold"|"review"|"trim"|"sell", reason, thesis, taxHarvestCandidate, unrealizedLossCents }. Signals come from the active strategy\'s exit rules (price target, time stop, thesis review, fundamentals deterioration, dividend safety). Earnings blackout converts any "sell" into "review" — you never auto-sell into an earnings release. taxHarvestCandidate=true means the position is at a loss, it\'s Q4, and the thesis is already under review — if your review concludes "sell," do it THIS calendar year to claim the loss. NEVER harvest a conviction position just for the write-off. CALL THIS FIRST every wake-up, before any new-buy research. Process every non-hold signal before considering new positions.',
@@ -639,6 +661,13 @@ export async function runTool(
         throw new Error(`acknowledge_thesis_review: invalid input — ${parsed.error.message}`);
       }
       return acknowledgeThesisReviewTool(ctx, parsed.data);
+    }
+    case 'add_to_watchlist': {
+      const parsed = AddToWatchlistInput.safeParse(input);
+      if (!parsed.success) {
+        throw new Error(`add_to_watchlist: invalid input — ${parsed.error.message}`);
+      }
+      return addToWatchlistTool(ctx, parsed.data);
     }
     case 'get_option_chain': {
       const parsed = GetOptionChainInput.safeParse(input);
@@ -1634,6 +1663,135 @@ async function acknowledgeThesisReviewTool(
     reviewNote: input.reviewNote.slice(0, 200),
   });
   return { symbol, nextReviewDueAt: nextReview.toISOString(), reviewDays };
+}
+
+// ─── Agent-initiated watchlist add ───────────────────────────────────────
+
+// Hard cap on agent-initiated adds per wake. Prevents a single
+// research-happy run from dumping 20 names. The user can still curate
+// freely from /watchlist; this just keeps the agent's enthusiasm
+// proportional to its conviction.
+const MAX_AGENT_ADDS_PER_WAKE = 3;
+
+async function addToWatchlistTool(ctx: ToolContext, input: AddToWatchlistInput) {
+  requireAgentRun(ctx);
+  const symbol = input.symbol.toUpperCase();
+
+  // Idempotency: if the symbol is already on the user's watchlist
+  // (regardless of who added it), no-op and return the existing row.
+  // Avoids the agent's "I think AAPL is interesting" wake spamming
+  // identical hypothesis brain entries on every research pass.
+  const existing = await prisma.userWatchlist.findUnique({
+    where: { userId_symbol: { userId: ctx.userId, symbol } },
+    select: { id: true, onWatchlist: true, candidateSource: true },
+  });
+  if (existing?.onWatchlist) {
+    log.info('add_to_watchlist.already_on_list', { userId: ctx.userId, symbol });
+    return { symbol, status: 'already_on_watchlist', noop: true };
+  }
+
+  // Per-wake cap. Count adds with candidateSource='agent' that
+  // landed since this run started — a fresh DB read so the cap
+  // survives even if the agent retries through the orchestrator's
+  // tool-loop after a transient failure.
+  const run = await prisma.agentRun.findUnique({
+    where: { id: ctx.agentRunId },
+    select: { startedAt: true },
+  });
+  if (!run) throw new Error('add_to_watchlist: agent run not found');
+  const addsThisWake = await prisma.userWatchlist.count({
+    where: {
+      userId: ctx.userId,
+      candidateSource: 'agent',
+      discoveredAt: { gte: run.startedAt },
+    },
+  });
+  if (addsThisWake >= MAX_AGENT_ADDS_PER_WAKE) {
+    throw new Error(
+      `add_to_watchlist: per-wake cap reached (${MAX_AGENT_ADDS_PER_WAKE}). Pick your highest-conviction names; you can add more on the next wake.`
+    );
+  }
+
+  const now = new Date();
+  const noteHeader = `[agent · conviction ${(input.conviction * 100).toFixed(0)}%] `;
+  const candidateNotes = (noteHeader + input.rationale).slice(0, 4_000);
+
+  // Stock catalog must have a row for the FK to satisfy. Post-B2.x
+  // the catalog can lag behind agent-discovered names, so seed a
+  // minimal row when missing — same pattern as the earnings/refresh
+  // upserts.
+  await prisma.stock.upsert({
+    where: { symbol },
+    update: {},
+    create: { symbol, name: symbol },
+  });
+
+  // Upsert: covers two cases. (1) symbol absent → create row with
+  // onWatchlist=true, candidateSource='agent'. (2) symbol present
+  // but candidateSource='screener' (it was in the Tier-2 queue and
+  // the agent is now promoting it directly) → flip onWatchlist=true,
+  // mark candidateSource='agent', stamp autoPromotedAt.
+  const row = await prisma.userWatchlist.upsert({
+    where: { userId_symbol: { userId: ctx.userId, symbol } },
+    update: {
+      onWatchlist: true,
+      candidateSource: 'agent',
+      candidateNotes,
+      autoPromotedAt: now,
+    },
+    create: {
+      userId: ctx.userId,
+      symbol,
+      onWatchlist: true,
+      candidateSource: 'agent',
+      candidateNotes,
+      discoveredAt: now,
+    },
+  });
+
+  // Brain mirror — the rationale is research output, so it lives in
+  // the firm's memory as a hypothesis. Confidence tracks the agent's
+  // own conviction (≥0.7 is 'high', else 'medium'; we never emit
+  // 'low' or 'canonical' from this path — see brain/taxonomy.ts).
+  const confidence = input.conviction >= 0.7 ? 'high' : 'medium';
+  await prisma.brainEntry
+    .create({
+      data: {
+        userId: ctx.userId,
+        kind: 'hypothesis',
+        category: 'hypothesis',
+        confidence,
+        sourceRunId: ctx.agentRunId,
+        title: `${symbol} added to watchlist`,
+        body: input.rationale,
+        tags: ['watchlist_add', 'auto-recorded'],
+        relatedSymbols: [symbol],
+      },
+    })
+    .catch((err) => {
+      // Brain mirror failure is non-fatal — the watchlist row is
+      // the canonical record. Log so it shows up in scheduler-status.
+      log.warn('add_to_watchlist.brain_mirror_failed', {
+        userId: ctx.userId,
+        symbol,
+        err: (err as Error).message,
+      });
+    });
+
+  log.info('add_to_watchlist.added', {
+    userId: ctx.userId,
+    symbol,
+    conviction: input.conviction,
+    addsThisWakeAfter: addsThisWake + 1,
+  });
+
+  return {
+    symbol,
+    status: existing ? 'promoted_from_candidate' : 'added',
+    rowId: row.id,
+    conviction: input.conviction,
+    addsRemainingThisWake: MAX_AGENT_ADDS_PER_WAKE - (addsThisWake + 1),
+  };
 }
 
 // ─── Options handlers ────────────────────────────────────────────────────

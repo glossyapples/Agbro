@@ -135,3 +135,18 @@ export const AcknowledgeThesisReviewInput = z.object({
   reviewNote: z.string().min(1).max(500),
 });
 export type AcknowledgeThesisReviewInput = z.infer<typeof AcknowledgeThesisReviewInput>;
+
+// Agent-initiated watchlist add. Used when the agent's research surfaces
+// a specific name worth tracking, distinct from the broad-net
+// screen_universe path. Rationale required — the rationale persists as
+// candidateNotes AND mirrors to the brain as a hypothesis entry, so any
+// future audit can answer "why is this on the list?" without re-reading
+// the agent run transcript. Conviction is the agent's confidence in the
+// thesis (0..1) — high-conviction adds get visually flagged in the UI
+// so the user can scan for the strongest ideas.
+export const AddToWatchlistInput = z.object({
+  symbol: z.string().min(1).max(12),
+  rationale: z.string().min(20).max(2_000),
+  conviction: z.number().min(0).max(1),
+});
+export type AddToWatchlistInput = z.infer<typeof AddToWatchlistInput>;

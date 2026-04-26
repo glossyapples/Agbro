@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { PlaceTradeInput, SizePositionInput, UpdateStockFundamentalsInput } from './schemas';
+import {
+  PlaceTradeInput,
+  SizePositionInput,
+  UpdateStockFundamentalsInput,
+  AddToWatchlistInput,
+} from './schemas';
 
 const validPlaceTrade = {
   symbol: 'AAPL',
@@ -236,5 +241,50 @@ describe('UpdateStockFundamentalsInput', () => {
     expect(
       UpdateStockFundamentalsInput.safeParse({ symbol: 'X', notes: 'a'.repeat(2_001) }).success
     ).toBe(false);
+  });
+});
+
+describe('AddToWatchlistInput', () => {
+  const valid = {
+    symbol: 'ASML',
+    rationale:
+      'Wide-moat lithography monopoly, 25%+ ROE compounder, EUV TAM still expanding. Trading 8% below historical multiple after capex cycle pause.',
+    conviction: 0.82,
+  };
+
+  it('accepts a well-formed payload', () => {
+    expect(AddToWatchlistInput.safeParse(valid).success).toBe(true);
+  });
+
+  it('rejects empty / oversized symbol', () => {
+    expect(AddToWatchlistInput.safeParse({ ...valid, symbol: '' }).success).toBe(false);
+    expect(AddToWatchlistInput.safeParse({ ...valid, symbol: 'A'.repeat(13) }).success).toBe(false);
+  });
+
+  it('requires a substantive rationale (≥20 chars)', () => {
+    expect(AddToWatchlistInput.safeParse({ ...valid, rationale: '' }).success).toBe(false);
+    expect(AddToWatchlistInput.safeParse({ ...valid, rationale: 'short' }).success).toBe(false);
+    // Right at the threshold passes.
+    expect(AddToWatchlistInput.safeParse({ ...valid, rationale: 'a'.repeat(20) }).success).toBe(true);
+  });
+
+  it('rejects rationale > 2000 chars (audit-trail bloat guard)', () => {
+    expect(AddToWatchlistInput.safeParse({ ...valid, rationale: 'a'.repeat(2_001) }).success).toBe(false);
+  });
+
+  it('conviction must be in [0, 1]', () => {
+    expect(AddToWatchlistInput.safeParse({ ...valid, conviction: -0.01 }).success).toBe(false);
+    expect(AddToWatchlistInput.safeParse({ ...valid, conviction: 1.01 }).success).toBe(false);
+    expect(AddToWatchlistInput.safeParse({ ...valid, conviction: 0 }).success).toBe(true);
+    expect(AddToWatchlistInput.safeParse({ ...valid, conviction: 1 }).success).toBe(true);
+  });
+
+  it('all three fields are required', () => {
+    const { symbol: _s, ...noSymbol } = valid;
+    const { rationale: _r, ...noRationale } = valid;
+    const { conviction: _c, ...noConviction } = valid;
+    expect(AddToWatchlistInput.safeParse(noSymbol).success).toBe(false);
+    expect(AddToWatchlistInput.safeParse(noRationale).success).toBe(false);
+    expect(AddToWatchlistInput.safeParse(noConviction).success).toBe(false);
   });
 });

@@ -18,15 +18,18 @@ export default async function WatchlistPage() {
       where: { userId: user.id, candidateSource: 'screener' },
     }),
   ]);
-  const stocks = watchlistRows
-    .map((r) => r.stock)
+  // Carry the per-user UserWatchlist metadata alongside the Stock catalog
+  // fields so the agent-added badge / notes can render. Sort still by
+  // Buffett score then alpha — same behaviour as before.
+  const merged = watchlistRows
+    .map((r) => ({ stock: r.stock, source: r.candidateSource, notes: r.candidateNotes }))
     .sort((a, b) => {
-      const bs = (b.buffettScore ?? -1) - (a.buffettScore ?? -1);
-      return bs !== 0 ? bs : a.symbol.localeCompare(b.symbol);
+      const bs = (b.stock.buffettScore ?? -1) - (a.stock.buffettScore ?? -1);
+      return bs !== 0 ? bs : a.stock.symbol.localeCompare(b.stock.symbol);
     });
 
   // Strip Prisma BigInt + Date types for the client boundary.
-  const initial = stocks.map((s) => ({
+  const initial = merged.map(({ stock: s, source, notes }) => ({
     symbol: s.symbol,
     name: s.name,
     sector: s.sector,
@@ -39,6 +42,8 @@ export default async function WatchlistPage() {
     lastAnalyzedAt: s.lastAnalyzedAt ? s.lastAnalyzedAt.toISOString() : null,
     fundamentalsSource: s.fundamentalsSource,
     fundamentalsUpdatedAt: s.fundamentalsUpdatedAt ? s.fundamentalsUpdatedAt.toISOString() : null,
+    candidateSource: source,
+    candidateNotes: notes,
   }));
 
   return (

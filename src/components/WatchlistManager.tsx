@@ -16,6 +16,11 @@ type WatchlistStock = {
   lastAnalyzedAt: string | null;
   fundamentalsSource: string | null;
   fundamentalsUpdatedAt: string | null;
+  // 'agent' = agent added this row directly via add_to_watchlist.
+  // 'screener' = candidate that was promoted (typically by user).
+  // null / 'watchlist' = user-curated.
+  candidateSource: string | null;
+  candidateNotes: string | null;
 };
 
 // Map a data source + age to a tiny status pill. We want the agent AND the
@@ -171,6 +176,14 @@ export function WatchlistManager({ initial }: { initial: WatchlistStock[] }) {
                   <p className="font-semibold text-ink-50">
                     {s.symbol}
                     <span className="ml-2 text-xs font-normal text-ink-400">{s.name}</span>
+                    {s.candidateSource === 'agent' && (
+                      <span
+                        className="ml-2 rounded-sm bg-brand-500/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-brand-300"
+                        title="Added by the agent during research"
+                      >
+                        Agent-added
+                      </span>
+                    )}
                   </p>
                   <p className="mt-0.5 text-[11px] text-ink-400">
                     {s.sector ?? 'sector —'} ·{' '}
@@ -184,6 +197,11 @@ export function WatchlistManager({ initial }: { initial: WatchlistStock[] }) {
                       return <span className={`${f.className} text-[10px]`}>{f.label}</span>;
                     })()}
                   </p>
+                  {s.candidateSource === 'agent' && s.candidateNotes && (
+                    <p className="mt-1 text-[11px] italic text-ink-400">
+                      {s.candidateNotes}
+                    </p>
+                  )}
                 </div>
                 <button
                   onClick={() => remove(s.symbol)}
