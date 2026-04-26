@@ -55,11 +55,17 @@ export default async function BacktestPage() {
         <div>
           <h1 className="text-2xl font-semibold">Backtest</h1>
           <p className="mt-1 text-xs text-ink-400">
-            Single-run backtester for custom date ranges. For the
-            strategy-vs-window comparison matrix, use the{' '}
+            Single-run backtester for custom date ranges. For named
+            historical windows compared in a matrix, use the{' '}
             <Link href="/backtest/grid" className="text-brand-400">
               robustness grid →
             </Link>
+            . For rolling out-of-sample validation across many windows
+            with a consistency score, use{' '}
+            <Link href="/backtest/walk-forward" className="text-brand-400">
+              walk-forward →
+            </Link>
+            .
           </p>
         </div>
         <Link href="/" className="text-xs text-brand-400">

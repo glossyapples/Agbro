@@ -44,6 +44,7 @@ model User {
   watchlist     UserWatchlist[]
   governorDecisions GovernorDecision[]
   pendingApprovals PendingApproval[]
+  walkForwardRuns WalkForwardRun[]
 }
 
 // BYOK — per-user API keys for third-party providers. The raw key is
@@ -801,6 +802,48 @@ model BacktestRun {
   @@index([userId, runAt])
   @@index([strategyKey])
   @@index([userId, strategyKey, windowKey])
+}
+
+// Walk-forward backtest run. Distinct from BacktestRun (single-window
+// in-sample): this is a series of N window simulations rolled up into
+// one record, with a consistency score that's hard to game. The sprint
+// 2026-05 plan calls this out as the single biggest credibility gap —
+// in-sample-only metrics tell us nothing about whether a strategy is
+// curve-fit. Walk-forward is the answer.
+//
+// Storage: windows + aggregate go in Json columns rather than separate
+// child tables. The shapes are append-only and the UI consumes them as
+// a unit; no per-window relational queries justified yet.
+model WalkForwardRun {
+  id              String   @id @default(cuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  strategyKey     String
+  // Mirrors BacktestRun.mode — tier1 default. tier2 walk-forwards
+  // are valid but require EDGAR coverage on every symbol in the
+  // universe across the full date span, which is a steep precondition.
+  mode            String   @default("tier1")
+  totalStart      DateTime
+  totalEnd        DateTime
+  windowMonths    Int
+  stepMonths      Int
+  universe        String[] @default([])
+  benchmarkSymbol String   @default("SPY")
+
+  // Per-window results. Array of { startISO, endISO, metrics, alphaPct,
+  // tradeCount } matching WalkForwardWindow in walk-forward.ts.
+  windows         Json
+  // { medianCagrPct, medianMaxDrawdownPct, medianAlphaPct,
+  //   consistencyScore, windowCount }.
+  aggregate       Json
+
+  status          String   @default("running") // 'running' | 'completed' | 'errored'
+  errorMessage    String?  @db.Text
+  startedAt       DateTime @default(now())
+  completedAt     DateTime?
+
+  @@index([userId, startedAt])
+  @@index([userId, strategyKey])
 }
 
 // -------------------- Market regime tripwire --------------------
