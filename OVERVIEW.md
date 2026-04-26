@@ -28,7 +28,9 @@ Everything is BYOK on API keys — Anthropic (required), OpenAI (optional for co
 
 - Cron tick runs every 2 min, checks per-user: `isStopped`, `isPaused`, kill-switch active, within trading hours, cadence elapsed, regime-triggered force-wake
 - Each wake fires a **16-turn Claude tool-use loop** with a serialized inflight lock (Account-row `FOR UPDATE`) and stale-run sweep
-- **Tools exposed to the agent** (22 currently):
+- **Extended thinking enabled** — every wake gets an 8 000-token thinking budget (configurable via `AGBRO_THINKING_BUDGET`, disable via `AGBRO_THINKING_DISABLED=true`). Opus 4.7 reasons in a private scratchpad before each tool call; thinking blocks are persisted as `AgentDecision` rows (`payload.source='extended_thinking'`) so `/decisions` shows the full chain of reasoning, not just the externalised text. Thinking tokens bill at the output rate; existing pricing accounting captures cost automatically.
+- **Parallel tool calls** — read-only tool batches execute concurrently via `Promise.all`. Tools classified read-only (13: `get_account_state`, `get_positions`, `get_latest_price`, `is_market_open`, `get_watchlist`, `read_brain`, `run_analyzer`, `research_perplexity`, `research_google`, `size_position`, `evaluate_exits`, `get_option_chain`, `get_event_calendar`) or mutating (11: `write_brain`, `record_research_note`, `refresh_fundamentals`, `update_stock_fundamentals`, `screen_universe`, `acknowledge_thesis_review`, `add_to_watchlist`, `run_post_mortem`, `place_option_trade`, `place_trade`, `finalize_run`). Any mutating tool in the batch serialises the whole batch — no lost upserts, no out-of-order audit rows. Unknown tool names default mutating (fail-safe). Agent prompt instructs batch-research patterns (emit ALL read-only `tool_use` blocks for a research wave in the SAME response, never chained).
+- **Tools exposed to the agent** (24 currently):
   - `get_account_state`, `get_positions`, `get_latest_price`, `is_market_open`, `get_watchlist`
   - `read_brain` (filter by category / confidence / kind / tags / symbols / superseded)
   - `write_brain` (for lessons, post-mortems, hypotheses, corrections)
@@ -38,6 +40,8 @@ Everything is BYOK on API keys — Anthropic (required), OpenAI (optional for co
   - `refresh_fundamentals` (EDGAR point-in-time pull)
   - `update_stock_fundamentals` (agent-supplied refresh for ETFs/ADRs EDGAR can't serve)
   - `screen_universe` (rate-limited weekly candidate discovery via Perplexity)
+  - `add_to_watchlist` (agent-initiated: high-conviction targeted name with rationale; cap 3/wake; brain-mirrored as a hypothesis)
+  - `run_post_mortem` (Monday-cadence: walks closed trades, writes lessons, supersedes flawed prior thesis entries; cap 1/wake)
   - `evaluate_exits` (per-position signals: hold / review / trim / sell + tax-harvest flag)
   - `get_event_calendar` (earnings + macro)
   - `acknowledge_thesis_review` (bumps review timer on confirmed holds)
@@ -46,7 +50,7 @@ Everything is BYOK on API keys — Anthropic (required), OpenAI (optional for co
   - `finalize_run` (writes `agent_run_summary` brain entry with sourceRunId)
 - **Defense-in-depth trade gate** (every buy): **Governor audit row** (approved/rejected/requires_approval with a structured reason code) → forbidden-symbol check → autonomy-ladder divergence (Observe intercepts; Propose queues) → MOS → earnings blackout (3 days) → wash-sale (IRS §1091 30-day) → wallet spendable pre-check → per-trade notional cap → FOR UPDATE lock → daily-cap count (excludes rejected/cancelled) → pending-row reservation → broker call → DB stitch. Every rejection lands in `GovernorDecision` with a rendered user-readable explanation.
 - **Prompt caching** on system + tool defs (~6k tokens) to cut within-run input cost
-- **Cost accounting** cache-aware via shared pricing module
+- **Cost accounting** cache-aware via shared pricing module; thinking tokens roll up into output-token total automatically
 
 ---
 
@@ -68,6 +72,19 @@ Everything is BYOK on API keys — Anthropic (required), OpenAI (optional for co
 - **↻ Sync button** on /brain upserts latest library + backfills category/confidence on mis-tagged rows
 - **Supersession**: corrected entries retire old ones invisibly (still audit-readable with `includeSuperseded=true`)
 - **/brain page** with category-filter pills, confidence badges, tag + ticker chips
+
+---
+
+## Self-correction (post-mortem loop)
+
+The unique upside of having a versioned brain (`category`, `confidence`, `supersededById`) is that the agent can re-read its own reasoning months later and notice what it got wrong. The post-mortem loop closes that.
+
+- Triggered by the agent's `run_post_mortem(lookbackDays?)` tool — agent prompt instructs Monday-of-the-week wakes to call it
+- Walks closed trades in the lookback window, gathers each one's original thesis BrainEntry (matched by `sourceRunId` + `relatedSymbols`), asks Opus per-trade: "was this thesis correct, wrong, partial, or inconclusive — and is the lesson generalizable?"
+- Writes a new BrainEntry `kind='post_mortem', category='memory'`, `confidence='high'` for decisive moves (≥10% either side) and `medium` otherwise, tagged `post_mortem` + outcome (`win` / `loss` / `flat`), and stamped with `postMortemTradeIds: [trade.id]` for dedup + UI lookup
+- **Crucial invariant**: when the analysis returns `supersedeOriginal=true` (model is instructed to set this only for thesis flaws on the merits, never for "unlucky" outcomes), the original thesis's `supersededById` is set to the new entry. `read_brain` filters superseded entries by default — future wakes stop pulling the contradicted reasoning. The agent literally self-corrects.
+- Cap: 5 trades per call (~$1.50 max in Opus cost). Idempotent — trades already covered by an existing post-mortem entry are skipped.
+- Per-wake cap: one post-mortem run per wake (checked via `BrainEntry where sourceRunId = thisRun AND kind = 'post_mortem'`).
 
 ---
 
@@ -168,6 +185,7 @@ Each has a deterministic rulebook consumed by both the live agent and the backte
 
 - **Single run** at `/backtest` — pick strategy + date window + universe, see equity curve vs SPY, full event log, data warnings
 - **Robustness grid** at `/backtest/grid` — every strategy × every named window (2008 GFC, 2020 COVID, 2022 bear, etc.) with overlay chart
+- **Walk-forward** at `/backtest/walk-forward` — rolling out-of-sample validation. Slides a fixed-length window across a long history (e.g. 24-month window stepped 12 months across 2015-2024 = 9 windows), runs the simulator fresh on each slice, reports per-window CAGR + alpha vs benchmark + max drawdown plus an aggregate **consistency score** (`1 - clamp(MAD / max(|median|, 5%), 0, 1)`) that's hard to game. Closer to 1 = robust across regimes; closer to 0 = curve-fit to a single era. Five labelled bands on the UI from "Likely curve-fit" to "Robust" so a glance tells you whether the strategy holds up out-of-sample. Persisted to `WalkForwardRun` for cross-config comparison.
 - **Two tiers**:
   - Tier 1 — classic deterministic rules only (original behaviour)
   - Tier 2 — additionally screens universe by point-in-time EDGAR fundamentals at each decision date
@@ -208,19 +226,21 @@ Each has a deterministic rulebook consumed by both the live agent and the backte
 
 ---
 
-## UI surfaces (15 routes)
+## UI surfaces (18 routes)
 
 - `/` — Home dashboard (equity, mood rings, positions, recent agent runs, "Your Plan" card, pending-approvals + budget-warning banners, overdue-scheduler diagnostic)
 - `/onboarding` — one-time Plan wizard; middleware-level redirect gates first-time users until completed
 - `/approvals` — pending-approval queue with Approve / Reject actions per card
+- `/positions` — Robinhood-style stock holdings list (sparkline + tappable display-mode pill cycling last-price / today % / equity / today's return / unrealized P/L)
+- `/crypto/positions` — same shape for crypto holdings
 - `/trades` — trade history with manual sell capability
 - `/strategy` — 3 tabs (Strategy list / Meetings / Back-testing)
 - `/strategy/[id]` — wizard chat for one strategy
 - `/brain` — firm memory with category filters + sync button
-- `/settings` — all safety/trading/crypto settings + API keys + session + API cost-governor budget
+- `/settings` — all safety/trading/crypto settings + API keys + session + API cost-governor budget + scheduler restart button
 - `/wallet` — deposits + transfers
-- `/analytics` — deeper performance + attribution
-- `/backtest`, `/backtest/grid` — single + grid simulation
+- `/analytics` — deeper performance + attribution + Governor activity card (behavior-alpha rollup)
+- `/backtest`, `/backtest/grid`, `/backtest/walk-forward` — single + grid + rolling out-of-sample validation
 - `/candidates` — Tier-2 screener output awaiting user promote/reject
 - `/help` — 12-section static docs
 - `/disclaimer` — full legal framing
@@ -244,7 +264,7 @@ Bottom nav: Home · Trades · Strategy · Brain · Settings (5 tabs, iOS-optimiz
 ## Testing
 
 - **Vitest** suite, colocated `*.test.ts` files next to source, `node` environment
-- **331 passing tests across 31 files, full suite runs in ~4s**
+- **395 passing tests across 38 files, full suite runs in ~6s**
 - `npm test` (watch) · `npm run test:run` (one-shot) · `npm run test:ci` (with v8 coverage)
 - **Phase 1 — pure-function coverage** (shipped):
   - **Pricing math** (`pricing.test.ts`) — cache-aware cost per model tier (Opus/Sonnet/Haiku), env-var rate overrides, unknown-model → 0, rounding
@@ -269,6 +289,11 @@ Bottom nav: Home · Trades · Strategy · Brain · Settings (5 tabs, iOS-optimiz
   - **Cost-budget classifier** (`safety/budget.test.ts`) — `classifyBudgetState` with property-based monotonicity, UTC month boundary
   - **API handlers** (`src/app/api/**/*.test.ts`) — GET `/api/approvals` filters + BigInt serialisation · POST `/api/approvals/[id]/approve` with idempotency (404/403/409/410) + `runTool` dispatch with `bypassAutonomyLadder=true` · POST `/api/approvals/[id]/reject` with state-machine guards · POST `/api/onboarding` validation + forbidden-list normalisation · POST `/api/settings/budget` with nullable-cap semantics · GET `/api/governor/stats` with days-clamp + BigInt serialisation
   - **Behavior-alpha aggregator** (`safety/governor-stats.test.ts`) — decision-total rollup, multi-reason rejection attribution (each code once per rejection), dollar-protected summation once-per-rejection semantics, approval-queue lifecycle mapping, headline-picker singular/plural agreement, reason-bucket coverage meta-test (every declared reason has a bucket)
+- **Sprint 2026-05 coverage — brain upgrade workstreams (shipped)**:
+  - **Tool classification meta-test** (`agents/tools-classification.test.ts`) — every entry in `TOOL_DEFS` has a read-only / mutating classification, unknown names default mutating (fail-safe), all 13 read-only + 11 mutating tools pinned by name. A future tool addition without classification update fails CI immediately.
+  - **Post-mortem helpers** (`agents/post-mortem.test.ts`) — `classifyOutcome` win/loss/flat partition, `classifyConfidence` decisive-move threshold, dedup against existing post-mortem entries (single + all-covered paths), `MAX_TRADES_PER_POST_MORTEM` cap, supersession only fires when `analysis.supersedeOriginal=true`, no-supersession on the "unlucky" case, per-trade failure isolation, missing-API-key error, lookbackDays clamping
+  - **Walk-forward harness** (`backtest/walk-forward.test.ts`) — `splitWindows` non-overlapping vs overlapping window counts, partial-window 75% drop threshold (mutation-verified — flipping to 0.5 fails 2 tests), clamping to `totalEnd`, span-shorter-than-window edge case, invalid input guards. `computeConsistency` pure tests + property tests (bounded in [0, 1], adding the median never hurts the score).
+- **Mutation-verified** — five deliberate regressions reintroduced and confirmed caught: Burry rotation rules, dividend yield filter, MOS superRefine removal, drag-math formula error, walk-forward partial-window threshold (0.75 → 0.5 flip).
 - **Scoped but not yet shipped**:
   - **Phase 3** — integration tests with a test DB (`seedBrainForUser` idempotency, `backfillBrainTaxonomy`, `writeBrain` validation, policy-change apply boundary, AgentRun stale-sweep, daily-cap exclusion, cascade FK chain)
   - **Phase 4** — chaos tests with mocked externals (Alpaca/Anthropic/OpenAI/EDGAR failure modes)
@@ -290,4 +315,4 @@ Bottom nav: Home · Trades · Strategy · Brain · Settings (5 tabs, iOS-optimiz
 
 ---
 
-**TL;DR**: Value-investing paper-trading app that treats itself as a five-to-six-bot "firm" with institutional memory, weekly exec meetings rendered as Mad Magazine comics, a **Governor-routed defense-in-depth trade gate** with structured reason codes + audit trail + **behavior-alpha activity card** that makes the blocks it fired visible, a **three-level autonomy ladder** (Observe / Propose / Auto) feeding a **user approval queue**, a **BYOK API cost-governor** that pauses the agent before surprise bills, a **Your Plan onboarding wizard** every user must complete before trading, six preset strategies + a custom wizard, point-in-time-fundamentals backtesting, rule-based crypto DCA, BYOK on every model provider, a growing brain library you resync from the repo, and a **331-test mutation-verified Vitest suite** (property tests + HTTP handler tests) pinning the critical behaviour invariants.
+**TL;DR**: Value-investing paper-trading app that treats itself as a five-to-six-bot "firm" with institutional memory, weekly exec meetings rendered as Mad Magazine comics, a **Governor-routed defense-in-depth trade gate** with structured reason codes + audit trail + **behavior-alpha activity card** that makes the blocks it fired visible, a **three-level autonomy ladder** (Observe / Propose / Auto) feeding a **user approval queue**, a **BYOK API cost-governor** that pauses the agent before surprise bills, a **Your Plan onboarding wizard** every user must complete before trading, **Opus 4.7 extended thinking + parallel tool calls** in every wake, a **post-mortem learning loop** that supersedes flawed prior thesis entries so the agent stops repeating mistakes, **walk-forward backtest validation** with a consistency score that exposes curve-fit strategies before any real-money path, six preset strategies + a custom wizard, point-in-time-fundamentals backtesting, rule-based crypto DCA, BYOK on every model provider, a growing brain library you resync from the repo, and a **395-test mutation-verified Vitest suite** (property tests + HTTP handler tests) pinning the critical behaviour invariants.
