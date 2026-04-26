@@ -4,6 +4,7 @@ import {
   SizePositionInput,
   UpdateStockFundamentalsInput,
   AddToWatchlistInput,
+  RunPostMortemInput,
 } from './schemas';
 
 const validPlaceTrade = {
@@ -286,5 +287,24 @@ describe('AddToWatchlistInput', () => {
     expect(AddToWatchlistInput.safeParse(noSymbol).success).toBe(false);
     expect(AddToWatchlistInput.safeParse(noRationale).success).toBe(false);
     expect(AddToWatchlistInput.safeParse(noConviction).success).toBe(false);
+  });
+});
+
+describe('RunPostMortemInput', () => {
+  it('accepts an empty payload (lookbackDays optional → defaults to 7 in helper)', () => {
+    expect(RunPostMortemInput.safeParse({}).success).toBe(true);
+  });
+
+  it('accepts integer lookbackDays in [1, 90]', () => {
+    expect(RunPostMortemInput.safeParse({ lookbackDays: 1 }).success).toBe(true);
+    expect(RunPostMortemInput.safeParse({ lookbackDays: 7 }).success).toBe(true);
+    expect(RunPostMortemInput.safeParse({ lookbackDays: 90 }).success).toBe(true);
+  });
+
+  it('rejects non-integer / out-of-range / non-numeric lookbackDays', () => {
+    expect(RunPostMortemInput.safeParse({ lookbackDays: 0 }).success).toBe(false);
+    expect(RunPostMortemInput.safeParse({ lookbackDays: 91 }).success).toBe(false);
+    expect(RunPostMortemInput.safeParse({ lookbackDays: 7.5 }).success).toBe(false);
+    expect(RunPostMortemInput.safeParse({ lookbackDays: '7' }).success).toBe(false);
   });
 });

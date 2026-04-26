@@ -51,6 +51,7 @@ describe('tool classification', () => {
       'screen_universe',
       'acknowledge_thesis_review',
       'add_to_watchlist',
+      'run_post_mortem',
       'place_option_trade',
       'place_trade',
       'finalize_run',

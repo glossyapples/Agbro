@@ -20,6 +20,7 @@ import { log } from '@/lib/logger';
 import {
   AcknowledgeThesisReviewInput,
   AddToWatchlistInput,
+  RunPostMortemInput,
   GetEventCalendarInput,
   GetOptionChainInput,
   PlaceOptionTradeInput,
@@ -361,6 +362,22 @@ export const TOOL_DEFS: Anthropic.Tool[] = [
     },
   },
   {
+    name: 'run_post_mortem',
+    description:
+      "Walk this user's recently closed trades and write post-mortem brain entries that capture what worked, what didn't, and the generalizable lesson. Each entry has kind='post_mortem', category='memory', and links to the trade(s) it analyzed. When the original thesis was demonstrably flawed (not just unlucky), the original brain hypothesis is superseded — read_brain filters superseded entries out by default, so future wakes stop pulling that contradicted reasoning. Capped server-side at 5 trades per call. Run this on the first wake of any Monday (or any time it's been 7+ days since the last post-mortem run). Idempotent — trades already post-mortem'd are skipped.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        lookbackDays: {
+          type: 'integer',
+          description:
+            'How many days back to scan for closed trades. Default 7. Capped 1..90.',
+        },
+      },
+      required: [],
+    },
+  },
+  {
     name: 'add_to_watchlist',
     description:
       "Add a single specific name to the user's watchlist after your research has formed a real thesis on it. Use this when your research_perplexity / research_google / refresh_fundamentals work has produced a name worth tracking ongoing — NOT for speculative noise. Distinct from screen_universe (which casts a broad net into a Tier-2 candidate queue): this tool puts the symbol DIRECTLY onto the active watchlist with onWatchlist=true so it shows up in your next wake's evaluate_exits universe and the user's watchlist UI. The rationale is persisted both as the row's note AND as a brain hypothesis entry so any future audit can answer 'why is this on the list?'. Capped at 3 adds per wake — pick your best ideas. Adding a symbol already on the watchlist is a no-op that returns the existing row.",
@@ -532,6 +549,7 @@ const MUTATING_TOOLS = new Set([
   'screen_universe',
   'acknowledge_thesis_review',
   'add_to_watchlist',
+  'run_post_mortem',
   'place_option_trade',
   'place_trade',
   'finalize_run',
@@ -729,6 +747,13 @@ export async function runTool(
         throw new Error(`add_to_watchlist: invalid input — ${parsed.error.message}`);
       }
       return addToWatchlistTool(ctx, parsed.data);
+    }
+    case 'run_post_mortem': {
+      const parsed = RunPostMortemInput.safeParse(input);
+      if (!parsed.success) {
+        throw new Error(`run_post_mortem: invalid input — ${parsed.error.message}`);
+      }
+      return runPostMortemTool(ctx, parsed.data);
     }
     case 'get_option_chain': {
       const parsed = GetOptionChainInput.safeParse(input);
@@ -1852,6 +1877,62 @@ async function addToWatchlistTool(ctx: ToolContext, input: AddToWatchlistInput) 
     rowId: row.id,
     conviction: input.conviction,
     addsRemainingThisWake: MAX_AGENT_ADDS_PER_WAKE - (addsThisWake + 1),
+  };
+}
+
+// ─── Post-mortem ─────────────────────────────────────────────────────────
+
+// One post-mortem run per wake. Counted via brain entries written
+// inside this run's window — tracks correctly even if the
+// orchestrator retries the tool call after a transient failure.
+async function runPostMortemTool(ctx: ToolContext, input: RunPostMortemInput) {
+  requireAgentRun(ctx);
+
+  // Per-wake cap. Look for any post-mortem brain entries this run
+  // already produced; if any exist, refuse to run again — Opus
+  // shouldn't keep re-litigating its own audit.
+  const run = await prisma.agentRun.findUnique({
+    where: { id: ctx.agentRunId },
+    select: { startedAt: true },
+  });
+  if (!run) throw new Error('run_post_mortem: agent run not found');
+  const alreadyRanThisWake = await prisma.brainEntry.count({
+    where: {
+      userId: ctx.userId,
+      sourceRunId: ctx.agentRunId,
+      kind: 'post_mortem',
+    },
+  });
+  if (alreadyRanThisWake > 0) {
+    return {
+      status: 'already_ran_this_wake',
+      noop: true,
+      message:
+        'A post-mortem already ran this wake. Read those entries via read_brain({ kind: "post_mortem" }).',
+    };
+  }
+
+  // Dynamic import keeps the heavy Anthropic client off the static
+  // tools.ts dependency graph (matches the orchestrator's pattern of
+  // dynamic-importing runner.ts to keep instrumentation lean).
+  const { runPostMortem } = await import('./post-mortem');
+  const results = await runPostMortem({
+    userId: ctx.userId,
+    agentRunId: ctx.agentRunId,
+    lookbackDays: input.lookbackDays,
+  });
+
+  return {
+    tradesAnalyzed: results.length,
+    summary: results.map((r) => ({
+      symbol: r.symbol,
+      outcome: r.outcome,
+      pnlUsd: r.realizedPnlUsd,
+      pnlPct: r.realizedPnlPct,
+      thesisSuperseded: r.thesisSuperseded,
+      brainEntryId: r.brainEntryId,
+    })),
+    totalCostUsd: Number(results.reduce((s, r) => s + r.costUsd, 0).toFixed(4)),
   };
 }
 

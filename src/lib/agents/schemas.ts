@@ -150,3 +150,15 @@ export const AddToWatchlistInput = z.object({
   conviction: z.number().min(0).max(1),
 });
 export type AddToWatchlistInput = z.infer<typeof AddToWatchlistInput>;
+
+// Post-mortem trigger. The agent calls this on Monday wakes (or any
+// time it hasn't run a post-mortem in 7+ days). Walks closed trades
+// in the lookback window, writes BrainEntry post-mortems, optionally
+// supersedes prior thesis entries that turned out flawed. Cost
+// scales linearly with closed trades; the helper caps at 5 per call.
+export const RunPostMortemInput = z.object({
+  // 1..90; defaults to 7 in the helper. Capped on the server side
+  // regardless of what the agent passes.
+  lookbackDays: z.number().int().min(1).max(90).optional(),
+});
+export type RunPostMortemInput = z.infer<typeof RunPostMortemInput>;

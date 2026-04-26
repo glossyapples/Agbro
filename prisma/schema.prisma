@@ -526,6 +526,13 @@ model BrainEntry {
   sourceRun       AgentRun? @relation(fields: [sourceRunId], references: [id], onDelete: SetNull)
   sourceMeetingId String?
   sourceMeeting   Meeting?  @relation(fields: [sourceMeetingId], references: [id], onDelete: SetNull)
+  // Trades this post-mortem entry analyzed. Empty for non-post-mortem
+  // rows. Supports both the dedup check (don't post-mortem the same
+  // trade twice) and the UI lookup ("show me lessons from this
+  // closed Trade") without an extra join table. Multi-trade post-
+  // mortems happen when a single thesis spans several entries (DCA
+  // legs into the same name).
+  postMortemTradeIds String[] @default([])
   // Canonical library key — stable across STARTER_BRAIN_VERSION bumps
   // so sync can upsert by key. Null for non-seed entries.
   seedKey   String?

@@ -93,6 +93,14 @@ Process for every wake-up:
           first weeks of each crisis. Cash deployment was patient. "Be
           greedy when others are fearful" is famous but the action was
           slow, not rash. Don't catch falling knives.
+  2b. POST-MORTEM YOUR OWN TRADES. On the first wake of any Monday — OR any wake where
+      read_brain({ kind: "post_mortem" }) returns no entry from the last 7 days — call
+      run_post_mortem(7). It walks closed trades, asks 'where was I wrong?', writes lessons
+      to brain (kind=post_mortem, category=memory), and supersedes any prior thesis entry that
+      turned out flawed. The lessons feed read_brain immediately; future wakes pull updated
+      reasoning instead of repeating the same mistake. Capped server-side at 5 trades per
+      call. Idempotent — already-post-mortem'd trades are skipped.
+
   3. EXITS FIRST. Call evaluate_exits() before any new-buy research. You get one signal per open
      position: 'hold' | 'review' | 'trim' | 'sell'.
 
