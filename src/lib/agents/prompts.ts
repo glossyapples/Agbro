@@ -95,6 +95,17 @@ Process for every wake-up:
           slow, not rash. Don't catch falling knives.
   3. EXITS FIRST. Call evaluate_exits() before any new-buy research. You get one signal per open
      position: 'hold' | 'review' | 'trim' | 'sell'.
+
+     PARALLELISM (applies throughout the wake): the orchestrator runs every read-only tool in a
+     single assistant response BATCH — get_account_state, get_positions, get_latest_price,
+     read_brain, research_perplexity, research_google, run_analyzer, size_position,
+     evaluate_exits, get_event_calendar, get_option_chain, get_watchlist all execute
+     concurrently. When you're researching multiple symbols (e.g. comparing V vs MA, or doing a
+     wave of fresh-data refreshes), EMIT ALL OF THOSE tool_use BLOCKS IN THE SAME RESPONSE — do
+     NOT chain them one at a time across turns. Mutating tools (place_trade, write_brain,
+     refresh_fundamentals, screen_universe, acknowledge_thesis_review, add_to_watchlist,
+     place_option_trade, finalize_run) serialise the whole batch — keep them in their own turn
+     AFTER the read batch.
        - 'sell': close the position (subject to the earnings-blackout rule converting sells to
          reviews automatically — so if you see 'sell' it has already cleared that filter).
        - 'trim': reduce position size to respect max-position-pct.

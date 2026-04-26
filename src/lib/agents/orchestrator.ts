@@ -18,7 +18,7 @@ import type { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { TRADE_DECISION_MODEL, assertTradeModel } from './models';
 import { AGBRO_PRINCIPLES } from './prompts';
-import { TOOL_DEFS, runTool } from './tools';
+import { TOOL_DEFS, runTool, isMutatingTool } from './tools';
 import { child } from '@/lib/logger';
 import { estimateCostUsd, type TokenUsage } from '@/lib/pricing';
 import {
@@ -33,6 +33,27 @@ import { refreshEarningsDate } from '@/lib/data/earnings';
 const MAX_TURNS = 16;
 const MAX_TOOL_OUTPUT_BYTES = 60_000;
 const TRUNCATION_MARKER = '\n…[truncated by orchestrator]';
+
+// Extended thinking: lets Opus 4.7 reason in a private scratchpad
+// before each tool call. Reasoning quality on multi-factor decisions
+// (worth-buying vs MoS vs earnings vs sizing) materially improves at
+// the cost of a few thousand thinking tokens per turn (billed at
+// output rate). 8 000 tokens is the documented sweet spot for
+// "complex tool decisions" in Anthropic's guidance — large enough
+// for genuine deliberation, small enough that runaway costs are
+// capped. Override via AGBRO_THINKING_BUDGET=N or disable entirely
+// with AGBRO_THINKING_DISABLED=true if a regression appears in
+// production.
+const THINKING_BUDGET_TOKENS = (() => {
+  const raw = process.env.AGBRO_THINKING_BUDGET;
+  if (!raw) return 8_000;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 1024 && n <= 32_000 ? n : 8_000;
+})();
+// max_tokens MUST exceed thinking budget per Anthropic's API. The
+// non-thinking output (text + tool_use blocks) is small relative to
+// the thinking trace, so 4 000 tokens of headroom is plenty.
+const MAX_OUTPUT_TOKENS = THINKING_BUDGET_TOKENS + 4_096;
 
 // Soft-lock window. A run that hasn't terminated within this window is treated
 // as orphaned (process crash mid-run) and ignored by the inflight check. Must
@@ -222,20 +243,44 @@ export async function runAgent(args: RunAgentArgs): Promise<RunAgentResult> {
       : t
   );
 
+  // Extended thinking is opt-out rather than opt-in — the sprint
+  // assumption is "always on for the agent path". Operator escape
+  // hatch via env var if a cost or latency regression shows up.
+  const thinkingEnabled = process.env.AGBRO_THINKING_DISABLED !== 'true';
   try {
     for (let turn = 0; turn < MAX_TURNS; turn++) {
       const resp = await client.messages.create({
         model: TRADE_DECISION_MODEL,
-        max_tokens: 4096,
+        max_tokens: MAX_OUTPUT_TOKENS,
         system: AGBRO_PRINCIPLES,
         tools: cachedTools,
         messages,
+        // Extended thinking. The `thinking` request param is supported
+        // on Opus 4.7. Returns one or more `thinking` blocks in
+        // response.content alongside text + tool_use blocks; we
+        // already preserve the full content array on the next turn
+        // (messages.push of resp.content), which is what the SDK
+        // requires for thinking continuity across tool-call rounds.
+        ...(thinkingEnabled
+          ? {
+              thinking: {
+                type: 'enabled' as const,
+                budget_tokens: THINKING_BUDGET_TOKENS,
+              },
+            }
+          : {}),
       });
 
       // Accumulate token usage across every turn so AgentRun.costUsd reflects
       // the full run, not just the final turn. The cache fields are present
       // on the wire but not typed in @anthropic-ai/sdk@0.30.1; index-access
       // keeps us forward-compatible when the SDK adds them.
+      //
+      // Extended-thinking tokens are bundled into `output_tokens` by the
+      // Anthropic API (per their billing docs — thinking is billed at the
+      // output rate). So the existing accounting captures them with no
+      // pricing-module change. The cost-summary on /analytics will reflect
+      // the bump automatically once a wake actually uses thinking.
       const u = resp.usage as unknown as Record<string, number | undefined> | undefined;
       if (u) {
         totalUsage.inputTokens += u.input_tokens ?? 0;
@@ -252,9 +297,28 @@ export async function runAgent(args: RunAgentArgs): Promise<RunAgentResult> {
       const textBlocks = resp.content.filter(
         (b): b is Anthropic.TextBlock => b.type === 'text'
       );
+      // Extended-thinking blocks. Persisting them as 'thought' rows
+      // alongside text gives /decisions a full audit of how the agent
+      // got to a decision — not just what it said externally. The
+      // SDK's ContentBlock union in this version doesn't export the
+      // 'thinking' variant explicitly, so we cast through `unknown`
+      // and key off the `type` discriminator manually. Future SDK
+      // upgrades that add the variant just narrow this for free.
+      const thinkingBlocks = resp.content
+        .filter((b) => (b as { type: string }).type === 'thinking')
+        .map((b) => b as unknown as { type: 'thinking'; thinking: string });
       for (const t of textBlocks) {
         await prisma.agentDecision.create({
           data: { agentRunId: run.id, kind: 'thought', payload: { text: t.text } },
+        });
+      }
+      for (const t of thinkingBlocks) {
+        await prisma.agentDecision.create({
+          data: {
+            agentRunId: run.id,
+            kind: 'thought',
+            payload: { thinking: t.thinking, source: 'extended_thinking' },
+          },
         });
       }
 
@@ -275,39 +339,63 @@ export async function runAgent(args: RunAgentArgs): Promise<RunAgentResult> {
       const toolResults: Anthropic.ToolResultBlockParam[] = [];
       let finalized = false;
 
-      for (const use of toolUses) {
+      // Decide whether this batch can run concurrently. Anthropic's
+      // API has supported parallel tool_use blocks in a single
+      // assistant turn; the orchestrator just hadn't been taking
+      // advantage of it. If ANY tool in the batch is mutating, we
+      // serialise the whole batch — strictly safer than interleaving
+      // (no lost upserts, no out-of-order audit rows). Pure
+      // read-only batches go parallel.
+      const anyMutating = toolUses.some((u) => isMutatingTool(u.name));
+      const batchMode = anyMutating ? 'serial' : 'parallel';
+      log.debug('agent.tool_batch', {
+        mode: batchMode,
+        size: toolUses.length,
+        names: toolUses.map((u) => u.name),
+      });
+
+      // Per-tool runner. Captures result-or-error in a structure so a
+      // failing tool inside a parallel batch doesn't cancel its peers.
+      // Keeps the existing logging + truncation + AgentDecision
+      // persistence shape — only the dispatch loop changed.
+      async function runOne(use: Anthropic.ToolUseBlock): Promise<{
+        use: Anthropic.ToolUseBlock;
+        content: string;
+        isError: boolean;
+      }> {
         let result: unknown;
         let isError = false;
-        // One log line per tool invocation so a month of runs can be
-        // surveyed for "which tools did the agent actually use?" without
-        // parsing the full transcript. Cheap at the scale we run (dozens
-        // of tool calls per run, a few runs per day).
         const toolStart = Date.now();
-        // Per-tool call is routine — one line per dispatch across
-        // dozens of tools per run. Downgraded to debug so prod logs
-        // keep agent.run.start / agent.run.end / agent.tool_error as
-        // the signal; dev still sees the full stream.
         log.debug('agent.tool_called', { tool: use.name });
         try {
           result = await runTool(use.name, use.input as Record<string, unknown>, ctx);
         } catch (err) {
           isError = true;
           result = { error: (err as Error).message };
-          log.warn('agent.tool_error', { tool: use.name, durationMs: Date.now() - toolStart }, err);
+          log.warn(
+            'agent.tool_error',
+            { tool: use.name, durationMs: Date.now() - toolStart },
+            err
+          );
         }
         const serialized = JSON.stringify(result, bigintReplacer);
         const truncated = serialized.length > MAX_TOOL_OUTPUT_BYTES;
         const content = truncated
-          ? serialized.slice(0, MAX_TOOL_OUTPUT_BYTES - TRUNCATION_MARKER.length) + TRUNCATION_MARKER
+          ? serialized.slice(0, MAX_TOOL_OUTPUT_BYTES - TRUNCATION_MARKER.length) +
+            TRUNCATION_MARKER
           : serialized;
         if (truncated) {
-          log.warn('agent.tool_output_truncated', { tool: use.name, bytes: serialized.length });
+          log.warn('agent.tool_output_truncated', {
+            tool: use.name,
+            bytes: serialized.length,
+          });
         }
         // Deep-convert bigints in the output before Prisma sees it.
-        // Previously `output: result` went into InputJsonValue raw, and
-        // any nested bigint (e.g. evaluate_exits' unrealizedLossCents)
-        // crashed the agentDecision insert. Re-parsing the already-
-        // bigint-safe serialized form guarantees a JSON-clean object.
+        // Previously `output: result` went into InputJsonValue raw,
+        // and any nested bigint (e.g. evaluate_exits' unrealized
+        // lossCents) crashed the agentDecision insert. Re-parsing the
+        // already-bigint-safe serialized form guarantees a JSON-clean
+        // object.
         const safeResultForStorage = JSON.parse(serialized);
         const decisionPayload = {
           name: use.name,
@@ -324,11 +412,30 @@ export async function runAgent(args: RunAgentArgs): Promise<RunAgentResult> {
             payload: decisionPayload,
           },
         });
+        return { use, content, isError };
+      }
+
+      const dispatched =
+        batchMode === 'parallel'
+          ? await Promise.all(toolUses.map(runOne))
+          : await (async () => {
+              const out: Awaited<ReturnType<typeof runOne>>[] = [];
+              for (const u of toolUses) out.push(await runOne(u));
+              return out;
+            })();
+
+      // Order tool_result blocks to match the order of tool_use blocks
+      // the model emitted. Anthropic's API doesn't strictly require
+      // this, but matching the input order keeps the per-turn audit
+      // log readable.
+      const byUseId = new Map(dispatched.map((d) => [d.use.id, d]));
+      for (const use of toolUses) {
+        const d = byUseId.get(use.id)!;
         toolResults.push({
           type: 'tool_result',
           tool_use_id: use.id,
-          content,
-          is_error: isError,
+          content: d.content,
+          is_error: d.isError,
         });
         if (use.name === 'finalize_run') finalized = true;
       }

@@ -487,6 +487,67 @@ export const TOOL_DEFS: Anthropic.Tool[] = [
   },
 ];
 
+// ─── Tool classification ────────────────────────────────────────────────
+// Used by the orchestrator to decide whether a turn's batch of tool_use
+// blocks can run concurrently (read-only) or must serialize (any
+// mutating tool present). Anthropic's API has supported parallel
+// tool_use blocks in a single assistant turn for a while; the
+// orchestrator just hadn't been taking advantage of it.
+//
+// Read-only = pure query against Alpaca / DB / external API. Calling
+// concurrently is always safe; multiple reads of the same symbol from
+// the same wake just resolve at slightly different timestamps.
+//
+// Mutating = writes to our DB, the broker, or the brain. Running
+// concurrently with anything else risks lost writes (two upserts on
+// the same Stock row), out-of-order audit trails (a place_trade
+// filing before its own pre-trade research returns), or the trade
+// gate seeing stale state. When ANY tool in the batch is mutating,
+// the orchestrator serialises the whole batch — strictly safer than
+// trying to interleave.
+//
+// `evaluate_exits` does idempotent thesis-backfill writes; classified
+// read-only because two concurrent calls converge to the same state.
+const READ_ONLY_TOOLS = new Set([
+  'get_account_state',
+  'get_positions',
+  'get_latest_price',
+  'is_market_open',
+  'get_watchlist',
+  'read_brain',
+  'run_analyzer',
+  'research_perplexity',
+  'research_google',
+  'size_position',
+  'evaluate_exits',
+  'get_option_chain',
+  'get_event_calendar',
+]);
+
+const MUTATING_TOOLS = new Set([
+  'write_brain',
+  'record_research_note',
+  'refresh_fundamentals',
+  'update_stock_fundamentals',
+  'screen_universe',
+  'acknowledge_thesis_review',
+  'add_to_watchlist',
+  'place_option_trade',
+  'place_trade',
+  'finalize_run',
+]);
+
+export function isMutatingTool(name: string): boolean {
+  // Defensive: an unknown tool name is treated as mutating so a
+  // future tool addition without a classification update can't
+  // silently race with peers in a parallel batch.
+  return MUTATING_TOOLS.has(name) || !READ_ONLY_TOOLS.has(name);
+}
+
+export function isKnownTool(name: string): boolean {
+  return MUTATING_TOOLS.has(name) || READ_ONLY_TOOLS.has(name);
+}
+
 export type ToolContext = {
   // Non-null when the tool is called from inside an agent wake-up
   // run. Null when called from an approval-queue execution (user
