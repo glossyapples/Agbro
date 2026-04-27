@@ -42,6 +42,12 @@ type AggregateView = {
   medianAlphaPct: number | null;
   consistencyScore: number;
   windowCount: number;
+  // Data-quality signals (added for the diagnostic surface). Empty
+  // optional on prior runs that pre-date the field — we treat
+  // missing as undefined and the UI shows a "—" so older rows don't
+  // misreport as "0 windows had data".
+  windowsWithData?: number;
+  tradesTotal?: number;
 };
 
 type RunView = {
@@ -126,7 +132,15 @@ export function WalkForwardRunner({ priorRuns }: { priorRuns: RunView[] }) {
   const router = useRouter();
   const [tab, setTab] = useState<'single' | 'compare'>('single');
   const [strategyKey, setStrategyKey] = useState<StrategyKey>('buffett_core');
-  const [totalStart, setTotalStart] = useState('2015-01-01');
+  // Default totalStart bumped 2015 → 2017 because Alpaca's free IEX
+  // feed has spotty coverage for many symbols pre-2017 (some symbols
+  // start 2017+, some later). 2015-start sweeps were producing windows
+  // where most symbols had no bars → simulator hit its no-data
+  // short-circuit → aggregate metrics looked like "strategy verdict"
+  // when they were actually "data verdict". Users who want the longer
+  // history can still pick 2015 manually + watch the "windows with
+  // data" column for sparse-data flags.
+  const [totalStart, setTotalStart] = useState('2017-01-01');
   const [totalEnd, setTotalEnd] = useState('2024-12-31');
   const [windowMonths, setWindowMonths] = useState('24');
   const [stepMonths, setStepMonths] = useState('12');
@@ -345,7 +359,14 @@ export function WalkForwardRunner({ priorRuns }: { priorRuns: RunView[] }) {
         <p className="mt-3 text-[11px] text-ink-400">
           Step &lt; window = overlapping windows = more samples for the
           consistency score. Default 24-month windows / 12-month step
-          gives 9 samples on a 10-year span.
+          gives 7 samples across 2017-2024.
+        </p>
+        <p className="mt-1 text-[11px] text-ink-400">
+          Default total-start is <strong>2017-01-01</strong> because Alpaca's
+          free IEX feed has spotty coverage pre-2017 — earlier ranges
+          produce sparse-data rows. Pick an earlier date if you want the
+          longer history; watch the <em>Data</em> column for windows that
+          ran without bars.
         </p>
         {tab === 'single' && err ? (
           <p className="mt-3 rounded-sm bg-rose-950 p-2 text-xs text-rose-300">
@@ -591,6 +612,18 @@ function CompareTable({
           <thead className="text-ink-400">
             <tr className="border-b border-ink-800">
               <th className="py-2 pr-3 text-left font-medium">Strategy</th>
+              <th
+                className="py-2 px-2 text-right font-medium"
+                title="Windows where the simulator actually produced an equity series. A low ratio means most windows hit the no-data short-circuit (Alpaca IEX coverage gaps, missing bars on a watchlist symbol). Treat metrics on a sparse-data row as a data verdict, not a strategy verdict."
+              >
+                Data
+              </th>
+              <th
+                className="py-2 px-2 text-right font-medium"
+                title="Total trades placed across every window in the sweep."
+              >
+                Trades
+              </th>
               <th className="py-2 px-2 text-right font-medium">Consistency</th>
               <th className="py-2 px-2 text-right font-medium">Median CAGR</th>
               <th className="py-2 px-2 text-right font-medium">Median alpha</th>
@@ -607,11 +640,23 @@ function CompareTable({
         </table>
       </div>
       {completed.length >= 2 && (
-        <p className="mt-3 text-[11px] text-ink-400">
-          Sorted by consistency score then median CAGR. A high consistency +
-          positive median alpha is the only combination that suggests a real
-          edge — high CAGR alone in one window is curve-fit by default.
-        </p>
+        <div className="mt-3 space-y-1 text-[11px] text-ink-400">
+          <p>
+            <strong className="text-ink-300">Read order:</strong> check{' '}
+            <em>Data</em> first. A row showing few "windows with data" or zero{' '}
+            <em>Trades</em> means the simulator hit Alpaca's no-bars
+            short-circuit on most slices — the strategy metrics aren't a
+            verdict, they're missing data. Sparse-data rows are flagged and
+            their strategy cells muted.
+          </p>
+          <p>
+            <strong className="text-ink-300">Then:</strong> sorted by
+            consistency score, tiebreak by median CAGR. A high consistency +
+            positive median alpha is the only combination that suggests a
+            real edge — high CAGR alone in one window is curve-fit by
+            default.
+          </p>
+        </div>
       )}
     </section>
   );
@@ -619,6 +664,34 @@ function CompareTable({
 
 function CompareRowView({ row }: { row: CompareRow }) {
   const a = row.aggregate;
+  // Data quality. Two signals: ratio of windows that produced an
+  // equity series, and the absolute trade count across the sweep.
+  // Sparse-data rows (< 50% windows with data, or zero trades total)
+  // get the strategy-metric cells de-emphasised so the user reads
+  // them as "data verdict, not strategy verdict."
+  const windowsWithData = a?.windowsWithData;
+  const tradesTotal = a?.tradesTotal;
+  const dataRatio =
+    a && windowsWithData != null && a.windowCount > 0
+      ? windowsWithData / a.windowCount
+      : null;
+  const sparseData =
+    a != null &&
+    ((dataRatio != null && dataRatio < 0.5) ||
+      (tradesTotal != null && tradesTotal === 0));
+  const dataColor = sparseData
+    ? 'text-rose-400'
+    : dataRatio == null
+      ? 'text-ink-400'
+      : dataRatio >= 0.9
+        ? 'text-emerald-300'
+        : dataRatio >= 0.5
+          ? 'text-amber-300'
+          : 'text-rose-400';
+  // Strategy metrics get muted when data is sparse — so the eye
+  // skips past them rather than reading "0% consistency" as a
+  // strategy verdict.
+  const muted = sparseData ? 'opacity-40' : '';
   const cagrColor =
     a?.medianCagrPct == null
       ? 'text-ink-400'
@@ -647,21 +720,46 @@ function CompareRowView({ row }: { row: CompareRow }) {
         : '';
   return (
     <tr className={`text-ink-200 ${opacity}`}>
-      <td className="py-2 pr-3">{STRATEGY_LABELS[row.strategyKey]}</td>
-      <td className={`py-2 px-2 text-right tabular-nums ${consistencyColor}`}>
+      <td className="py-2 pr-3">
+        {STRATEGY_LABELS[row.strategyKey]}
+        {sparseData && (
+          <span
+            className="ml-2 rounded-sm bg-rose-500/15 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-rose-300"
+            title="Most windows had no bar data — Alpaca IEX feed didn't return prices for the universe in this range. Strategy metrics on this row reflect missing data, not the strategy's behaviour."
+          >
+            sparse data
+          </span>
+        )}
+      </td>
+      <td
+        className={`py-2 px-2 text-right tabular-nums ${dataColor}`}
+        title={
+          a && windowsWithData != null
+            ? `${windowsWithData} of ${a.windowCount} windows produced an equity series`
+            : undefined
+        }
+      >
+        {a && windowsWithData != null
+          ? `${windowsWithData}/${a.windowCount}`
+          : '—'}
+      </td>
+      <td className="py-2 px-2 text-right tabular-nums text-ink-300">
+        {a && tradesTotal != null ? tradesTotal.toLocaleString() : '—'}
+      </td>
+      <td className={`py-2 px-2 text-right tabular-nums ${consistencyColor} ${muted}`}>
         {a ? `${(a.consistencyScore * 100).toFixed(0)}%` : '—'}
       </td>
-      <td className={`py-2 px-2 text-right tabular-nums ${cagrColor}`}>
+      <td className={`py-2 px-2 text-right tabular-nums ${cagrColor} ${muted}`}>
         {a?.medianCagrPct != null
           ? `${a.medianCagrPct >= 0 ? '+' : ''}${a.medianCagrPct.toFixed(1)}%`
           : '—'}
       </td>
-      <td className={`py-2 px-2 text-right tabular-nums ${alphaColor}`}>
+      <td className={`py-2 px-2 text-right tabular-nums ${alphaColor} ${muted}`}>
         {a?.medianAlphaPct != null
           ? `${a.medianAlphaPct >= 0 ? '+' : ''}${a.medianAlphaPct.toFixed(1)}%`
           : '—'}
       </td>
-      <td className="py-2 px-2 text-right tabular-nums text-rose-300">
+      <td className={`py-2 px-2 text-right tabular-nums text-rose-300 ${muted}`}>
         {a ? `${a.medianMaxDrawdownPct.toFixed(1)}%` : '—'}
       </td>
       <td className="py-2 px-2 text-right tabular-nums">

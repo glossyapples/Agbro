@@ -63,6 +63,16 @@ export type WalkForwardResult = {
     medianAlphaPct: number | null;
     consistencyScore: number; // 0..1 — see computeConsistency below
     windowCount: number;
+    // Diagnostics. windowsWithData is the count of windows where the
+    // simulator actually produced an equity series (cagrPct != null);
+    // a low ratio vs windowCount means most windows hit the
+    // "no_data" short-circuit (Alpaca IEX coverage gap, missing
+    // bars on a watchlist symbol, etc.) — and any aggregate metric
+    // with sparse-data input is suspect, not a strategy verdict.
+    // tradesTotal sums tradeCount across windows; zero across the
+    // whole sweep is the loudest signal that nothing actually ran.
+    windowsWithData: number;
+    tradesTotal: number;
   };
 };
 
@@ -289,6 +299,8 @@ export async function runWalkForward(
       medianAlphaPct: median(alphas),
       consistencyScore: computeConsistency(cagrs),
       windowCount: windows.length,
+      windowsWithData: windows.filter((w) => w.metrics.cagrPct != null).length,
+      tradesTotal: windows.reduce((s, w) => s + w.tradeCount, 0),
     },
   };
 }
