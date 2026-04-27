@@ -22,7 +22,8 @@ import Anthropic from '@anthropic-ai/sdk';
 import { prisma } from '@/lib/db';
 import { TRADE_DECISION_MODEL } from './models';
 import { estimateCostUsd, type TokenUsage } from '@/lib/pricing';
-import { fetchFundamentals, type FundamentalsSnapshot } from '@/lib/data/sec-edgar';
+import { type FundamentalsSnapshot } from '@/lib/data/sec-edgar';
+import { refreshFundamentalsForSymbol } from '@/lib/data/refresh-fundamentals';
 import { getResearchFilings, type ResearchFilings } from '@/lib/data/sec-filings';
 import { getBars } from '@/lib/alpaca';
 import { log } from '@/lib/logger';
@@ -261,13 +262,23 @@ export async function runDeepResearch(
   // are cheap. Each call has its own catch — a flaky SEC fetch on
   // filings shouldn't kill the whole research call; the agent can
   // still produce a useful note from fundamentals + price alone.
+  //
+  // Fundamentals fetch deliberately uses refreshFundamentalsForSymbol
+  // (which both fetches AND upserts the Stock catalog row) rather
+  // than a bare fetchFundamentals call. Side effect: every Research
+  // click also marks the watchlist row as "EDGAR · fresh" and
+  // updates the cached fundamentals other surfaces read from. Without
+  // this, users who only ever click Research never see the badge
+  // refresh and have to remember to hit "Refresh from SEC" separately.
   const [fundamentals, currentPrice, filings] = await Promise.all([
     args.fundamentalsOverride !== undefined
       ? Promise.resolve(args.fundamentalsOverride)
-      : fetchFundamentals(symbol).catch((err) => {
-          log.warn('deep_research.fundamentals_failed', { symbol, error: String(err) });
-          return null;
-        }),
+      : refreshFundamentalsForSymbol(symbol)
+          .then((r) => r.snapshot ?? null)
+          .catch((err) => {
+            log.warn('deep_research.fundamentals_failed', { symbol, error: String(err) });
+            return null;
+          }),
     args.currentPriceOverride !== undefined
       ? Promise.resolve(args.currentPriceOverride)
       : fetchLatestClose(symbol),
