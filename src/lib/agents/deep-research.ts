@@ -219,24 +219,30 @@ export async function runDeepResearch(
     asOfISO,
   });
 
-  // Adaptive thinking + high effort. Opus 4.7's current API rejects
-  // the older `thinking.type: 'enabled'` shape with budget_tokens —
-  // it requires `adaptive` plus an `output_config.effort` knob. The
-  // SDK at @anthropic-ai/sdk@0.30.1 doesn't type either field; the
-  // conditional-spread + cast pattern keeps the call site clean.
-  // 'high' effort fits this use case (one-shot research note where
-  // reasoning depth matters more than latency); switch to 'medium'
-  // if cost runs hot or 'low' for quick eyeballs in dev.
+  // Adaptive thinking + medium effort. Opus 4.7's API requires the
+  // adaptive shape (older `thinking.type: 'enabled'` is rejected).
+  // Effort='medium' keeps end-to-end latency under ~30s for a typical
+  // call, which is below mobile Safari's fetch timeout (~60s on
+  // cellular). 'high' produced "Load failed" timeouts on iPhone for
+  // slow names. Switch back up to 'high' if we ship a streaming /
+  // background-job version that keeps the connection alive.
+  // SDK at @anthropic-ai/sdk@0.30.1 doesn't type the new fields;
+  // conditional-spread cast keeps the call site clean.
   const adaptiveThinkingParam = {
     thinking: { type: 'adaptive' as const },
-    output_config: { effort: 'high' as const },
+    output_config: { effort: 'medium' as const },
   } as unknown as Record<string, unknown>;
+  const callStart = Date.now();
   const resp = await client.messages.create({
     model: TRADE_DECISION_MODEL,
     max_tokens: MAX_OUTPUT_TOKENS,
     system: SYSTEM_PROMPT,
     messages: [{ role: 'user', content: userPrompt }],
     ...adaptiveThinkingParam,
+  });
+  log.info('deep_research.opus_done', {
+    symbol,
+    durationMs: Date.now() - callStart,
   });
 
   const u = resp.usage as unknown as Record<string, number | undefined>;

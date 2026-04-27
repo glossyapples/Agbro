@@ -107,10 +107,14 @@ function LoadingView({ symbol }: { symbol: string }) {
       </p>
       <p className="flex items-center gap-2">
         <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-emerald-400" />
-        Asking Opus 4.7 to write the research note (extended thinking enabled)...
+        Asking Opus 4.7 to write the research note (medium-effort thinking)...
       </p>
       <p className="text-xs text-ink-500">
-        Typically takes 30-60s. Cost per click: ~$0.50-1.50. Capped server-side.
+        Typically 15-30s. Cost per click: ~$0.30-1.00. Capped server-side.
+      </p>
+      <p className="text-[11px] text-ink-600">
+        Don&apos;t lock your phone — mobile Safari may abort the request after a
+        minute. If you see &quot;Load failed,&quot; just click Research again.
       </p>
     </div>
   );
