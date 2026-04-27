@@ -247,6 +247,97 @@ describe('extractFundamentals — fiscal-period selection (TROX 89% gross-margin
     const snap = extractFundamentals('TROX', '0001', fixture);
     expect(snap.totalEquity).toBe(1_420_000_000);
   });
+
+  it('picks the larger value when COGS is filed under two overlapping tags (the actual TROX case)', () => {
+    // After fp='FY' filtering shipped, TROX still showed 89% gross margin
+    // because it files COGS under TWO tags simultaneously:
+    //   CostOfRevenue ($310M, narrower sub-category)
+    //   CostOfGoodsAndServicesSold ($2.4B, full COGS)
+    // The first version of the picker stopped at CostOfRevenue and
+    // never checked the second tag. Fix: collect candidates across
+    // all tags, tie-break by largest absolute value.
+    const trox = {
+      cik: 99999,
+      entityName: 'Tronox-Like',
+      facts: {
+        'us-gaap': {
+          Revenues: {
+            units: {
+              USD: [
+                {
+                  end: '2024-12-31',
+                  val: 2_900_000_000,
+                  fy: 2024,
+                  fp: 'FY',
+                  form: '10-K',
+                  start: '2024-01-01',
+                },
+              ],
+            },
+          },
+          // Narrower sub-category — listed first in TAGS, would be
+          // grabbed by the old picker.
+          CostOfRevenue: {
+            units: {
+              USD: [
+                {
+                  end: '2024-12-31',
+                  val: 310_000_000,
+                  fy: 2024,
+                  fp: 'FY',
+                  form: '10-K',
+                  start: '2024-01-01',
+                },
+              ],
+            },
+          },
+          // The full COGS — must be picked even though its tag is
+          // second in the list, because its value is larger.
+          CostOfGoodsAndServicesSold: {
+            units: {
+              USD: [
+                {
+                  end: '2024-12-31',
+                  val: 2_400_000_000,
+                  fy: 2024,
+                  fp: 'FY',
+                  form: '10-K',
+                  start: '2024-01-01',
+                },
+              ],
+            },
+          },
+          StockholdersEquity: {
+            units: {
+              USD: [
+                { end: '2024-12-31', val: 1_420_000_000, fy: 2024, fp: 'FY', form: '10-K' },
+              ],
+            },
+          },
+          NetIncomeLoss: {
+            units: {
+              USD: [
+                {
+                  end: '2024-12-31',
+                  val: -470_000_000,
+                  fy: 2024,
+                  fp: 'FY',
+                  form: '10-K',
+                  start: '2024-01-01',
+                },
+              ],
+            },
+          },
+        },
+      },
+    };
+    const snap = extractFundamentals('TROX', '0001', trox);
+    expect(snap.costOfRevenue).toBe(2_400_000_000);
+    expect(snap.grossMarginPct).not.toBeNull();
+    // Real TROX gross margin is ~17%; this fixture should land there.
+    expect(snap.grossMarginPct!).toBeGreaterThan(15);
+    expect(snap.grossMarginPct!).toBeLessThan(20);
+  });
 });
 
 describe('extractFundamentals — resilience', () => {

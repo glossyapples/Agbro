@@ -146,67 +146,72 @@ export async function fetchCompanyFacts(cik10: string): Promise<CompanyFacts> {
 // -------------------- XBRL extractors --------------------
 
 // Pick the most recent annual (10-K) value for a given concept, searching the
-// given tag list in order. Returns { val, end } or null.
+// given tag list. Returns { val, end } or null.
 //
-// Selection priority (the fix for the TROX 89%-gross-margin bug):
-//   1. fp='FY' entries from a 10-K filing — XBRL's explicit "this row is
-//      the full fiscal year" marker. These are unambiguously the right
-//      value for income-statement concepts (revenues, COGS, net income).
-//   2. Fallback: 10-K entries with a duration of ~340-380 days
-//      (full-year-ish), OR entries with no `start` (instant facts —
-//      balance sheet items like equity, debt, shares outstanding).
-//   3. Last resort: any 10-K entry, then any entry at all.
-//
-// Why we needed this: a 10-K filing reports many concepts at multiple
-// granularities — full year, Q4 sub-period, prior-year comparative,
-// segment breakdowns. The old picker just reduced by max(end) which
-// could grab a quarterly COGS while keeping full-year revenue,
-// producing nonsense margins (TROX showed 89.3% gross margin on a
-// commodity chemicals business).
+// Selection strategy (refined twice — first to filter quarterly sub-periods
+// out of 10-K listings, then again because TROX still showed the wrong COGS
+// even after that fix):
+//   - Collect candidates from ALL matching tags, not just the first that
+//     has data. Companies can file the same conceptual quantity under
+//     multiple us-gaap tags — TROX, for example, files
+//     CostOfGoodsAndServicesSold for full COGS (~$2.4B) AND CostOfRevenue
+//     for a smaller sub-category (~$310M). The old picker stopped at the
+//     first tag that returned anything, locking us into the smaller value.
+//   - Tier 1: fp='FY' entries from a 10-K. The cleanest signal.
+//   - Tier 2 fallback: 10-K entries spanning ~340-380 days OR instant
+//     facts (no `start`).
+//   - Tier 3 fallback: any 10-K entry. Tier 4: any entry.
+//   - Tie-break: latest end date, then largest absolute value. Largest
+//     value picks the most-inclusive aggregate — the right choice for
+//     cost/revenue concepts where companies sometimes file overlapping
+//     sub-categories.
 function pickLatestAnnual(
   facts: CompanyFacts,
   tags: readonly string[],
   preferredUnit: string
 ): { val: number; end: string; unit: string } | null {
   const pool = facts.facts['us-gaap'] ?? {};
-  for (const tag of tags) {
-    const fact = pool[tag] ?? facts.facts.dei?.[tag];
-    if (!fact) continue;
-    const unitKey = Object.keys(fact.units).find((u) => u === preferredUnit) ?? Object.keys(fact.units)[0];
-    const entries = fact.units[unitKey] ?? [];
-    if (entries.length === 0) continue;
 
-    // Tier 1: fiscal-year entries from a 10-K. The cleanest signal.
-    let candidates = entries.filter((e) => e.form === '10-K' && e.fp === 'FY');
-
-    // Tier 2: 10-K entries that look like a full year. Catches older
-    // filings that may not have populated `fp`. Instant facts (no
-    // `start`) are also accepted here — for balance-sheet items the
-    // entry just has an `end` date.
-    if (candidates.length === 0) {
-      candidates = entries.filter((e) => {
-        if (e.form !== '10-K') return false;
-        if (!e.start) return true;
-        const days = (Date.parse(e.end) - Date.parse(e.start)) / 86_400_000;
-        return days >= 340 && days <= 380;
-      });
+  type Cand = { val: number; end: string; unit: string; tag: string; tier: number };
+  const collect = (filter: (e: { end: string; val: number; fy?: number; fp?: string; form?: string; start?: string }) => boolean, tier: number): Cand[] => {
+    const out: Cand[] = [];
+    for (const tag of tags) {
+      const fact = pool[tag] ?? facts.facts.dei?.[tag];
+      if (!fact) continue;
+      const unitKey =
+        Object.keys(fact.units).find((u) => u === preferredUnit) ?? Object.keys(fact.units)[0];
+      const entries = fact.units[unitKey] ?? [];
+      for (const e of entries) {
+        if (filter(e)) out.push({ val: e.val, end: e.end, unit: unitKey, tag, tier });
+      }
     }
+    return out;
+  };
 
-    // Tier 3: any 10-K entry. Legacy / foreign-issuer fallback.
-    if (candidates.length === 0) {
-      candidates = entries.filter((e) => e.form === '10-K');
-    }
-
-    // Tier 4: anything at all (mostly for tests + edge cases).
-    if (candidates.length === 0) candidates = entries;
-    if (candidates.length === 0) continue;
-
-    // Pick the entry with the latest end date — i.e., the most recent
-    // fiscal year present.
-    const latest = candidates.reduce((a, b) => (a.end > b.end ? a : b));
-    return { val: latest.val, end: latest.end, unit: unitKey };
+  // Tier 1: fp='FY' on a 10-K. Most reliable.
+  let cands = collect((e) => e.form === '10-K' && e.fp === 'FY', 1);
+  if (cands.length === 0) {
+    // Tier 2: 10-K with ~365-day period, or instant fact (no start).
+    cands = collect((e) => {
+      if (e.form !== '10-K') return false;
+      if (!e.start) return true;
+      const days = (Date.parse(e.end) - Date.parse(e.start)) / 86_400_000;
+      return days >= 340 && days <= 380;
+    }, 2);
   }
-  return null;
+  if (cands.length === 0) cands = collect((e) => e.form === '10-K', 3);
+  if (cands.length === 0) cands = collect(() => true, 4);
+  if (cands.length === 0) return null;
+
+  // Pick the latest end date; tie-break on largest absolute value
+  // (most-inclusive aggregate). For cost / revenue concepts where a
+  // company files overlapping sub-categories under different tags,
+  // largest is the right pick.
+  const winner = cands.reduce((a, b) => {
+    if (a.end !== b.end) return a.end > b.end ? a : b;
+    return Math.abs(a.val) >= Math.abs(b.val) ? a : b;
+  });
+  return { val: winner.val, end: winner.end, unit: winner.unit };
 }
 
 // For EPS growth we need the historical annual series.
