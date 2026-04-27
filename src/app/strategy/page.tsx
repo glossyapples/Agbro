@@ -115,6 +115,30 @@ async function StrategyTab({ userId }: { userId: string }) {
   return (
     <>
       <StrategySyncNudge missingSlugs={missingSlugs} />
+
+      {/* Quick actions — moved up from the bottom of the page where they
+          were below all 6 strategy cards and easy to miss. Two utility
+          actions that operate ACROSS strategies, not on any one of
+          them, so they belong at the top, above the per-strategy list.
+          Compare is conditional on having ≥2 strategies (no point
+          otherwise); watchlist is always shown. */}
+      <div className="flex flex-wrap gap-2">
+        {strategies.length >= 2 && (
+          <Link
+            href="/strategy/compare"
+            className="flex flex-1 items-center justify-center gap-2 rounded-md border border-ink-600 bg-ink-800 px-3 py-2 text-xs font-medium text-ink-100 transition hover:bg-ink-700"
+          >
+            <span aria-hidden>↔</span> Compare strategies
+          </Link>
+        )}
+        <Link
+          href="/watchlist"
+          className="flex flex-1 items-center justify-center gap-2 rounded-md border border-ink-600 bg-ink-800 px-3 py-2 text-xs font-medium text-ink-100 transition hover:bg-ink-700"
+        >
+          <span aria-hidden>☆</span> Manage watchlist
+        </Link>
+      </div>
+
       <ul className="flex flex-col gap-3">
         {strategies.map((s) => (
           <li key={s.id} className="card">
@@ -181,16 +205,6 @@ async function StrategyTab({ userId }: { userId: string }) {
           </li>
         ))}
       </ul>
-
-      {strategies.length >= 2 && (
-        <Link href="/strategy/compare" className="card text-center text-sm text-brand-400">
-          Compare strategies →
-        </Link>
-      )}
-
-      <Link href="/watchlist" className="card text-center text-sm text-brand-400">
-        Manage watchlist →
-      </Link>
     </>
   );
 }
