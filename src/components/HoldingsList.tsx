@@ -9,6 +9,7 @@
 import { useState } from 'react';
 import { formatUsd } from '@/lib/money';
 import { Sparkline } from './Sparkline';
+import { DeepResearchModal } from './DeepResearchModal';
 
 // Serializable shape the server page passes down. BigInt → string so
 // props survive Next.js server→client boundary. All numerics already
@@ -90,6 +91,8 @@ export function HoldingsList({
   emptyMessage?: string;
 }) {
   const [mode, setMode] = useState<Mode>('total_pct');
+  // Currently-open deep-research modal (one at a time). Null = closed.
+  const [researchSymbol, setResearchSymbol] = useState<string | null>(null);
 
   function cycle() {
     const i = MODES.indexOf(mode);
@@ -127,6 +130,15 @@ export function HoldingsList({
               </div>
               <button
                 type="button"
+                onClick={() => setResearchSymbol(h.symbol)}
+                className="rounded-md border border-ink-700 px-2 py-1 text-[11px] font-medium text-ink-300 transition hover:bg-ink-800 hover:text-ink-100"
+                aria-label={`Run deep research on ${h.symbol}`}
+                title="Deep research (~$0.50-1.50, Opus 4.7)"
+              >
+                Research
+              </button>
+              <button
+                type="button"
                 onClick={cycle}
                 className={`min-w-[88px] rounded-md px-3 py-1.5 text-right text-sm font-semibold tabular-nums transition ${
                   neutral
@@ -143,6 +155,12 @@ export function HoldingsList({
           );
         })}
       </ul>
+      {researchSymbol && (
+        <DeepResearchModal
+          symbol={researchSymbol}
+          onClose={() => setResearchSymbol(null)}
+        />
+      )}
     </div>
   );
 }
