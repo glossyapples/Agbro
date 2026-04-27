@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { requirePageUser } from '@/lib/auth';
 import { formatPct, formatUsd } from '@/lib/money';
 import { SettingsForm } from '@/components/SettingsForm';
+import { AutonomyForm } from '@/components/AutonomyForm';
 import { DepositForm } from '@/components/DepositForm';
 import { SignOutButton } from '@/components/SignOutButton';
 import { CredentialManager } from '@/components/CredentialManager';
@@ -9,6 +10,7 @@ import { SafetyRailsForm } from '@/components/SafetyRailsForm';
 import { BudgetForm } from '@/components/BudgetForm';
 import { RebootSchedulerButton } from '@/components/RebootSchedulerButton';
 import { checkApiBudget } from '@/lib/safety/budget';
+import { parseAutonomyLevel } from '@/lib/safety/autonomy';
 
 export default async function SettingsPage() {
   const user = await requirePageUser('/settings');
@@ -37,6 +39,8 @@ export default async function SettingsPage() {
         </div>
         <DepositForm />
       </section>
+
+      <AutonomyForm initial={parseAutonomyLevel(a.autonomyLevel)} />
 
       <SettingsForm
         initial={{

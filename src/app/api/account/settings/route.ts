@@ -30,6 +30,11 @@ const Patch = z
     optionsEnabled: z.boolean().optional(),
     cryptoEnabled: z.boolean().optional(),
     maxCryptoAllocationPct: z.number().min(0).max(100).optional(),
+    // Autonomy ladder for agent trade execution. Editable post-onboarding
+    // via the AutonomyForm on /settings. The home-page Plan card shows
+    // this value but didn't expose an edit path before — users had to
+    // re-run onboarding to flip it.
+    autonomyLevel: z.enum(['observe', 'propose', 'auto']).optional(),
   })
   .refine(
     (v) =>
