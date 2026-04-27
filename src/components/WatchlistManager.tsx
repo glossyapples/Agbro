@@ -2,6 +2,8 @@
 
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
+import { DeepResearchModal } from './DeepResearchModal';
+import { ManualBuyModal } from './ManualBuyModal';
 
 type WatchlistStock = {
   symbol: string;
@@ -43,6 +45,9 @@ export function WatchlistManager({ initial }: { initial: WatchlistStock[] }) {
   const [name, setName] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, startBusy] = useTransition();
+  // One modal at a time. Either "research" or "buy" for a given symbol.
+  const [researchSymbol, setResearchSymbol] = useState<string | null>(null);
+  const [buySymbol, setBuySymbol] = useState<string | null>(null);
 
   async function add() {
     const clean = symbol.trim().toUpperCase();
@@ -203,18 +208,55 @@ export function WatchlistManager({ initial }: { initial: WatchlistStock[] }) {
                     </p>
                   )}
                 </div>
-                <button
-                  onClick={() => remove(s.symbol)}
-                  disabled={busy}
-                  className="text-xs text-red-300 hover:text-red-400 disabled:opacity-50"
-                  aria-label={`Remove ${s.symbol}`}
-                >
-                  Remove
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setResearchSymbol(s.symbol)}
+                    className="rounded-md border border-ink-700 px-2 py-1 text-[11px] font-medium text-ink-300 hover:bg-ink-800 hover:text-ink-100"
+                    aria-label={`Run deep research on ${s.symbol}`}
+                    title="Deep research (~$0.50-1.50, Opus 4.7)"
+                  >
+                    Research
+                  </button>
+                  <button
+                    onClick={() => setBuySymbol(s.symbol)}
+                    className="rounded-md bg-emerald-700 px-2 py-1 text-[11px] font-semibold text-emerald-50 hover:bg-emerald-600"
+                    aria-label={`Manually buy ${s.symbol}`}
+                    title="Place a manual market-buy on this symbol (paper account)"
+                  >
+                    Buy
+                  </button>
+                  <button
+                    onClick={() => remove(s.symbol)}
+                    disabled={busy}
+                    className="text-xs text-red-300 hover:text-red-400 disabled:opacity-50"
+                    aria-label={`Remove ${s.symbol}`}
+                  >
+                    Remove
+                  </button>
+                </div>
               </li>
             ))}
           </ul>
         </section>
+      )}
+      {researchSymbol && (
+        <DeepResearchModal
+          symbol={researchSymbol}
+          onClose={() => setResearchSymbol(null)}
+        />
+      )}
+      {buySymbol && (
+        <ManualBuyModal
+          symbol={buySymbol}
+          onClose={() => {
+            setBuySymbol(null);
+            // Refresh watchlist + positions after a buy. The buy itself
+            // doesn't add the row to /positions immediately (Alpaca
+            // settles asynchronously) but a soft refresh keeps the
+            // surrounding numbers — Buffett scores, fundamentals — fresh.
+            router.refresh();
+          }}
+        />
       )}
     </>
   );
