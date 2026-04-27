@@ -108,6 +108,78 @@ describe('buildResearchPrompt', () => {
     expect(prompt).toMatch(/EPS \(TTM\): \$-1\.50/);
     expect(prompt).not.toMatch(/Implied P\/E/);
   });
+
+  it('appends 10-K Risk Factors + MD&A when filings are provided (W3)', () => {
+    const prompt = buildResearchPrompt({
+      symbol: 'TROX',
+      currentPriceUsd: 10,
+      fundamentals: FULL_FUNDAMENTALS,
+      asOfISO: '2024-12-15',
+      filings: {
+        symbol: 'TROX',
+        cik10: '0001530804',
+        latest10K: {
+          filing: {
+            symbol: 'TROX',
+            cik10: '0001530804',
+            accession: '0001530804-25-000010',
+            form: '10-K',
+            filingDateISO: '2025-02-20',
+            primaryDocument: 'trox-20241231.htm',
+            url: 'https://example/trox-10k.htm',
+          },
+          riskFactors:
+            'TiO2 prices have declined 30% over 18 months due to Chinese pigment oversupply.',
+          mda: 'Net sales fell 18% YoY as construction demand weakened.',
+        },
+        latest10Q: {
+          filing: {
+            symbol: 'TROX',
+            cik10: '0001530804',
+            accession: '0001530804-25-000020',
+            form: '10-Q',
+            filingDateISO: '2025-08-05',
+            primaryDocument: 'trox-20250630.htm',
+            url: 'https://example/trox-10q.htm',
+          },
+          mda: 'Q2 trends consistent with FY guidance — pricing remains pressured.',
+        },
+      },
+    });
+    // Anchored sections so the model knows what filing each block is from.
+    expect(prompt).toMatch(/Latest 10-K \(10-K, filed 2025-02-20/);
+    expect(prompt).toMatch(/Item 1A: Risk Factors/);
+    expect(prompt).toMatch(/Chinese pigment oversupply/);
+    expect(prompt).toMatch(/Item 7: Management's Discussion/);
+    expect(prompt).toMatch(/construction demand weakened/);
+    expect(prompt).toMatch(/Latest 10-Q \(filed 2025-08-05/);
+    expect(prompt).toMatch(/Item 2: Management's Discussion/);
+    expect(prompt).toMatch(/pricing remains pressured/);
+  });
+
+  it('explicitly notes when no filings are available, so the model lowers conviction', () => {
+    const prompt = buildResearchPrompt({
+      symbol: 'X',
+      currentPriceUsd: 50,
+      fundamentals: FULL_FUNDAMENTALS,
+      asOfISO: '2024-12-15',
+      filings: { symbol: 'X', cik10: '', latest10K: null, latest10Q: null },
+    });
+    expect(prompt).toMatch(/no recent 10-K or 10-Q available/);
+  });
+
+  it('omits the filings block entirely when filings arg is undefined (back-compat)', () => {
+    const prompt = buildResearchPrompt({
+      symbol: 'X',
+      currentPriceUsd: 50,
+      fundamentals: FULL_FUNDAMENTALS,
+      asOfISO: '2024-12-15',
+      // filings omitted — pre-W3 callers should still work
+    });
+    expect(prompt).not.toMatch(/Latest 10-K/);
+    expect(prompt).not.toMatch(/Item 1A/);
+    expect(prompt).not.toMatch(/no recent 10-K/);
+  });
 });
 
 describe('parseDeepResearchOutput', () => {

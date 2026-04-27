@@ -103,18 +103,19 @@ function LoadingView({ symbol }: { symbol: string }) {
     <div className="space-y-3 py-8 text-sm text-ink-300">
       <p className="flex items-center gap-2">
         <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-emerald-400" />
-        Pulling SEC fundamentals + recent price for {symbol}...
+        Pulling SEC fundamentals + latest 10-K + 10-Q text for {symbol}...
       </p>
       <p className="flex items-center gap-2">
         <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-emerald-400" />
-        Asking Opus 4.7 to write the research note (medium-effort thinking)...
+        Asking Opus 4.7 to read it all and write the research note...
       </p>
       <p className="text-xs text-ink-500">
-        Typically 15-30s. Cost per click: ~$0.30-1.00. Capped server-side.
+        Typically 25-50s now that the agent reads full filings. Cost: ~$0.50-2.00 per click. Capped server-side.
       </p>
       <p className="text-[11px] text-ink-600">
         Don&apos;t lock your phone — mobile Safari may abort the request after a
-        minute. If you see &quot;Load failed,&quot; just click Research again.
+        minute. If you see &quot;Load failed,&quot; just click Research again. (W4
+        will fix this with streaming responses.)
       </p>
     </div>
   );

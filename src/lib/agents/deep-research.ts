@@ -23,6 +23,7 @@ import { prisma } from '@/lib/db';
 import { TRADE_DECISION_MODEL } from './models';
 import { estimateCostUsd, type TokenUsage } from '@/lib/pricing';
 import { fetchFundamentals, type FundamentalsSnapshot } from '@/lib/data/sec-edgar';
+import { getResearchFilings, type ResearchFilings } from '@/lib/data/sec-filings';
 import { getBars } from '@/lib/alpaca';
 import { log } from '@/lib/logger';
 
@@ -56,9 +57,16 @@ const SYSTEM_PROMPT = `You are a fundamental equity research analyst writing a s
 
 Tone: dry, precise, hard on the company's weaknesses. Write the bear case as if you were short, not as a token disclaimer. Conviction reflects strength of evidence, not enthusiasm — a name with limited public information should score lower regardless of how attractive the surface metrics look.
 
+Inputs you will receive:
+- A fundamentals snapshot (SEC XBRL) — EPS, ROE, margins, debt/equity, etc.
+- The current market price.
+- The narrative sections of the company's most recent 10-K (Risk Factors + MD&A) and 10-Q (MD&A) where available. These are the company's OWN words about its business and risks.
+
 Constraints:
-- Use ONLY the inputs provided in the user message. Do not invent facts about the company. If you reference a metric, it must appear in the input.
-- If the input is sparse (no fundamentals, no recent price), say so in the summary and lower conviction accordingly.
+- Use ONLY the inputs provided. Do not invent facts. If you reference a metric or claim, it must appear in the input.
+- When the filing text is provided, USE IT. Cite specific risks the company itself disclosed, specific operational commentary from MD&A. The bear case should pull short-thesis material from the company's own Risk Factors when those rise to a real concern. Generic risks ("regulatory risk, competition") are unacceptable when the filing names specific risks.
+- If a fundamentals number looks inconsistent with the company's nature (e.g. an 80%+ gross margin on a commodity producer), flag it as a likely data-extraction issue and do not anchor analysis on it.
+- If the input is sparse (no filings, no fundamentals), say so in the summary and lower conviction accordingly.
 - killCriteria are specific, measurable triggers (e.g. "ROE drops below 12% for 2 consecutive quarters", "Free cash flow turns negative") — not vague risks.
 - Output a single JSON object matching the schema. No prose, no markdown fences, no leading explanation.`;
 
@@ -73,13 +81,21 @@ const OUTPUT_SCHEMA_INSTRUCTION = `Return ONLY this JSON object (no prose, no fe
   "primaryRisks": ["concrete risk 1", "risk 2", "risk 3"]
 }`;
 
-// Build the user-message body — formats fundamentals + price context
-// for the model. Pure function exported for tests.
+// Build the user-message body — formats fundamentals + price + filing
+// text for the model. Pure function exported for tests.
+//
+// `filings` is the optional W2 addition: when present, the prompt
+// includes the latest 10-K's Risk Factors + MD&A and the latest 10-Q's
+// MD&A. This is the moat-deepener — chat-Claude doesn't have these
+// documents at this granularity, so the agent's analysis can quote
+// the company's own language back rather than infer everything from
+// a fundamentals snapshot.
 export function buildResearchPrompt(args: {
   symbol: string;
   currentPriceUsd: number | null;
   fundamentals: FundamentalsSnapshot | null;
   asOfISO: string;
+  filings?: ResearchFilings | null;
 }): string {
   const lines: string[] = [];
   lines.push(`Symbol: ${args.symbol}`);
@@ -127,6 +143,44 @@ export function buildResearchPrompt(args: {
     }
   } else {
     lines.push('Latest reported fundamentals: (not available — SEC EDGAR returned no XBRL facts for this symbol)');
+  }
+
+  // Filing text — Risk Factors + MD&A from the latest 10-K and the
+  // most recent 10-Q. Anchor each block with what filing it came
+  // from so the model can cite "their FY24 10-K Risk Factors" rather
+  // than just "the company says..." in its response.
+  if (args.filings) {
+    const k = args.filings.latest10K;
+    const q = args.filings.latest10Q;
+    if (k && (k.riskFactors || k.mda)) {
+      lines.push('');
+      lines.push(
+        `=== Latest 10-K (${k.filing.form}, filed ${k.filing.filingDateISO}, accession ${k.filing.accession}) ===`
+      );
+      if (k.riskFactors) {
+        lines.push('');
+        lines.push('--- Item 1A: Risk Factors ---');
+        lines.push(k.riskFactors);
+      }
+      if (k.mda) {
+        lines.push('');
+        lines.push("--- Item 7: Management's Discussion and Analysis ---");
+        lines.push(k.mda);
+      }
+    }
+    if (q && q.mda) {
+      lines.push('');
+      lines.push(
+        `=== Latest 10-Q (filed ${q.filing.filingDateISO}, accession ${q.filing.accession}) ===`
+      );
+      lines.push('');
+      lines.push("--- Item 2: Management's Discussion and Analysis ---");
+      lines.push(q.mda);
+    }
+    if (!k && !q) {
+      lines.push('');
+      lines.push('SEC filings: (no recent 10-K or 10-Q available for this symbol)');
+    }
   }
 
   lines.push('');
@@ -181,9 +235,10 @@ export type RunDeepResearchArgs = {
   symbol: string;
   // Optional injection points for tests.
   client?: Anthropic;
-  // Stub fundamentals/price in tests.
+  // Stub fundamentals/price/filings in tests.
   fundamentalsOverride?: FundamentalsSnapshot | null;
   currentPriceOverride?: number | null;
+  filingsOverride?: ResearchFilings | null;
   // Skip persistence in tests.
   skipPersist?: boolean;
 };
@@ -199,8 +254,14 @@ export async function runDeepResearch(
   const client = args.client ?? new Anthropic();
   const asOfISO = new Date().toISOString().slice(0, 10);
 
-  // Gather inputs in parallel — both are external I/O and independent.
-  const [fundamentals, currentPrice] = await Promise.all([
+  // Gather inputs in parallel — three external I/O calls, all
+  // independent. Filings is the slowest (1 submissions index fetch +
+  // up to 2 filing-doc fetches) but we cache aggressively in
+  // sec-filings.ts so re-clicks on the same name within a session
+  // are cheap. Each call has its own catch — a flaky SEC fetch on
+  // filings shouldn't kill the whole research call; the agent can
+  // still produce a useful note from fundamentals + price alone.
+  const [fundamentals, currentPrice, filings] = await Promise.all([
     args.fundamentalsOverride !== undefined
       ? Promise.resolve(args.fundamentalsOverride)
       : fetchFundamentals(symbol).catch((err) => {
@@ -210,6 +271,12 @@ export async function runDeepResearch(
     args.currentPriceOverride !== undefined
       ? Promise.resolve(args.currentPriceOverride)
       : fetchLatestClose(symbol),
+    args.filingsOverride !== undefined
+      ? Promise.resolve(args.filingsOverride)
+      : getResearchFilings(symbol).catch((err) => {
+          log.warn('deep_research.filings_failed', { symbol, error: String(err) });
+          return null;
+        }),
   ]);
 
   const userPrompt = buildResearchPrompt({
@@ -217,6 +284,7 @@ export async function runDeepResearch(
     currentPriceUsd: currentPrice,
     fundamentals,
     asOfISO,
+    filings,
   });
 
   // Adaptive thinking + medium effort. Opus 4.7's API requires the
@@ -283,7 +351,20 @@ export async function runDeepResearch(
           convictionScore: output.convictionScore,
           killCriteria: output.killCriteria,
           primaryRisks: output.primaryRisks,
-          inputs: { hasFundamentals: !!fundamentals, currentPrice },
+          inputs: {
+            hasFundamentals: !!fundamentals,
+            currentPrice,
+            // W2/W3 diagnostic — record what filing context the agent
+            // had so we can correlate output quality with input
+            // richness when reviewing notes later.
+            has10K: !!filings?.latest10K,
+            has10KRiskFactors: !!filings?.latest10K?.riskFactors,
+            has10KMda: !!filings?.latest10K?.mda,
+            has10Q: !!filings?.latest10Q,
+            has10QMda: !!filings?.latest10Q?.mda,
+            latest10KFilingDate: filings?.latest10K?.filing.filingDateISO ?? null,
+            latest10QFilingDate: filings?.latest10Q?.filing.filingDateISO ?? null,
+          },
           costUsd,
         }),
         scoreDelta: 0,
