@@ -27,9 +27,11 @@ import { getBars } from '@/lib/alpaca';
 import { log } from '@/lib/logger';
 
 // 8k thinking + 4k output = ~$0.75 worst-case with Opus 4.7. Capped
-// so a single click can't blow the budget.
-const THINKING_BUDGET_TOKENS = 8_000;
-const MAX_OUTPUT_TOKENS = THINKING_BUDGET_TOKENS + 4_096;
+// so a single click can't blow the budget. Adaptive thinking on
+// Opus 4.7 manages its own budget given an effort level — we set
+// max_tokens to a generous upper bound and let the model use what
+// it needs.
+const MAX_OUTPUT_TOKENS = 12_000;
 
 export type DeepResearchOutput = {
   thesis: string;
@@ -217,22 +219,24 @@ export async function runDeepResearch(
     asOfISO,
   });
 
-  // The `thinking` request param is supported on Opus 4.7 but not yet
-  // typed in @anthropic-ai/sdk@0.30.1. Conditional spread keeps the
-  // call site type-safe without forcing an `any` cast on the whole
-  // request object. Pattern matches src/lib/agents/orchestrator.ts.
-  const thinkingParam = {
-    thinking: {
-      type: 'enabled' as const,
-      budget_tokens: THINKING_BUDGET_TOKENS,
-    },
+  // Adaptive thinking + high effort. Opus 4.7's current API rejects
+  // the older `thinking.type: 'enabled'` shape with budget_tokens —
+  // it requires `adaptive` plus an `output_config.effort` knob. The
+  // SDK at @anthropic-ai/sdk@0.30.1 doesn't type either field; the
+  // conditional-spread + cast pattern keeps the call site clean.
+  // 'high' effort fits this use case (one-shot research note where
+  // reasoning depth matters more than latency); switch to 'medium'
+  // if cost runs hot or 'low' for quick eyeballs in dev.
+  const adaptiveThinkingParam = {
+    thinking: { type: 'adaptive' as const },
+    output_config: { effort: 'high' as const },
   } as unknown as Record<string, unknown>;
   const resp = await client.messages.create({
     model: TRADE_DECISION_MODEL,
     max_tokens: MAX_OUTPUT_TOKENS,
     system: SYSTEM_PROMPT,
     messages: [{ role: 'user', content: userPrompt }],
-    ...thinkingParam,
+    ...adaptiveThinkingParam,
   });
 
   const u = resp.usage as unknown as Record<string, number | undefined>;
