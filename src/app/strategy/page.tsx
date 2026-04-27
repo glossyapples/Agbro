@@ -347,6 +347,25 @@ function BacktestingTab() {
           </p>
           <p className="mt-2 text-[11px] text-brand-400">Open →</p>
         </Link>
+        <Link
+          href="/backtest/walk-forward"
+          className="card border border-brand-500/40 bg-brand-500/5 p-3 text-sm text-ink-100 transition-colors hover:border-brand-500/70 sm:col-span-2"
+        >
+          <p className="font-semibold">
+            Walk-forward
+            <span className="ml-2 rounded-sm bg-brand-500/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-brand-300">
+              new
+            </span>
+          </p>
+          <p className="mt-1 text-[11px] text-ink-400">
+            Rolling out-of-sample validation. Slides a fixed-length
+            window across long history, runs each slice fresh, returns
+            a consistency score. The "compare all six presets" tab
+            ranks every preset by edge — answers <em>does this strategy
+            actually work, or does it only look good in one window?</em>
+          </p>
+          <p className="mt-2 text-[11px] text-brand-400">Open →</p>
+        </Link>
       </div>
     </section>
   );
