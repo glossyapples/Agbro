@@ -105,6 +105,150 @@ describe('extractFundamentals', () => {
   });
 });
 
+describe('extractFundamentals — fiscal-period selection (TROX 89% gross-margin bug)', () => {
+  // The pre-fix bug: a 10-K reports both the full-year value AND
+  // sub-period values (Q4, prior-year comparatives, segment
+  // breakdowns) for the same end date. The old picker did
+  // `entries.filter(e => e.form === '10-K')` then reduced by max(end),
+  // which could grab a quarterly COGS while keeping full-year
+  // revenue — producing nonsense margins. Fixture mirrors what TROX
+  // looks like in real EDGAR data: full-year COGS plus a smaller
+  // quarterly entry, both with end='2024-12-31' and form='10-K'.
+  const fixture = {
+    cik: 12345,
+    entityName: 'Tronox Test',
+    facts: {
+      'us-gaap': {
+        Revenues: {
+          units: {
+            USD: [
+              {
+                end: '2024-12-31',
+                val: 2_900_000_000,
+                fy: 2024,
+                fp: 'FY',
+                form: '10-K',
+                start: '2024-01-01',
+              },
+              // Q4 sub-period that also lives in the 10-K, same end date.
+              {
+                end: '2024-12-31',
+                val: 720_000_000,
+                fy: 2024,
+                fp: 'Q4',
+                form: '10-K',
+                start: '2024-10-01',
+              },
+            ],
+          },
+        },
+        // The bug case: pre-fix picker would happily pick the Q4
+        // sub-period ($310M) instead of the full-year value ($2.4B)
+        // because both have the same end date.
+        CostOfRevenue: {
+          units: {
+            USD: [
+              {
+                end: '2024-12-31',
+                val: 2_400_000_000,
+                fy: 2024,
+                fp: 'FY',
+                form: '10-K',
+                start: '2024-01-01',
+              },
+              {
+                end: '2024-12-31',
+                val: 310_000_000,
+                fy: 2024,
+                fp: 'Q4',
+                form: '10-K',
+                start: '2024-10-01',
+              },
+            ],
+          },
+        },
+        // Balance-sheet item — instant fact, no `start`. Should still
+        // resolve via the no-start fallback inside Tier 2.
+        StockholdersEquity: {
+          units: {
+            USD: [
+              { end: '2024-12-31', val: 1_420_000_000, fy: 2024, fp: 'FY', form: '10-K' },
+            ],
+          },
+        },
+        NetIncomeLoss: {
+          units: {
+            USD: [
+              {
+                end: '2024-12-31',
+                val: -470_000_000,
+                fy: 2024,
+                fp: 'FY',
+                form: '10-K',
+                start: '2024-01-01',
+              },
+            ],
+          },
+        },
+      },
+    },
+  };
+
+  it('picks the full-year COGS, not the Q4 sub-period (the actual bug)', () => {
+    const snap = extractFundamentals('TROX', '0001', fixture);
+    // Pre-fix: $310M (Q4) → margin = (2.9B - 310M)/2.9B = 89%
+    // Post-fix: $2.4B (FY) → margin = (2.9B - 2.4B)/2.9B = ~17%
+    expect(snap.costOfRevenue).toBe(2_400_000_000);
+    expect(snap.grossMarginPct).not.toBeNull();
+    expect(snap.grossMarginPct!).toBeGreaterThan(15);
+    expect(snap.grossMarginPct!).toBeLessThan(20);
+  });
+
+  it('falls back to ~365-day period when fp is missing (legacy filings)', () => {
+    const legacy = {
+      cik: 67890,
+      entityName: 'Old Filing',
+      facts: {
+        'us-gaap': {
+          Revenues: {
+            units: {
+              USD: [
+                // No `fp` field — older filings sometimes omit it. The
+                // ~365-day period should still qualify it as annual.
+                {
+                  end: '2020-12-31',
+                  val: 100_000_000,
+                  fy: 2020,
+                  form: '10-K',
+                  start: '2020-01-01',
+                },
+                // Quarterly sub-period without fp — should be rejected.
+                {
+                  end: '2020-12-31',
+                  val: 26_000_000,
+                  fy: 2020,
+                  form: '10-K',
+                  start: '2020-10-01',
+                },
+              ],
+            },
+          },
+        },
+      },
+    };
+    const snap = extractFundamentals('OLD', '0001', legacy);
+    expect(snap.revenues).toBe(100_000_000);
+  });
+
+  it('handles instant facts (balance-sheet items) where start is absent', () => {
+    // Equity is an "instant" fact — there's no period. Snapshot at a
+    // point in time. The picker should accept these without trying to
+    // measure period length.
+    const snap = extractFundamentals('TROX', '0001', fixture);
+    expect(snap.totalEquity).toBe(1_420_000_000);
+  });
+});
+
 describe('extractFundamentals — resilience', () => {
   it('returns nulls + missingFields when tags are absent', () => {
     const empty = { cik: 0, entityName: 'X', facts: { 'us-gaap': {} } };

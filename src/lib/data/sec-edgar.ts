@@ -116,7 +116,19 @@ export async function lookupCik(symbol: string): Promise<string | null> {
 // -------------------- companyfacts fetch --------------------
 
 type XbrlFact = {
-  units: Record<string, Array<{ end: string; val: number; fy?: number; fp?: string; form?: string; filed?: string }>>;
+  units: Record<string, Array<{
+    end: string;
+    val: number;
+    fy?: number;
+    fp?: string;
+    form?: string;
+    filed?: string;
+    // Present for duration facts (income statement, cash flow); absent
+    // for instant facts (balance sheet). Used by pickLatestAnnual to
+    // prefer ~365-day periods over quarterly sub-periods that also
+    // appear in 10-K filings as comparative tables.
+    start?: string;
+  }>>;
 };
 type CompanyFacts = {
   cik: number;
@@ -135,6 +147,22 @@ export async function fetchCompanyFacts(cik10: string): Promise<CompanyFacts> {
 
 // Pick the most recent annual (10-K) value for a given concept, searching the
 // given tag list in order. Returns { val, end } or null.
+//
+// Selection priority (the fix for the TROX 89%-gross-margin bug):
+//   1. fp='FY' entries from a 10-K filing — XBRL's explicit "this row is
+//      the full fiscal year" marker. These are unambiguously the right
+//      value for income-statement concepts (revenues, COGS, net income).
+//   2. Fallback: 10-K entries with a duration of ~340-380 days
+//      (full-year-ish), OR entries with no `start` (instant facts —
+//      balance sheet items like equity, debt, shares outstanding).
+//   3. Last resort: any 10-K entry, then any entry at all.
+//
+// Why we needed this: a 10-K filing reports many concepts at multiple
+// granularities — full year, Q4 sub-period, prior-year comparative,
+// segment breakdowns. The old picker just reduced by max(end) which
+// could grab a quarterly COGS while keeping full-year revenue,
+// producing nonsense margins (TROX showed 89.3% gross margin on a
+// commodity chemicals business).
 function pickLatestAnnual(
   facts: CompanyFacts,
   tags: readonly string[],
@@ -146,11 +174,36 @@ function pickLatestAnnual(
     if (!fact) continue;
     const unitKey = Object.keys(fact.units).find((u) => u === preferredUnit) ?? Object.keys(fact.units)[0];
     const entries = fact.units[unitKey] ?? [];
-    const annual = entries.filter((e) => e.form === '10-K');
-    const source = annual.length > 0 ? annual : entries;
-    if (source.length === 0) continue;
-    // Prefer latest by `end` date, then by `filed`.
-    const latest = source.reduce((a, b) => (a.end > b.end ? a : b));
+    if (entries.length === 0) continue;
+
+    // Tier 1: fiscal-year entries from a 10-K. The cleanest signal.
+    let candidates = entries.filter((e) => e.form === '10-K' && e.fp === 'FY');
+
+    // Tier 2: 10-K entries that look like a full year. Catches older
+    // filings that may not have populated `fp`. Instant facts (no
+    // `start`) are also accepted here — for balance-sheet items the
+    // entry just has an `end` date.
+    if (candidates.length === 0) {
+      candidates = entries.filter((e) => {
+        if (e.form !== '10-K') return false;
+        if (!e.start) return true;
+        const days = (Date.parse(e.end) - Date.parse(e.start)) / 86_400_000;
+        return days >= 340 && days <= 380;
+      });
+    }
+
+    // Tier 3: any 10-K entry. Legacy / foreign-issuer fallback.
+    if (candidates.length === 0) {
+      candidates = entries.filter((e) => e.form === '10-K');
+    }
+
+    // Tier 4: anything at all (mostly for tests + edge cases).
+    if (candidates.length === 0) candidates = entries;
+    if (candidates.length === 0) continue;
+
+    // Pick the entry with the latest end date — i.e., the most recent
+    // fiscal year present.
+    const latest = candidates.reduce((a, b) => (a.end > b.end ? a : b));
     return { val: latest.val, end: latest.end, unit: unitKey };
   }
   return null;
