@@ -12,6 +12,12 @@ function key(symbol: string, startMs: number, endMs: number): string {
   return `${symbol}|${startMs}|${endMs}`;
 }
 
+// Test hook — repro tests need to bust this cache between scenarios so
+// a fresh getBars mock isn't shadowed by an earlier test's result.
+export function _clearBarCacheForTests(): void {
+  cache.clear();
+}
+
 export async function loadDailyBars(
   symbol: string,
   startMs: number,

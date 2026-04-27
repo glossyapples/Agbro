@@ -149,6 +149,30 @@ export async function runSimulation(config: SimulatorConfig): Promise<SimulatorR
     return t >= startMs && t <= endMs;
   });
 
+  // Forward-filled price index. For each symbol, every calendar day
+  // maps to the most recent close ≤ that day. Used for VALUATION
+  // (mark-to-market, drift computation, rebalance value math) so a
+  // position whose bar is missing for a day — Alpaca IEX holiday
+  // mismatch, ETF skipping a print SPY didn't, or the symbol's history
+  // ending mid-window — doesn't silently mark to $0.
+  //
+  // Strict per-day prices remain in symbolBars and are still the
+  // source of truth for TRADE EXECUTION (initial buys, rebalance fills,
+  // DCA legs, target-sell, time-stop). You can't actually trade on a
+  // stale price, but you CAN value the portfolio at one — that's the
+  // distinction the original code missed.
+  const lastKnownBars = new Map<string, Map<string, number>>();
+  for (const [sym, bars] of symbolBars) {
+    const filled = new Map<string, number>();
+    let last: number | null = null;
+    for (const date of calendar) {
+      const px = bars.get(date);
+      if (px != null) last = px;
+      if (last != null) filled.set(date, last);
+    }
+    lastKnownBars.set(sym, filled);
+  }
+
   // Bar coverage check — emit data_warning events for symbols whose
   // Alpaca history doesn't span the requested window. Alpaca's free
   // IEX feed coverage varies by symbol; some have data back to 2015,
@@ -312,13 +336,14 @@ export async function runSimulation(config: SimulatorConfig): Promise<SimulatorR
     if (rules.rebalanceCadenceDays != null && rules.rebalanceBandPct != null) {
       const daysSince = lastRebalanceDay ? daysBetween(lastRebalanceDay, date) : Infinity;
       if (daysSince >= rules.rebalanceCadenceDays) {
-        const drift = maxDriftPct(positions, symbolBars, date, rules.targetWeights ?? {});
+        const drift = maxDriftPct(positions, lastKnownBars, date, rules.targetWeights ?? {});
         if (drift > rules.rebalanceBandPct) {
           const result = rebalance(
             date,
             positions,
             cash,
             symbolBars,
+            lastKnownBars,
             rules.targetWeights ?? {},
             config.universe
           );
@@ -490,10 +515,13 @@ export async function runSimulation(config: SimulatorConfig): Promise<SimulatorR
       }
     }
 
-    // Mark to market at end of day.
+    // Mark to market at end of day. Uses lastKnownBars (forward-fill)
+    // so a position whose symbol skips a print on a given day — Alpaca
+    // IEX holiday mismatch, ETF off-day, end-of-window data gap —
+    // doesn't silently zero out and crater the equity series.
     let positionValue = 0;
     for (const [sym, pos] of positions) {
-      const price = symbolPrice(sym, date, symbolBars);
+      const price = lastKnownBars.get(sym)?.get(date) ?? null;
       if (price != null) positionValue += pos.qty * price;
     }
     const equity = cash + positionValue;
@@ -591,14 +619,17 @@ function equalWeight(universe: string[]): Record<string, number> {
 
 function maxDriftPct(
   positions: Map<string, Position>,
-  symbolBars: Map<string, Map<string, number>>,
+  // Forward-filled valuation map. Drift compares actual vs target
+  // weights — if a held symbol skips a print today its position is
+  // still worth its last-known close, not zero.
+  valuationBars: Map<string, Map<string, number>>,
   date: string,
   targetWeights: Record<string, number>
 ): number {
   const values = new Map<string, number>();
   let total = 0;
   for (const [sym, pos] of positions) {
-    const price = symbolPrice(sym, date, symbolBars);
+    const price = valuationBars.get(sym)?.get(date) ?? null;
     if (price != null) {
       const v = pos.qty * price;
       values.set(sym, v);
@@ -621,18 +652,23 @@ function rebalance(
   date: string,
   positions: Map<string, Position>,
   cash: number,
+  // Strict per-day map. Used as the trade-execution price — a rebalance
+  // only fires for a symbol if it actually printed today.
   symbolBars: Map<string, Map<string, number>>,
+  // Forward-filled map. Used to value the existing book so total
+  // portfolio value is correct even if some held symbols didn't print.
+  valuationBars: Map<string, Map<string, number>>,
   targetWeights: Record<string, number>,
   universe: string[]
 ): { cashAfter: number; trades: SimulatorEvent[] } {
   const trades: SimulatorEvent[] = [];
-  // Compute total book value at today's prices.
-  const prices = new Map<string, number>();
+  // Compute total book value using the forward-filled valuation map.
+  const valPrices = new Map<string, number>();
   let totalValue = cash;
   for (const [sym, pos] of positions) {
-    const price = symbolPrice(sym, date, symbolBars);
+    const price = valuationBars.get(sym)?.get(date) ?? null;
     if (price != null) {
-      prices.set(sym, price);
+      valPrices.set(sym, price);
       totalValue += pos.qty * price;
     }
   }
@@ -643,12 +679,15 @@ function rebalance(
   // For each target, compute desired value and nudge toward it.
   for (const [sym, w] of Object.entries(targetWeights)) {
     if (!universe.includes(sym)) continue;
-    const price =
-      prices.get(sym) ?? symbolPrice(sym, date, symbolBars) ?? 0;
-    if (price <= 0) continue;
+    // Trade execution requires a fresh print — can't transact on stale
+    // data even if we can value the book on it.
+    const tradePrice = symbolPrice(sym, date, symbolBars);
+    if (tradePrice == null || tradePrice <= 0) continue;
+    const valPrice = valPrices.get(sym) ?? tradePrice;
     const desiredValue = (w / targetSum) * totalValue;
-    const currentValue = (positions.get(sym)?.qty ?? 0) * price;
+    const currentValue = (positions.get(sym)?.qty ?? 0) * valPrice;
     const diff = desiredValue - currentValue;
+    const price = tradePrice;
     if (Math.abs(diff) < 1) continue; // ignore dust
     const qtyChange = diff / price;
     const existing = positions.get(sym);
