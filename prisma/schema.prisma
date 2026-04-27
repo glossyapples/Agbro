@@ -512,6 +512,14 @@ model BrainEntry {
   confidence BrainConfidence @default(medium)
   title     String
   body      String   @db.Text
+  // Plain-English one-line summary for the home Brain card. Generated
+  // lazily by Haiku 4.5 the first time the entry is rendered on the
+  // home page (see src/lib/brain/blurb.ts) and cached forever
+  // (entries are immutable). Null means "not yet generated"; the
+  // home card falls back to a body excerpt while it generates. Cost:
+  // ~$0.001 per entry, generated at most once per entry, so total
+  // cost across a user's lifetime is fractions of a cent.
+  homeBlurb String?  @db.Text
   tags      String[] @default([])
   relatedSymbols String[] @default([])
   // Supersession — when a lesson turns out wrong or outdated, write a
