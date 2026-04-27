@@ -49,6 +49,16 @@ export type WalkForwardWindow = {
   // strategy beat the benchmark in this slice; negative = it lost.
   alphaPct: number | null;
   tradeCount: number;
+  // True when the strategy effectively didn't run in this window —
+  // most often because Alpaca's IEX free-tier coverage doesn't span
+  // the universe in the given era (VXUS/BND pre-2019 are the canonical
+  // case). Heuristic: in a multi-symbol universe, a window with fewer
+  // than 2 trades couldn't have meaningfully deployed the book. The
+  // metrics for these windows are technically valid but reflect "cash
+  // sat idle" rather than strategy performance, so the harness
+  // excludes them from aggregate medians + consistency math to keep
+  // the headline number honest.
+  dataStarved: boolean;
 };
 
 export type WalkForwardResult = {
@@ -73,6 +83,11 @@ export type WalkForwardResult = {
     // whole sweep is the loudest signal that nothing actually ran.
     windowsWithData: number;
     tradesTotal: number;
+    // Count of windows excluded from aggregate math due to data
+    // starvation (see WalkForwardWindow.dataStarved). UI can show
+    // "5 of 7 windows" when this is non-zero so the user knows the
+    // headline median is computed on a subset.
+    windowsStarved: number;
   };
 };
 
@@ -260,6 +275,7 @@ export async function runWalkForward(
         metrics,
         alphaPct,
         tradeCount: sim.tradeCount,
+        dataStarved: isDataStarved(config.universe.length, sim.tradeCount),
       });
     } catch (err) {
       log.error('walk_forward.window_failed', err, {
@@ -283,13 +299,19 @@ export async function runWalkForward(
         },
         alphaPct: null,
         tradeCount: 0,
+        dataStarved: true,
       });
     }
   }
 
-  const cagrs = windows.map((w) => w.metrics.cagrPct);
-  const drawdowns = windows.map((w) => w.metrics.maxDrawdownPct);
-  const alphas = windows.map((w) => w.alphaPct);
+  // Aggregate math runs on the non-starved subset only. A "1 trade,
+  // 0% CAGR" window from a data-coverage gap shouldn't drag the
+  // median down or inflate the MAD in computeConsistency — those are
+  // cash-sat-idle artifacts, not strategy performance.
+  const live = windows.filter((w) => !w.dataStarved);
+  const cagrs = live.map((w) => w.metrics.cagrPct);
+  const drawdowns = live.map((w) => w.metrics.maxDrawdownPct);
+  const alphas = live.map((w) => w.alphaPct);
 
   return {
     windows,
@@ -301,6 +323,17 @@ export async function runWalkForward(
       windowCount: windows.length,
       windowsWithData: windows.filter((w) => w.metrics.cagrPct != null).length,
       tradesTotal: windows.reduce((s, w) => s + w.tradeCount, 0),
+      windowsStarved: windows.filter((w) => w.dataStarved).length,
     },
   };
+}
+
+// Heuristic: in a multi-symbol universe, a window that produced fewer
+// than 2 trades couldn't have meaningfully deployed the strategy book.
+// The most common cause is Alpaca IEX free-tier coverage gaps for
+// less-liquid ETFs in older windows (VXUS / BND pre-2019). For
+// single-symbol universes any tradeCount is fine — there's only one
+// symbol to deploy.
+export function isDataStarved(universeSize: number, tradeCount: number): boolean {
+  return universeSize > 1 && tradeCount < 2;
 }

@@ -7,7 +7,7 @@
 
 import { describe, it, expect } from 'vitest';
 import fc from 'fast-check';
-import { splitWindows, computeConsistency } from './walk-forward';
+import { splitWindows, computeConsistency, isDataStarved } from './walk-forward';
 
 describe('splitWindows', () => {
   it('produces non-overlapping windows when stepMonths === windowMonths', () => {
@@ -204,6 +204,25 @@ describe('computeConsistency', () => {
         }
       )
     );
+  });
+
+  it('multi-symbol universe with 0 or 1 trades is data-starved', () => {
+    // The Boglehead 2017/2018 reproduction: 3-symbol universe but only
+    // VTI (or BND, or none) had Alpaca bars in the window. Without
+    // this flag those windows would drag the median CAGR to 0% and
+    // inflate the MAD in computeConsistency.
+    expect(isDataStarved(3, 0)).toBe(true);
+    expect(isDataStarved(3, 1)).toBe(true);
+    expect(isDataStarved(3, 2)).toBe(false);
+    expect(isDataStarved(3, 3)).toBe(false);
+  });
+
+  it('single-symbol universe is never data-starved (1 trade is the strategy)', () => {
+    // A single-name strategy can only ever produce 1 deployment
+    // trade — no rebalance to run. Marking that as starved would
+    // exclude every legitimate single-name run.
+    expect(isDataStarved(1, 0)).toBe(false);
+    expect(isDataStarved(1, 1)).toBe(false);
   });
 
   it('property: adding a window equal to the median never hurts the score', () => {

@@ -34,6 +34,9 @@ type WindowView = {
   };
   alphaPct: number | null;
   tradeCount: number;
+  // Optional on prior runs — defaults to false so old persisted rows
+  // don't misreport as data-starved.
+  dataStarved?: boolean;
 };
 
 type AggregateView = {
@@ -48,6 +51,9 @@ type AggregateView = {
   // misreport as "0 windows had data".
   windowsWithData?: number;
   tradesTotal?: number;
+  // Count of windows excluded from medians + consistency due to data
+  // starvation (Alpaca IEX coverage gap). Optional for back-compat.
+  windowsStarved?: number;
 };
 
 type RunView = {
@@ -132,15 +138,16 @@ export function WalkForwardRunner({ priorRuns }: { priorRuns: RunView[] }) {
   const router = useRouter();
   const [tab, setTab] = useState<'single' | 'compare'>('single');
   const [strategyKey, setStrategyKey] = useState<StrategyKey>('buffett_core');
-  // Default totalStart bumped 2015 → 2017 because Alpaca's free IEX
-  // feed has spotty coverage for many symbols pre-2017 (some symbols
-  // start 2017+, some later). 2015-start sweeps were producing windows
-  // where most symbols had no bars → simulator hit its no-data
-  // short-circuit → aggregate metrics looked like "strategy verdict"
-  // when they were actually "data verdict". Users who want the longer
-  // history can still pick 2015 manually + watch the "windows with
-  // data" column for sparse-data flags.
-  const [totalStart, setTotalStart] = useState('2017-01-01');
+  // Default totalStart bumped 2017 → 2019 after the first walk-forward
+  // sweeps showed Alpaca's IEX free feed has gaps for VXUS / BND
+  // (Boglehead) and many small-cap names well into 2018. Pre-2019
+  // windows were running with cash sat idle (1 trade, 0% CAGR), and
+  // even after the data-starved exclusion logic those windows are
+  // wasted compute. 2019-start gives 6 yearly-step windows of clean
+  // data, which is enough samples for the consistency metric. Users
+  // who want the longer history can pick 2015/2017 manually — sparse
+  // windows now self-flag in the UI rather than poisoning the median.
+  const [totalStart, setTotalStart] = useState('2019-01-01');
   const [totalEnd, setTotalEnd] = useState('2024-12-31');
   const [windowMonths, setWindowMonths] = useState('24');
   const [stepMonths, setStepMonths] = useState('12');
@@ -359,14 +366,15 @@ export function WalkForwardRunner({ priorRuns }: { priorRuns: RunView[] }) {
         <p className="mt-3 text-[11px] text-ink-400">
           Step &lt; window = overlapping windows = more samples for the
           consistency score. Default 24-month windows / 12-month step
-          gives 7 samples across 2017-2024.
+          gives 5 samples across 2019-2024.
         </p>
         <p className="mt-1 text-[11px] text-ink-400">
-          Default total-start is <strong>2017-01-01</strong> because Alpaca's
-          free IEX feed has spotty coverage pre-2017 — earlier ranges
-          produce sparse-data rows. Pick an earlier date if you want the
-          longer history; watch the <em>Data</em> column for windows that
-          ran without bars.
+          Default total-start is <strong>2019-01-01</strong> because Alpaca's
+          free IEX feed has gaps for several Boglehead / small-cap symbols
+          before then — earlier ranges produced "1 trade, 0% CAGR" windows
+          where cash sat idle. Pick an earlier date if you want the longer
+          history; data-starved windows now self-flag in the table and are
+          excluded from aggregate medians.
         </p>
         {tab === 'single' && err ? (
           <p className="mt-3 rounded-sm bg-rose-950 p-2 text-xs text-rose-300">
@@ -507,32 +515,53 @@ function WindowGrid({ windows }: { windows: WindowView[] }) {
     <ul className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
       {windows.map((w) => {
         const cagr = w.metrics.cagrPct;
+        const starved = w.dataStarved === true;
+        // Mute the whole card when starved — the numbers are
+        // technically valid but reflect "cash sat idle" not strategy
+        // performance, and we don't want them to read as a verdict.
+        const muted = starved ? 'opacity-50' : '';
         const cagrColor =
-          cagr == null
+          starved
             ? 'text-ink-400'
-            : cagr >= 0
-              ? 'text-emerald-400'
-              : 'text-rose-400';
+            : cagr == null
+              ? 'text-ink-400'
+              : cagr >= 0
+                ? 'text-emerald-400'
+                : 'text-rose-400';
         const alphaColor =
-          w.alphaPct == null
+          starved
             ? 'text-ink-400'
-            : w.alphaPct >= 0
-              ? 'text-emerald-300'
-              : 'text-rose-300';
+            : w.alphaPct == null
+              ? 'text-ink-400'
+              : w.alphaPct >= 0
+                ? 'text-emerald-300'
+                : 'text-rose-300';
         return (
           <li
             key={`${w.startISO}-${w.endISO}`}
-            className="rounded-sm border border-ink-800 p-3 text-xs"
+            className={`rounded-sm border p-3 text-xs ${
+              starved ? 'border-amber-900 bg-amber-950/10' : 'border-ink-800'
+            }`}
           >
             <div className="flex items-baseline justify-between">
-              <span className="font-semibold text-ink-200">
+              <span className={`font-semibold text-ink-200 ${muted}`}>
                 {w.startISO} → {w.endISO}
               </span>
-              <span className="text-ink-400">
-                {w.tradeCount} trade{w.tradeCount === 1 ? '' : 's'}
+              <span className="flex items-baseline gap-2">
+                {starved && (
+                  <span
+                    className="rounded-sm border border-amber-700 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wider text-amber-300"
+                    title="Strategy didn't deploy in this window — Alpaca IEX bar coverage gap. Excluded from aggregate medians + consistency."
+                  >
+                    Data starved
+                  </span>
+                )}
+                <span className="text-ink-400">
+                  {w.tradeCount} trade{w.tradeCount === 1 ? '' : 's'}
+                </span>
               </span>
             </div>
-            <div className="mt-2 grid grid-cols-3 gap-2 tabular-nums">
+            <div className={`mt-2 grid grid-cols-3 gap-2 tabular-nums ${muted}`}>
               <div>
                 <p className="stat-label">CAGR</p>
                 <p className={`text-sm font-semibold ${cagrColor}`}>
@@ -664,16 +693,21 @@ function CompareTable({
 
 function CompareRowView({ row }: { row: CompareRow }) {
   const a = row.aggregate;
-  // Data quality. Two signals: ratio of windows that produced an
-  // equity series, and the absolute trade count across the sweep.
-  // Sparse-data rows (< 50% windows with data, or zero trades total)
-  // get the strategy-metric cells de-emphasised so the user reads
-  // them as "data verdict, not strategy verdict."
+  // Data quality. The "live windows" count = windows that produced an
+  // equity series MINUS windows where the strategy didn't actually
+  // deploy (data-starved). Aggregate medians + consistency are
+  // computed on the live subset only, so this is the number that
+  // backs the headline metrics. Sparse-data rows (< 50% live, or
+  // zero trades total) get the strategy-metric cells de-emphasised
+  // so the user reads them as "data verdict, not strategy verdict."
   const windowsWithData = a?.windowsWithData;
+  const windowsStarved = a?.windowsStarved ?? 0;
   const tradesTotal = a?.tradesTotal;
+  const liveWindows =
+    a != null && windowsWithData != null ? windowsWithData - windowsStarved : null;
   const dataRatio =
-    a && windowsWithData != null && a.windowCount > 0
-      ? windowsWithData / a.windowCount
+    a && liveWindows != null && a.windowCount > 0
+      ? liveWindows / a.windowCount
       : null;
   const sparseData =
     a != null &&
@@ -734,14 +768,26 @@ function CompareRowView({ row }: { row: CompareRow }) {
       <td
         className={`py-2 px-2 text-right tabular-nums ${dataColor}`}
         title={
-          a && windowsWithData != null
-            ? `${windowsWithData} of ${a.windowCount} windows produced an equity series`
+          a && liveWindows != null
+            ? `${liveWindows} of ${a.windowCount} windows ran the strategy with enough data` +
+              (windowsStarved > 0
+                ? ` (${windowsStarved} excluded as data-starved — Alpaca IEX coverage gap)`
+                : '')
             : undefined
         }
       >
-        {a && windowsWithData != null
-          ? `${windowsWithData}/${a.windowCount}`
-          : '—'}
+        {a && liveWindows != null ? (
+          <>
+            {liveWindows}/{a.windowCount}
+            {windowsStarved > 0 && (
+              <span className="ml-1 text-amber-400" aria-label="data-starved windows excluded">
+                ⚠
+              </span>
+            )}
+          </>
+        ) : (
+          '—'
+        )}
       </td>
       <td className="py-2 px-2 text-right tabular-nums text-ink-300">
         {a && tradesTotal != null ? tradesTotal.toLocaleString() : '—'}
