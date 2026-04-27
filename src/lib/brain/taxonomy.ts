@@ -90,6 +90,16 @@ export const BRAIN_KIND_TAXONOMY: Record<
   agent_run_summary: { category: 'memory', confidence: 'medium' },
   post_mortem: { category: 'memory', confidence: 'medium' },
   lesson: { category: 'memory', confidence: 'medium' },
+  // 'insight' is for generalizable rules the agent extracts from
+  // patterns across multiple decisions — distinct from post_mortem
+  // (scoped to a single closed trade) and hypothesis (a forward bet
+  // under test). Example seen in production: "if reported ROE > 50%
+  // AND D/E > 3, the ROE is a leverage artifact — compute ROIC
+  // manually before trusting it." That's an insight, not a post-
+  // mortem of any specific trade. The home page surfaces these as
+  // "Brain · latest insight" so the user sees what the agent has
+  // been LEARNING, not just what it most recently did.
+  insight: { category: 'memory', confidence: 'medium' },
   market_memo: { category: 'memory', confidence: 'medium' },
   research_note: { category: 'memory', confidence: 'medium' },
   hypothesis: { category: 'hypothesis', confidence: 'low' },

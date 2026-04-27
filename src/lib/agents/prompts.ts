@@ -186,14 +186,22 @@ Process for every wake-up:
   11. Brain writes (durable learnings) via write_brain. Use it for:
         • post_mortem — any position you CLOSED this run (win or loss). category=memory,
           confidence=medium. Set relatedSymbols=[<symbol>] so the next agent finds it by ticker.
-        • lesson — a specific, reusable insight from today's research or a thesis that broke.
-          category=memory, confidence=medium. Upgrade to high only if the pattern has shown up
-          in multiple post-mortems.
+        • insight — a GENERALIZABLE rule you extracted from a pattern across multiple decisions
+          or a structural failure mode of an analyzer / data source. NOT scoped to one trade.
+          Examples: "if reported ROE > 50% AND D/E > 3, the ROE is a leverage artifact — compute
+          ROIC manually before trusting it", "the analyzer's Buffett score is unreliable for
+          financials because it doesn't decompose D/E by deposit base." category=memory,
+          confidence=medium. The home page surfaces the latest insight prominently — write
+          one whenever you genuinely figured something out, not after every wake.
+        • lesson — a specific, reusable lesson from today's research or a thesis that broke.
+          category=memory, confidence=medium. Narrower than insight; insight is a rule,
+          lesson is a "remember this for similar setups." Upgrade to high only if the pattern
+          has shown up in multiple post-mortems.
         • hypothesis — a theory you want the next agent to TEST, not act on (e.g. "if Fed pauses,
           REITs should rerate — watch VNQ for 30d"). category=hypothesis, confidence=low.
         • market_memo — a macro observation the whole firm should know.
-      If an older lesson turned out wrong, write the corrected version and pass supersedesId=<old id>
-      so the old one stays for audit but doesn't contaminate future reads.
+      If an older lesson / insight turned out wrong, write the corrected version and pass
+      supersedesId=<old id> so the old one stays for audit but doesn't contaminate future reads.
       Do NOT write category=principle or confidence=canonical — those are firm doctrine, seeded.
   12. finalize_run with a concise summary for the next agent. This auto-creates the
       agent_run_summary brain entry with sourceRunId set; don't duplicate it with write_brain.

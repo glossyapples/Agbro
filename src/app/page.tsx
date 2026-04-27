@@ -210,10 +210,31 @@ async function getOverview() {
       }),
       prisma.strategy.findFirst({ where: { userId: user.id, isActive: true } }),
       prisma.notification.count({ where: { userId: user.id, readAt: null } }),
-      prisma.brainEntry.findFirst({
-        where: { userId: user.id },
-        orderBy: { createdAt: 'desc' },
-      }),
+      // Prefer entries that are LEARNING content — insights (generalizable
+      // rules) and post-mortems (lessons from closed trades) — over the
+      // generic latest-of-any-kind. The agent writes a fresh
+      // agent_run_summary at the end of every wake, so without this filter
+      // the home Brain card always shows "what was just done" rather than
+      // "what was learned." If the user has no insight/post-mortem entries
+      // yet (fresh account), the second findFirst falls back to whatever
+      // is latest so the card isn't blank.
+      prisma.brainEntry
+        .findFirst({
+          where: {
+            userId: user.id,
+            kind: { in: ['insight', 'post_mortem', 'lesson'] },
+            supersededById: null,
+          },
+          orderBy: { createdAt: 'desc' },
+        })
+        .then((preferred) =>
+          preferred
+            ? preferred
+            : prisma.brainEntry.findFirst({
+                where: { userId: user.id, supersededById: null },
+                orderBy: { createdAt: 'desc' },
+              })
+        ),
       // B2.2: per-user counts from UserWatchlist.
       prisma.userWatchlist.count({ where: { userId: user.id, onWatchlist: true } }),
       prisma.userWatchlist.count({ where: { userId: user.id, candidateSource: 'screener' } }),
@@ -546,12 +567,17 @@ export default async function OverviewPage() {
 
       <section className="card">
         <div className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-ink-100">Brain · latest</h2>
+          <h2 className="text-sm font-semibold text-ink-100">
+            Brain · {brainCardHeadline(brainLatest?.kind)}
+          </h2>
           <Link href="/brain" className="text-xs text-brand-400">Open →</Link>
         </div>
         {brainLatest ? (
           <>
-            <p className="mt-1 text-sm font-medium text-ink-100">{brainLatest.title}</p>
+            <div className="mt-1 flex items-center gap-2">
+              <BrainKindBadge kind={brainLatest.kind} />
+              <p className="text-sm font-medium text-ink-100">{brainLatest.title}</p>
+            </div>
             <p className="mt-1 text-xs text-ink-400 line-clamp-3">{brainLatest.body}</p>
           </>
         ) : (
@@ -572,5 +598,66 @@ export default async function OverviewPage() {
         Help &amp; docs →
       </Link>
     </div>
+  );
+}
+
+// ─── Brain card helpers ──────────────────────────────────────────────────
+// The home Brain card prefers learning content (insight, post_mortem,
+// lesson) over generic agent_run_summary entries. The headline label
+// reflects that — "latest insight" reads like the agent has been
+// thinking, "latest" is ambiguous. The badge shows the entry's kind
+// so the user can tell at a glance whether it's a generalizable rule
+// (insight) or a specific trade lesson (post-mortem) or trade activity.
+
+function brainCardHeadline(kind: string | undefined): string {
+  switch (kind) {
+    case 'insight':
+      return 'latest insight';
+    case 'post_mortem':
+      return 'latest post-mortem';
+    case 'lesson':
+      return 'latest lesson';
+    case 'hypothesis':
+      return 'latest hypothesis';
+    case 'agent_run_summary':
+      return 'latest activity';
+    default:
+      return 'latest';
+  }
+}
+
+function BrainKindBadge({ kind }: { kind: string }) {
+  const map: Record<string, { label: string; className: string }> = {
+    insight: {
+      label: 'Insight',
+      className: 'bg-brand-900/50 text-brand-300 border-brand-700/60',
+    },
+    post_mortem: {
+      label: 'Post-mortem',
+      className: 'bg-amber-900/40 text-amber-200 border-amber-800/60',
+    },
+    lesson: {
+      label: 'Lesson',
+      className: 'bg-amber-900/40 text-amber-200 border-amber-800/60',
+    },
+    hypothesis: {
+      label: 'Hypothesis',
+      className: 'bg-violet-900/40 text-violet-200 border-violet-800/60',
+    },
+    agent_run_summary: {
+      label: 'Run summary',
+      className: 'bg-ink-800 text-ink-300 border-ink-700',
+    },
+  };
+  const meta = map[kind] ?? {
+    label: kind.replace(/_/g, ' '),
+    className: 'bg-ink-800 text-ink-300 border-ink-700',
+  };
+  return (
+    <span
+      className={`inline-flex shrink-0 items-center rounded-sm border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider ${meta.className}`}
+    >
+      {meta.label}
+    </span>
   );
 }
