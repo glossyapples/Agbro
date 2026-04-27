@@ -74,6 +74,11 @@ type RunView = {
   aggregate: AggregateView | null;
 };
 
+// Consistency is measured on ALPHA (strategy CAGR minus benchmark
+// CAGR), not raw CAGR — our strategies are rule-based so they can't
+// be curve-fit, but their edge over the benchmark CAN be regime-
+// dependent. A stable alpha across windows = real edge; a wildly
+// varying alpha = the strategy only worked in one regime.
 function consistencyLabel(score: number): {
   label: string;
   color: string;
@@ -81,36 +86,41 @@ function consistencyLabel(score: number): {
 } {
   if (score >= 0.8) {
     return {
-      label: 'Robust',
+      label: 'Stable edge',
       color: 'text-emerald-400',
-      description: 'Performance similar across every window — looks real.',
+      description:
+        "Alpha vs benchmark stays roughly the same across every window — whatever the strategy is doing, it's doing it consistently across regimes.",
     };
   }
   if (score >= 0.6) {
     return {
       label: 'Mostly stable',
       color: 'text-emerald-300',
-      description: 'Some variation across windows but no era-dependent gaps.',
+      description:
+        'Alpha varies modestly across windows but no extreme era-dependent gaps.',
     };
   }
   if (score >= 0.4) {
     return {
       label: 'Mixed',
       color: 'text-amber-300',
-      description: 'Wider spread between best and worst windows. Investigate which eras drive the variance.',
+      description:
+        'Wider alpha spread between best and worst windows. Investigate which eras drive the variance.',
     };
   }
   if (score >= 0.2) {
     return {
-      label: 'Era-dependent',
+      label: 'Regime-dependent',
       color: 'text-amber-400',
-      description: 'Strategy works in some regimes and fails in others. Treat any in-sample CAGR with skepticism.',
+      description:
+        "Strategy's edge over the benchmark depends heavily on market regime. The single-window alpha you see on /backtest is unlikely to repeat.",
     };
   }
   return {
-    label: 'Likely curve-fit',
+    label: 'Highly regime-dependent',
     color: 'text-rose-400',
-    description: 'CAGR swings wildly across windows. Whatever made it work in a single backtest probably won\'t hold up forward.',
+    description:
+      "Alpha swings widely across windows — strategy beats benchmark in some eras and trails badly in others. Don't extrapolate any single in-sample run.",
   };
 }
 
@@ -680,10 +690,11 @@ function CompareTable({
           </p>
           <p>
             <strong className="text-ink-300">Then:</strong> sorted by
-            consistency score, tiebreak by median CAGR. A high consistency +
-            positive median alpha is the only combination that suggests a
-            real edge — high CAGR alone in one window is curve-fit by
-            default.
+            consistency score, tiebreak by median CAGR. Consistency here
+            measures how stable the strategy's alpha is across windows
+            (rule-based strategies can't curve-fit, but their edge can be
+            regime-dependent). A high consistency + positive median alpha
+            is the only combination that suggests a real edge.
           </p>
         </div>
       )}

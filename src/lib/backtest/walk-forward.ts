@@ -10,10 +10,15 @@
 // metrics + a "consistency" score that's hard to game.
 //
 // Note on "training": our strategies are deterministic rule-based, not
-// parameter-fit, so there's no train phase. Walk-forward in our case
-// is pure out-of-sample validation across rolling windows. A truly
-// robust strategy looks similar across windows; a curve-fit one falls
-// apart in any window that doesn't match the era it was tuned for.
+// parameter-fit, so there's no train phase and the strategies cannot
+// be curve-fit in the ML sense. Walk-forward in our case is pure
+// out-of-sample validation across rolling windows: it tells us
+// whether the strategy's edge over the benchmark (alpha) is stable
+// across market regimes, or whether the single-window alpha shown on
+// /backtest is a regime-specific artifact. A passive strategy
+// (Boglehead) shows wildly different raw CAGRs across windows
+// because the market itself does — but its alpha is a tight cluster.
+// That's why consistency below is measured on alpha, not on CAGR.
 
 import {
   runSimulation,
@@ -71,7 +76,17 @@ export type WalkForwardResult = {
     medianCagrPct: number | null;
     medianMaxDrawdownPct: number;
     medianAlphaPct: number | null;
-    consistencyScore: number; // 0..1 — see computeConsistency below
+    // 0..1 — measures consistency of ALPHA (strategy CAGR minus
+    // benchmark CAGR) across windows, NOT raw CAGR. See
+    // computeConsistency below for the math. Why alpha and not CAGR:
+    // our strategies are deterministic rule-based (no parameters to
+    // overfit) so the original "detect curve-fitting" use case
+    // doesn't apply. What we actually want to know is whether the
+    // strategy's edge over the benchmark is stable across market
+    // regimes. Boglehead's raw CAGR varies wildly across windows
+    // (because the market does), but its alpha is a tight cluster of
+    // ~-5% — that's a stable signal, not curve-fit.
+    consistencyScore: number;
     windowCount: number;
     // Diagnostics. windowsWithData is the count of windows where the
     // simulator actually produced an equity series (cagrPct != null);
@@ -319,7 +334,12 @@ export async function runWalkForward(
       medianCagrPct: median(cagrs),
       medianMaxDrawdownPct: median(drawdowns) ?? 0,
       medianAlphaPct: median(alphas),
-      consistencyScore: computeConsistency(cagrs),
+      // Alpha-based, not CAGR-based — see WalkForwardResult docstring.
+      // Falls back to CAGR consistency if every window's alpha is null
+      // (rare; would mean the benchmark series was empty).
+      consistencyScore: alphas.some((a) => a != null)
+        ? computeConsistency(alphas)
+        : computeConsistency(cagrs),
       windowCount: windows.length,
       windowsWithData: windows.filter((w) => w.metrics.cagrPct != null).length,
       tradesTotal: windows.reduce((s, w) => s + w.tradeCount, 0),
