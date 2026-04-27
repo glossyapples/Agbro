@@ -246,7 +246,22 @@ export async function runAgent(args: RunAgentArgs): Promise<RunAgentResult> {
   // Extended thinking is opt-out rather than opt-in — the sprint
   // assumption is "always on for the agent path". Operator escape
   // hatch via env var if a cost or latency regression shows up.
+  //
+  // Adaptive thinking (Opus 4.7's current API): the older
+  // `thinking.type: 'enabled'` shape with budget_tokens is rejected
+  // by the API (verified 2026-04-27 — broke the deep-research route
+  // and the orchestrator). Switching to `adaptive` + an effort
+  // knob. 'high' fits this use case (agent runs make real money
+  // moves, reasoning depth matters). The SDK at 0.30.1 doesn't type
+  // either field — conditional spread + cast keeps the call site
+  // clean. See src/lib/agents/deep-research.ts for the same fix.
   const thinkingEnabled = process.env.AGBRO_THINKING_DISABLED !== 'true';
+  const thinkingParam = thinkingEnabled
+    ? ({
+        thinking: { type: 'adaptive' as const },
+        output_config: { effort: 'high' as const },
+      } as unknown as Record<string, unknown>)
+    : {};
   try {
     for (let turn = 0; turn < MAX_TURNS; turn++) {
       const resp = await client.messages.create({
@@ -255,20 +270,8 @@ export async function runAgent(args: RunAgentArgs): Promise<RunAgentResult> {
         system: AGBRO_PRINCIPLES,
         tools: cachedTools,
         messages,
-        // Extended thinking. The `thinking` request param is supported
-        // on Opus 4.7. Returns one or more `thinking` blocks in
-        // response.content alongside text + tool_use blocks; we
-        // already preserve the full content array on the next turn
-        // (messages.push of resp.content), which is what the SDK
-        // requires for thinking continuity across tool-call rounds.
-        ...(thinkingEnabled
-          ? {
-              thinking: {
-                type: 'enabled' as const,
-                budget_tokens: THINKING_BUDGET_TOKENS,
-              },
-            }
-          : {}),
+        // Adaptive thinking — see thinkingParam comment above.
+        ...thinkingParam,
       });
 
       // Accumulate token usage across every turn so AgentRun.costUsd reflects
