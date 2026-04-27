@@ -11,7 +11,7 @@ import type { DeepResearchOutput } from '@/lib/agents/deep-research';
 type State =
   | { status: 'loading' }
   | { status: 'done'; output: DeepResearchOutput; costUsd: number; createdAtISO: string }
-  | { status: 'error'; message: string };
+  | { status: 'error'; message: string; kind?: string };
 
 export function DeepResearchModal({
   symbol,
@@ -34,7 +34,11 @@ export function DeepResearchModal({
         const body = await res.json().catch(() => ({}));
         if (cancelled) return;
         if (!res.ok || !body.ok) {
-          setState({ status: 'error', message: body.error ?? `HTTP ${res.status}` });
+          setState({
+            status: 'error',
+            message: body.error ?? `HTTP ${res.status}`,
+            kind: body.kind,
+          });
           return;
         }
         setState({
@@ -81,7 +85,7 @@ export function DeepResearchModal({
         </header>
 
         {state.status === 'loading' && <LoadingView symbol={symbol} />}
-        {state.status === 'error' && <ErrorView message={state.message} />}
+        {state.status === 'error' && <ErrorView message={state.message} kind={state.kind} />}
         {state.status === 'done' && (
           <DoneView
             output={state.output}
@@ -112,13 +116,38 @@ function LoadingView({ symbol }: { symbol: string }) {
   );
 }
 
-function ErrorView({ message }: { message: string }) {
+function ErrorView({ message, kind }: { message: string; kind?: string }) {
+  // Friendly labels per failure mode + a hint at how to fix.
+  const HINTS: Record<string, { title: string; hint: string }> = {
+    anthropic_auth: {
+      title: 'Anthropic API not configured',
+      hint: 'ANTHROPIC_API_KEY is missing or invalid on the server. Set it in Railway env vars.',
+    },
+    rate_limit: {
+      title: 'Rate limit hit',
+      hint: 'You clicked Research too many times in a short window. Wait a minute and retry.',
+    },
+    model_output_parse: {
+      title: 'Model returned malformed JSON',
+      hint: 'Opus failed to follow the schema. Retry once — usually transient.',
+    },
+    invalid_symbol: {
+      title: 'Invalid symbol',
+      hint: 'The ticker contains characters the agent rejected. Use a normal stock ticker.',
+    },
+    timeout: {
+      title: 'Request timed out',
+      hint: 'The model took longer than 120s. Retry; if it persists, the symbol may have unusually large fundamentals data.',
+    },
+  };
+  const friendly = kind ? HINTS[kind] : undefined;
   return (
     <div className="rounded-md border border-rose-900 bg-rose-950/30 p-4 text-sm text-rose-200">
-      <p className="font-semibold">Research failed</p>
-      <p className="mt-1 text-rose-300">{message}</p>
-      <p className="mt-3 text-xs text-rose-400/70">
-        Try again, or check the server logs if the same symbol fails repeatedly.
+      <p className="font-semibold">{friendly?.title ?? 'Research failed'}</p>
+      <p className="mt-1 break-words text-rose-300">{message}</p>
+      {friendly?.hint && <p className="mt-3 text-xs text-rose-400/80">{friendly.hint}</p>}
+      <p className="mt-3 text-[11px] text-rose-400/60">
+        Server logs (Railway) have the full stack. Search for "research.deep.post" or the symbol.
       </p>
     </div>
   );

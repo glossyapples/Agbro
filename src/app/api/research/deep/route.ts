@@ -7,9 +7,10 @@
 
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { apiError, requireUser } from '@/lib/api';
+import { requireUser } from '@/lib/api';
 import { checkLimit, rateLimited } from '@/lib/ratelimit';
 import { runDeepResearch } from '@/lib/agents/deep-research';
+import { log } from '@/lib/logger';
 
 export const runtime = 'nodejs';
 // Extended thinking + the network round-trip can take 30-60s for a
@@ -50,6 +51,31 @@ export async function POST(req: Request) {
       createdAtISO: result.createdAtISO,
     });
   } catch (err) {
-    return apiError(err, 500, 'deep research failed', 'research.deep.post');
+    // Plumb the actual error message back to the modal — the user is
+    // the audience-tester and a generic "deep research failed" string
+    // gives them no path to diagnose. The full stack is still in the
+    // server log via apiError -> log.error; we just also surface the
+    // .message on the wire for the UI to render.
+    const message = err instanceof Error ? err.message : 'deep research failed';
+    log.error('research.deep.post', err, { symbol: parsed.data.symbol });
+    return NextResponse.json(
+      {
+        error: message.slice(0, 500),
+        // Keep a stable shape so the modal can decide whether to show
+        // the message verbatim or wrap it in a friendlier label.
+        kind: classifyError(err),
+      },
+      { status: 500 }
+    );
   }
+}
+
+function classifyError(err: unknown): string {
+  const msg = err instanceof Error ? err.message.toLowerCase() : '';
+  if (msg.includes('anthropic') || msg.includes('api key') || msg.includes('api_key')) return 'anthropic_auth';
+  if (msg.includes('rate') && msg.includes('limit')) return 'rate_limit';
+  if (msg.includes('unparseable') || msg.includes('parse')) return 'model_output_parse';
+  if (msg.includes('invalid symbol')) return 'invalid_symbol';
+  if (msg.includes('timeout') || msg.includes('aborted')) return 'timeout';
+  return 'unknown';
 }
