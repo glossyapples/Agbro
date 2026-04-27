@@ -160,18 +160,31 @@ export function WatchlistManager({ initial }: { initial: WatchlistStock[] }) {
         <section className="card flex flex-col gap-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-sm font-semibold">Watchlist ({initial.length})</h2>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 onClick={refreshFromSec}
                 disabled={busy}
-                className="btn-ghost text-xs disabled:opacity-50"
+                className="rounded-md border border-ink-600 bg-ink-800 px-3 py-1.5 text-xs font-medium text-ink-100 transition hover:bg-ink-700 disabled:opacity-50"
                 title="Pulls fresh filings data directly from SEC EDGAR for every symbol below. Takes ~10-30 seconds."
               >
                 ↻ Refresh from SEC
               </button>
-              <button onClick={loadDefaults} disabled={busy} className="btn-ghost text-xs disabled:opacity-50">
-                + Load 29 starter stocks
-              </button>
+              {/* "Load 29 starter stocks" is a one-time onboarding helper.
+                  Once the user has built up their own watchlist (≥10
+                  symbols of any provenance), the button is just visual
+                  noise that risks duplicating work — hide it. The actual
+                  add-symbol input above remains the path for incremental
+                  additions. */}
+              {initial.length < 10 && (
+                <button
+                  onClick={loadDefaults}
+                  disabled={busy}
+                  className="rounded-md border border-ink-600 bg-ink-800 px-3 py-1.5 text-xs font-medium text-ink-100 transition hover:bg-ink-700 disabled:opacity-50"
+                  title="Adds 29 high-quality starter names (BRK.B, V, MA, KO, PEP, etc.) to your watchlist."
+                >
+                  + Load 29 starter stocks
+                </button>
+              )}
             </div>
           </div>
           <ul className="divide-y divide-ink-700/60">
