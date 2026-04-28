@@ -102,10 +102,7 @@ export default async function BrainPage({
       <header className="flex items-start justify-between gap-3 pt-2">
         <div>
           <h1 className="text-2xl font-semibold">Brain</h1>
-          <p className="text-xs text-ink-400">
-            Principles · playbooks · reference material · lived memory · active hypotheses.
-            The company gets smarter every week.
-          </p>
+          <p className="text-xs text-ink-400">What the agent has learned.</p>
           {seeded && lastSyncedAt && (
             <p className="mt-1 text-[11px] text-ink-500">
               Starter brain v{STARTER_BRAIN_SUMMARY.version} · last synced{' '}
@@ -126,31 +123,35 @@ export default async function BrainPage({
 
       {seeded && (
         <>
-          {/* Animated brain hero + tagline. The canvas component
-              loads /brain/brain.png as the base, samples its alpha
-              to find pixels on the brain surface, and renders an
-              additive synapse layer on top whose density and
-              firing rate scale with brain entry count and time
-              since last agent run. See src/lib/brain/animation-math.ts
-              for the equation. */}
-          <section className="card flex flex-col gap-2 p-3">
-            <BrainCanvas
-              entryCount={total}
-              lastRunAtISO={lastRun?.startedAt.toISOString() ?? null}
-              heightPx={220}
-            />
-            <p className="text-center text-[11px] text-ink-400">
-              Continuously analyzing. Always improving.
-            </p>
+          {/* Side-by-side layout. The brain hero on the left stays
+              just large enough (~150 px) to read as the alive
+              centerpiece without dominating the page. The category
+              callouts stack vertically on the right and naturally
+              expand to whatever the column allows. Empty buckets
+              are filtered server-side by BrainCallouts so the list
+              isn't padded with "Note 0" / "Hypothesis 0" noise.
+              The radial gradient pulls the brain's neon palette
+              into the page bg — without it, the dark brain image
+              floated as a black blob with no relationship to the
+              rest of the UI. */}
+          <section
+            className="card flex items-center gap-3 p-3"
+            style={{
+              backgroundImage:
+                'radial-gradient(circle at 30% 50%, rgba(74,222,128,0.08), transparent 70%)',
+            }}
+          >
+            <div className="w-[150px] shrink-0">
+              <BrainCanvas
+                entryCount={total}
+                lastRunAtISO={lastRun?.startedAt.toISOString() ?? null}
+                heightPx={150}
+              />
+            </div>
+            <div className="min-w-0 flex-1">
+              <BrainCallouts counts={calloutCounts} selected={selectedCategory} />
+            </div>
           </section>
-
-          {/* Replaces the previous chip-row nav. Slick adaptive grid
-              that holds up on every viewport — 2 cols on phone, 4
-              on tablet, 7 on desktop. Each pill links into the
-              same /brain?category=X filter as before, so the
-              entries list below picks them up without any other
-              changes. */}
-          <BrainCallouts counts={calloutCounts} selected={selectedCategory} />
         </>
       )}
 

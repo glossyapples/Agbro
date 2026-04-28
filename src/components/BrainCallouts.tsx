@@ -95,17 +95,27 @@ export function BrainCallouts({
   counts: CategoryCount[];
   selected: BrainCategory | null;
 }) {
-  // Render order: All first, then the canonical category list.
+  // Render order: All first, then the canonical category list. Hide
+  // categories with count=0 — empty pills (e.g. "Note 0" before any
+  // user-written notes exist) are visual noise on a small mobile
+  // surface. "All" always shows, even on a fresh account, because
+  // it's the navigation back-out.
+  const allCount = counts.find((c) => c.category === null)?.count ?? 0;
   const ordered: Array<{ category: BrainCategory | null; count: number }> = [
-    { category: null, count: counts.find((c) => c.category === null)?.count ?? 0 },
-    ...BRAIN_CATEGORIES.map((cat) => ({
-      category: cat,
-      count: counts.find((c) => c.category === cat)?.count ?? 0,
-    })),
+    { category: null, count: allCount },
+    ...BRAIN_CATEGORIES.flatMap((cat) => {
+      const count = counts.find((c) => c.category === cat)?.count ?? 0;
+      if (count === 0) return [];
+      return [{ category: cat, count }];
+    }),
   ];
 
+  // Vertical stack — sized to sit beside the BrainCanvas in a
+  // side-by-side row on /brain. The previous grid layout was
+  // attractive on its own but doubled the page's vertical footprint
+  // when paired with the brain hero above it.
   return (
-    <ul className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7">
+    <ul className="flex flex-col gap-1.5">
       {ordered.map(({ category, count }) => {
         const isActive = category === selected;
         const label = category === null ? 'All' : CATEGORY_LABEL[category];
@@ -121,11 +131,7 @@ export function BrainCallouts({
                   : 'border-ink-700/60 bg-ink-800/50 text-ink-200 hover:border-ink-600 hover:bg-ink-800'
               }`}
             >
-              <span
-                className={
-                  isActive ? 'text-brand-300' : 'text-ink-400'
-                }
-              >
+              <span className={isActive ? 'text-brand-300' : 'text-ink-400'}>
                 <Icon category={category} />
               </span>
               <span className="flex flex-1 items-baseline justify-between gap-2 truncate">
