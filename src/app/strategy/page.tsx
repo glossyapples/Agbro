@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import Image from 'next/image';
 import { prisma } from '@/lib/db';
 import { requirePageUser } from '@/lib/auth';
 import { LocalTime } from '@/components/LocalTime';
@@ -46,27 +47,53 @@ export default async function StrategyIndex({
   );
 }
 
+// Card-style sub-nav for /strategy. Each card is a square Link with the
+// section's bespoke artwork (PNG with the label baked in). The selected
+// card gets a green ring + a soft outer halo + a small accent pill at
+// the bottom — the halo is a CSS box-shadow, not a separate glow PNG,
+// so we can tune intensity / colour without re-rendering assets.
+//
+// Sizing: aspect-square inside a grid-cols-3 with gap-2 lands each card
+// at ~104-122px tall on typical phone widths (360-414px page-padded
+// viewport), which keeps the artwork recognisable without pushing the
+// page content below the fold. On desktop the cards scale up
+// proportionally.
 function Tabs({ active }: { active: Tab }) {
-  const tabs: Array<{ key: Tab; label: string }> = [
-    { key: 'strategy', label: 'Strategy' },
-    { key: 'meetings', label: 'Meetings' },
-    { key: 'backtesting', label: 'Back-testing' },
+  const tabs: Array<{ key: Tab; label: string; image: string }> = [
+    { key: 'strategy', label: 'Strategy', image: '/cards/strategy_card.png' },
+    { key: 'meetings', label: 'Meetings', image: '/cards/meetings_card.png' },
+    {
+      key: 'backtesting',
+      label: 'Back-testing',
+      image: '/cards/backtesting_card.png',
+    },
   ];
   return (
-    <nav className="flex gap-1 border-b border-ink-700/60">
+    <nav className="grid grid-cols-3 gap-2">
       {tabs.map((t) => {
         const isActive = t.key === active;
         return (
           <Link
             key={t.key}
             href={`/strategy${t.key === 'strategy' ? '' : `?tab=${t.key}`}`}
-            className={`relative px-3 py-2 text-sm transition-colors ${
-              isActive ? 'text-ink-50' : 'text-ink-400 hover:text-ink-200'
+            aria-label={t.label}
+            aria-current={isActive ? 'page' : undefined}
+            className={`relative aspect-square overflow-hidden rounded-2xl border transition active:scale-[0.98] ${
+              isActive
+                ? 'border-brand-400 shadow-[0_0_24px_rgba(74,222,128,0.4),0_0_60px_rgba(74,222,128,0.15)]'
+                : 'border-ink-700/60 opacity-90 hover:border-ink-600 hover:opacity-100'
             }`}
           >
-            {t.label}
+            <Image
+              src={t.image}
+              alt={t.label}
+              fill
+              sizes="(max-width: 768px) 33vw, 240px"
+              priority={isActive}
+              className="object-cover"
+            />
             {isActive && (
-              <span className="absolute inset-x-0 -bottom-px h-0.5 bg-brand-400" />
+              <span className="pointer-events-none absolute inset-x-0 bottom-3 mx-auto h-1 w-9 rounded-full bg-brand-400 shadow-[0_0_8px_rgba(74,222,128,0.6)]" />
             )}
           </Link>
         );
