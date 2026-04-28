@@ -69,16 +69,21 @@ type CategoryColour = {
   glowHue: number;
 };
 const CATEGORY_COLOURS: CategoryColour[] = [
-  // Green → Principle (top-left frontal lobe)
+  // Hue ranges verified against actual mask via Pillow sampling
+  // (script in scripts/clean-pngs.py adjacent debug session). Each
+  // range is centred on the painted hue with ~±20° margin to absorb
+  // anti-aliased edge pixels without bleeding into neighbouring
+  // categories.
+  // Green → Principle (mask center ~122°)
   { category: 'principle', maskHueMin: 95, maskHueMax: 145, glowHue: 130 },
-  // Cyan / light blue → Playbook (top-centre)
-  { category: 'playbook', maskHueMin: 180, maskHueMax: 215, glowHue: 200 },
-  // Orange → Reference (right side)
-  { category: 'reference', maskHueMin: 20, maskHueMax: 50, glowHue: 32 },
-  // Teal → Memory (cerebellum / lower-right)
-  { category: 'memory', maskHueMin: 150, maskHueMax: 180, glowHue: 168 },
-  // Purple / violet → Hypothesis (centre)
-  { category: 'hypothesis', maskHueMin: 250, maskHueMax: 320, glowHue: 285 },
+  // Blue/cyan → Playbook (mask center ~215°)
+  { category: 'playbook', maskHueMin: 195, maskHueMax: 240, glowHue: 215 },
+  // Orange → Reference (mask center ~29°)
+  { category: 'reference', maskHueMin: 12, maskHueMax: 55, glowHue: 32 },
+  // Teal → Memory (mask center ~179°)
+  { category: 'memory', maskHueMin: 150, maskHueMax: 192, glowHue: 175 },
+  // Purple/violet → Hypothesis (mask center ~269°)
+  { category: 'hypothesis', maskHueMin: 250, maskHueMax: 310, glowHue: 280 },
 ];
 
 // rgb→hsl helper (returns hue in degrees, sat + lightness in [0,1]).
@@ -241,6 +246,17 @@ export function BrainCanvas({
     let alive = true;
     let frameHandle = 0;
     let lastFrameMs = 0;
+    // Simulation clock. Advances by AT MOST one nominal frame's
+    // worth of time per real frame. Decoupling the simulation from
+    // wall-clock fixes the "synapses pop on scroll" bug: mobile
+    // Safari pauses rAF during scroll, then fires queued frames in
+    // a burst when scroll stops. With wall-clock time, that burst
+    // would advance every synapse's lifecycle by hundreds of ms in
+    // one tick — visible as instant "pops" through fade-in/fade-out.
+    // Capping the per-tick delta means the simulation just looks
+    // like it skipped a few frames (smooth) instead of leaping.
+    let simTime = 0;
+    const MAX_SIM_DELTA_MS = MIN_FRAME_MS * 2;
 
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
@@ -367,7 +383,26 @@ export function BrainCanvas({
 
     function spawnSynapse(birthMs: number): Synapse | null {
       if (validPositions.length === 0) return null;
-      const pos = validPositions[Math.floor(Math.random() * validPositions.length)];
+      // Spatial spawn bias. When a category is selected, prefer
+      // candidate positions IN that region so the lit-up effect is
+      // visually dramatic — without this, synapses are uniformly
+      // distributed across the brain and only ~20% fall in any one
+      // region, making the "lighting up" effect too subtle.
+      //
+      // Bias: 80% of new synapses spawn in the active region (if
+      // possible), 20% spawn anywhere. This produces a visible
+      // cluster in the lit region while still showing some baseline
+      // activity elsewhere. The 80/20 mix is by feel; adjust if
+      // either reads too strong or too weak.
+      const sc = propsRef.current.selectedCategory;
+      let pool = validPositions;
+      if (sc) {
+        const inRegion = validPositions.filter((p) => p.region === sc);
+        if (inRegion.length > 0 && Math.random() < 0.8) {
+          pool = inRegion;
+        }
+      }
+      const pos = pool[Math.floor(Math.random() * pool.length)];
       return {
         ax: pos.x,
         ay: pos.y,
@@ -380,9 +415,7 @@ export function BrainCanvas({
         // Radius variance for visual interest.
         rScale: 0.8 + Math.random() * 0.6,
         // Region tag from the mask, or null if this synapse spawned
-        // outside any region (e.g. on a cerebellum pixel that wasn't
-        // painted in regions.png — currently nothing important is
-        // unpainted).
+        // outside any region.
         region: pos.region,
       };
     }
@@ -405,17 +438,23 @@ export function BrainCanvas({
       // region, the region's intensity (smoothly lerped 0..1 by the
       // tick loop) lifts brightness + radius + shifts hue toward the
       // region's signature colour. Other synapses stay at baseline.
+      // Boost values turned up from the v1 (+60% brightness) to
+      // (+150%) because the v1 effect was barely visible in the live
+      // app — only ~20% of synapses fall in any one region, so a
+      // mild boost on a small fraction blended into the baseline
+      // animation. Combined with the spawn bias above the
+      // selected region now reads as a clear glow cluster.
       const regionBoost = s.region ? regionIntensities[s.region] ?? 0 : 0;
-      const peakR = baseR + env * (2.0 + regionBoost * 1.2);
+      const peakR = baseR + env * (2.0 + regionBoost * 2.5);
       // Hue: blend the synapse's natural ~150° emerald toward the
       // region's signature hue at full boost. At regionBoost=0 we
       // get the original emerald hue + small per-synapse shift.
       const baseHue = 150 + s.hueShift;
       const targetHue = s.region ? glowHueByCategory.get(s.region) ?? baseHue : baseHue;
       const hue = baseHue * (1 - regionBoost) + targetHue * regionBoost;
-      // Brightness multiplier — caps at +60% so the boosted region is
-      // clearly emphasised without blowing out the canvas.
-      const envBoosted = env * (1 + regionBoost * 0.6);
+      // Brightness multiplier — bumped to +150% at full boost so
+      // the lit region pops clearly against baseline synapses.
+      const envBoosted = env * (1 + regionBoost * 1.5);
 
       // Soft outer glow. Radius reduced from peakR*6 → peakR*4.5
       // per user feedback: at the larger radius, halos around
@@ -446,11 +485,19 @@ export function BrainCanvas({
       // own alive=false stops it from scheduling another frame.
       if (!alive) return;
       // Frame-rate cap.
-      if (nowMs - lastFrameMs < MIN_FRAME_MS) {
+      const realDelta = lastFrameMs === 0 ? MIN_FRAME_MS : nowMs - lastFrameMs;
+      if (realDelta < MIN_FRAME_MS) {
         frameHandle = requestAnimationFrame(tick);
         return;
       }
       lastFrameMs = nowMs;
+      // Advance the SIMULATION clock by a capped delta. After a
+      // long pause (scroll, tab switch) realDelta can be hundreds
+      // of ms; we clamp so synapses don't leap through their
+      // lifecycles in a single tick. Effect: long pauses look like
+      // the animation just skipped frames, not like every synapse
+      // rapid-cycled.
+      simTime += Math.min(realDelta, MAX_SIM_DELTA_MS);
 
       // Skip when document hidden — saves battery on background
       // tabs. Page Visibility API check.
@@ -482,24 +529,23 @@ export function BrainCanvas({
         regionIntensities[c.category] = current + (target - current) * lerpAlpha;
       }
 
-      // Top up active synapses to target.
-      synapses = synapses.filter((s) => nowMs - s.birthMs <= s.lifeMs);
+      // Top up active synapses to target. Lifecycle math now uses
+      // simTime, not wall clock, so a scroll-induced pause in rAF
+      // doesn't cause every synapse to retire at once when the
+      // loop resumes.
+      synapses = synapses.filter((s) => simTime - s.birthMs <= s.lifeMs);
       while (synapses.length < targetCount) {
-        const s = spawnSynapse(nowMs);
+        const s = spawnSynapse(simTime);
         if (!s) break;
         synapses.push(s);
       }
 
-      // Render. Firing arcs were removed in 0aff... — they didn't read
-      // as "neural activity", they read as random scribbles. The
-      // undulating synapse glows alone carry the "alive" feeling.
-      // Future enhancement: animated tracers that follow the brain's
-      // own circuit-board pattern would be cooler still — needs a
-      // path-extraction step from the brain PNG that's beyond this
-      // pass.
+      // Render. Firing arcs were removed in 645cf3f — they didn't
+      // read as "neural activity", they read as random scribbles.
+      // The undulating synapse glows alone carry the "alive" feeling.
       ctx!.clearRect(0, 0, canvas!.clientWidth, canvas!.clientHeight);
       ctx!.globalCompositeOperation = 'lighter';
-      for (const s of synapses) drawSynapse(s, nowMs);
+      for (const s of synapses) drawSynapse(s, simTime);
       ctx!.globalCompositeOperation = 'source-over';
 
       frameHandle = requestAnimationFrame(tick);
@@ -544,16 +590,40 @@ export function BrainCanvas({
       console.warn('BrainCanvas: regions mask failed to load at', regionMaskSrc);
     };
 
+    // Debounced + size-gated resize handler. Mobile Safari fires
+    // resize events as the URL bar grows/shrinks during scroll
+    // (because viewport height changes). Without guards, every
+    // tiny scroll triggers a sampleValidPositions pass, which is
+    // 30-100ms of getImageData + region classification — visible
+    // as the synapses chattering. Two layers of defence:
+    //   1. Debounce: collapse rapid resize events into one call
+    //      after the last event in a 200ms window.
+    //   2. Size gate: only re-sample if the canvas's actual
+    //      client width / height changed. URL-bar resizes don't
+    //      change the brain card's width, so they no-op here.
+    let resizeTimer: number | null = null;
+    let lastSampledW = 0;
+    let lastSampledH = 0;
     const onResize = () => {
-      if (!alive) return;
-      resize();
-      sampleValidPositions();
+      if (!alive || !canvas) return;
+      if (resizeTimer != null) window.clearTimeout(resizeTimer);
+      resizeTimer = window.setTimeout(() => {
+        if (!alive || !canvas) return;
+        resize();
+        const w = canvas.clientWidth;
+        const h = canvas.clientHeight;
+        if (w === lastSampledW && h === lastSampledH) return;
+        lastSampledW = w;
+        lastSampledH = h;
+        sampleValidPositions();
+      }, 200);
     };
     window.addEventListener('resize', onResize);
 
     return () => {
       alive = false;
       cancelAnimationFrame(frameHandle);
+      if (resizeTimer != null) window.clearTimeout(resizeTimer);
       window.removeEventListener('resize', onResize);
     };
     // Animation effect deliberately depends ONLY on imageSrc +
