@@ -231,6 +231,17 @@ export function parseDeepResearchOutput(raw: string): DeepResearchOutput | null 
   }
 }
 
+// Callback used by the streaming runner to push events back to the
+// caller (the API route, which translates them to SSE for the
+// browser). Intentionally tiny + serializable so the route doesn't
+// have to know about agent internals.
+export type DeepResearchEvent =
+  | { type: 'phase'; phase: 'fetching' | 'thinking' | 'writing' | 'persisting' }
+  | { type: 'thinking_progress'; chars: number }
+  | { type: 'writing_progress'; chars: number }
+  | { type: 'done'; result: DeepResearchResult }
+  | { type: 'error'; message: string; kind: string };
+
 export type RunDeepResearchArgs = {
   userId: string;
   symbol: string;
@@ -242,7 +253,27 @@ export type RunDeepResearchArgs = {
   filingsOverride?: ResearchFilings | null;
   // Skip persistence in tests.
   skipPersist?: boolean;
+  // Stream consumer. When provided, the runner emits progress events
+  // throughout the call so the UI can show "thinking…", "writing…",
+  // etc. without waiting for the final answer. Mandatory for the
+  // production /api/research/deep route — the streaming is what
+  // keeps mobile Safari's fetch alive during long Opus runs.
+  onEvent?: (e: DeepResearchEvent) => void;
+  // Abort signal — when the consumer (browser modal) cancels, we
+  // stop pushing tokens through Opus and tear down cleanly.
+  signal?: AbortSignal;
 };
+
+function classifyError(err: unknown): string {
+  const msg = err instanceof Error ? err.message.toLowerCase() : '';
+  if (msg.includes('anthropic') || msg.includes('api key') || msg.includes('api_key'))
+    return 'anthropic_auth';
+  if (msg.includes('rate') && msg.includes('limit')) return 'rate_limit';
+  if (msg.includes('unparseable') || msg.includes('parse')) return 'model_output_parse';
+  if (msg.includes('invalid symbol')) return 'invalid_symbol';
+  if (msg.includes('timeout') || msg.includes('aborted')) return 'timeout';
+  return 'unknown';
+}
 
 export async function runDeepResearch(
   args: RunDeepResearchArgs
@@ -254,6 +285,9 @@ export async function runDeepResearch(
 
   const client = args.client ?? new Anthropic();
   const asOfISO = new Date().toISOString().slice(0, 10);
+  const emit = args.onEvent ?? (() => {});
+
+  emit({ type: 'phase', phase: 'fetching' });
 
   // Gather inputs in parallel — three external I/O calls, all
   // independent. Filings is the slowest (1 submissions index fetch +
@@ -298,53 +332,119 @@ export async function runDeepResearch(
     filings,
   });
 
-  // Adaptive thinking + medium effort. Opus 4.7's API requires the
-  // adaptive shape (older `thinking.type: 'enabled'` is rejected).
-  // Effort='medium' keeps end-to-end latency under ~30s for a typical
-  // call, which is below mobile Safari's fetch timeout (~60s on
-  // cellular). 'high' produced "Load failed" timeouts on iPhone for
-  // slow names. Switch back up to 'high' if we ship a streaming /
-  // background-job version that keeps the connection alive.
+  // Adaptive thinking + HIGH effort. Sprint W4 enabled streaming
+  // (Server-Sent Events end-to-end, see /api/research/deep/route.ts)
+  // so the request stays alive for as long as Opus needs — mobile
+  // Safari's ~60s fetch timeout is no longer the bottleneck because
+  // the server keeps writing bytes the whole time. 'high' is the
+  // right setting for a one-shot research note where reasoning depth
+  // matters more than latency. Was 'medium' in the pre-streaming
+  // build only because mobile Safari was timing out otherwise.
   // SDK at @anthropic-ai/sdk@0.30.1 doesn't type the new fields;
   // conditional-spread cast keeps the call site clean.
   const adaptiveThinkingParam = {
     thinking: { type: 'adaptive' as const },
-    output_config: { effort: 'medium' as const },
+    output_config: { effort: 'high' as const },
   } as unknown as Record<string, unknown>;
   const callStart = Date.now();
-  const resp = await client.messages.create({
+
+  // Streaming Opus call. Iterate the raw SSE stream the SDK gives us
+  // and route each event:
+  //  - thinking deltas → emit thinking_progress events
+  //  - text deltas    → accumulate + emit writing_progress events
+  //  - usage updates  → captured for the final cost number
+  // The text deltas accumulate into `accumText` which we parse at
+  // message_stop into the structured output.
+  const stream = (await client.messages.create({
     model: TRADE_DECISION_MODEL,
     max_tokens: MAX_OUTPUT_TOKENS,
     system: SYSTEM_PROMPT,
     messages: [{ role: 'user', content: userPrompt }],
+    stream: true,
     ...adaptiveThinkingParam,
-  });
+  })) as AsyncIterable<unknown>;
+
+  let accumText = '';
+  let thinkingChars = 0;
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let cacheReadTokens = 0;
+  let cacheWriteTokens = 0;
+  let phaseEmitted: 'thinking' | 'writing' | null = null;
+
+  for await (const ev of stream) {
+    // Cheap defensive abort check — every iteration. The Opus stream
+    // can run for a minute+; if the user closed the modal we want to
+    // bail before wasting more tokens.
+    if (args.signal?.aborted) {
+      throw new Error('aborted by client');
+    }
+    // Untyped events in SDK 0.30.1; keys are stable on the wire.
+    const e = ev as {
+      type: string;
+      content_block?: { type?: string };
+      delta?: { type?: string; text?: string; thinking?: string };
+      message?: { usage?: Record<string, number> };
+      usage?: Record<string, number>;
+    };
+    if (e.type === 'message_start') {
+      const u = e.message?.usage;
+      if (u) {
+        inputTokens = u.input_tokens ?? inputTokens;
+        cacheReadTokens = u.cache_read_input_tokens ?? cacheReadTokens;
+        cacheWriteTokens = u.cache_creation_input_tokens ?? cacheWriteTokens;
+      }
+    } else if (e.type === 'content_block_start') {
+      const t = e.content_block?.type;
+      if (t === 'thinking' && phaseEmitted !== 'thinking') {
+        phaseEmitted = 'thinking';
+        emit({ type: 'phase', phase: 'thinking' });
+      } else if (t === 'text' && phaseEmitted !== 'writing') {
+        phaseEmitted = 'writing';
+        emit({ type: 'phase', phase: 'writing' });
+      }
+    } else if (e.type === 'content_block_delta') {
+      const dt = e.delta?.type;
+      if (dt === 'thinking_delta' && e.delta?.thinking) {
+        thinkingChars += e.delta.thinking.length;
+        emit({ type: 'thinking_progress', chars: thinkingChars });
+      } else if (dt === 'text_delta' && e.delta?.text) {
+        accumText += e.delta.text;
+        emit({ type: 'writing_progress', chars: accumText.length });
+      }
+    } else if (e.type === 'message_delta') {
+      const u = e.usage;
+      if (u) {
+        outputTokens = u.output_tokens ?? outputTokens;
+      }
+    }
+  }
+
   log.info('deep_research.opus_done', {
     symbol,
     durationMs: Date.now() - callStart,
+    thinkingChars,
+    outputChars: accumText.length,
   });
 
-  const u = resp.usage as unknown as Record<string, number | undefined>;
   const usage: TokenUsage = {
-    inputTokens: u?.input_tokens ?? 0,
-    outputTokens: u?.output_tokens ?? 0,
-    cacheReadTokens: u?.cache_read_input_tokens ?? 0,
-    cacheWriteTokens: u?.cache_creation_input_tokens ?? 0,
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    cacheWriteTokens,
   };
   const costUsd = estimateCostUsd(TRADE_DECISION_MODEL, usage);
 
-  const text = resp.content
-    .filter((b): b is Anthropic.TextBlock => b.type === 'text')
-    .map((b) => b.text)
-    .join('\n');
-  const output = parseDeepResearchOutput(text);
+  const output = parseDeepResearchOutput(accumText);
   if (!output) {
     log.error('deep_research.parse_failed', new Error('parse failed'), {
       symbol,
-      rawSnippet: text.slice(0, 500),
+      rawSnippet: accumText.slice(0, 500),
     });
     throw new Error('Deep research model returned unparseable output');
   }
+
+  emit({ type: 'phase', phase: 'persisting' });
 
   let noteId = '';
   let createdAt = new Date();
@@ -386,7 +486,7 @@ export async function runDeepResearch(
     log.info('deep_research.persisted', { userId: args.userId, symbol, noteId, costUsd });
   }
 
-  return {
+  const result: DeepResearchResult = {
     symbol,
     output,
     costUsd,
@@ -394,6 +494,27 @@ export async function runDeepResearch(
     noteId,
     createdAtISO: createdAt.toISOString(),
   };
+  // Emit terminal event so the caller knows the stream is done +
+  // can deliver the final result to the UI.
+  emit({ type: 'done', result });
+  return result;
+}
+
+// Wrapper that converts errors thrown by runDeepResearch into the
+// 'error' event shape so the route doesn't have to know about
+// classifyError. Always resolves; never throws. Use this from the
+// streaming route handler.
+export async function runDeepResearchSafe(
+  args: RunDeepResearchArgs
+): Promise<void> {
+  const emit = args.onEvent ?? (() => {});
+  try {
+    await runDeepResearch(args);
+  } catch (err) {
+    const message = err instanceof Error ? err.message.slice(0, 500) : 'unknown error';
+    emit({ type: 'error', message, kind: classifyError(err) });
+    log.error('deep_research.failed', err, { symbol: args.symbol });
+  }
 }
 
 async function fetchLatestClose(symbol: string): Promise<number | null> {

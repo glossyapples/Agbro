@@ -1,17 +1,66 @@
 'use client';
 
 // Bottom-sheet modal that shows the deep-research output for a single
-// symbol. Owns the API call lifecycle (fetch on mount, render
-// loading / error / done states) so the parent (HoldingsList) just
-// has to control which symbol is open.
+// symbol. Owns the API call lifecycle (open SSE on mount, render
+// progress / done / error states) so the parent (HoldingsList /
+// WatchlistManager) just has to control which symbol is open.
+//
+// Streaming: the modal opens a Server-Sent Events stream from
+// /api/research/deep and updates the loading view as the agent
+// progresses (fetching → thinking → writing → persisting). The
+// connection stays alive for the duration of the Opus call, which
+// fixes the "Load failed" mobile Safari timeout we saw with the
+// blocking version. On unmount or close button, AbortController
+// cancels the stream so we don't keep burning Opus tokens after
+// the user walked away.
 
 import { useEffect, useState } from 'react';
 import type { DeepResearchOutput } from '@/lib/agents/deep-research';
 
+type Phase = 'fetching' | 'thinking' | 'writing' | 'persisting';
+
 type State =
-  | { status: 'loading' }
+  | {
+      status: 'streaming';
+      phase: Phase;
+      thinkingChars: number;
+      writingChars: number;
+    }
   | { status: 'done'; output: DeepResearchOutput; costUsd: number; createdAtISO: string }
   | { status: 'error'; message: string; kind?: string };
+
+// Trivial SSE parser. Reads the response body as a stream, splits on
+// blank-line frames, and yields one (eventName, dataJson) tuple per
+// frame. Inlined rather than pulled from a library because the
+// surface area is tiny and our event names + JSON payloads are
+// fully under our control.
+async function* parseSseStream(
+  res: Response
+): AsyncGenerator<{ event: string; data: string }> {
+  if (!res.body) return;
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let idx;
+    while ((idx = buf.indexOf('\n\n')) !== -1) {
+      const frame = buf.slice(0, idx);
+      buf = buf.slice(idx + 2);
+      // Each frame may have multiple lines: `event: NAME` then `data: …`.
+      let event = 'message';
+      let data = '';
+      for (const line of frame.split('\n')) {
+        if (line.startsWith(':')) continue; // SSE comment line
+        if (line.startsWith('event:')) event = line.slice(6).trim();
+        else if (line.startsWith('data:')) data += line.slice(5).trim();
+      }
+      if (data) yield { event, data };
+    }
+  }
+}
 
 export function DeepResearchModal({
   symbol,
@@ -20,20 +69,30 @@ export function DeepResearchModal({
   symbol: string;
   onClose: () => void;
 }) {
-  const [state, setState] = useState<State>({ status: 'loading' });
+  const [state, setState] = useState<State>({
+    status: 'streaming',
+    phase: 'fetching',
+    thinkingChars: 0,
+    writingChars: 0,
+  });
 
   useEffect(() => {
     let cancelled = false;
+    const ctrl = new AbortController();
     (async () => {
       try {
         const res = await fetch('/api/research/deep', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ symbol }),
+          signal: ctrl.signal,
         });
-        const body = await res.json().catch(() => ({}));
-        if (cancelled) return;
-        if (!res.ok || !body.ok) {
+        if (!res.ok) {
+          // Non-streaming error path (rate-limit, auth, etc.) — the
+          // route may have returned a JSON body before establishing
+          // the stream.
+          const body = await res.json().catch(() => ({}));
+          if (cancelled) return;
           setState({
             status: 'error',
             message: body.error ?? `HTTP ${res.status}`,
@@ -41,19 +100,56 @@ export function DeepResearchModal({
           });
           return;
         }
-        setState({
-          status: 'done',
-          output: body.output,
-          costUsd: body.costUsd,
-          createdAtISO: body.createdAtISO,
-        });
+        for await (const frame of parseSseStream(res)) {
+          if (cancelled) return;
+          let payload: Record<string, unknown> = {};
+          try {
+            payload = JSON.parse(frame.data);
+          } catch {
+            continue;
+          }
+          if (frame.event === 'phase') {
+            const phase = payload.phase as Phase;
+            setState((s) =>
+              s.status === 'streaming' ? { ...s, phase } : s
+            );
+          } else if (frame.event === 'thinking_progress') {
+            const chars = Number(payload.chars) || 0;
+            setState((s) =>
+              s.status === 'streaming' ? { ...s, thinkingChars: chars } : s
+            );
+          } else if (frame.event === 'writing_progress') {
+            const chars = Number(payload.chars) || 0;
+            setState((s) =>
+              s.status === 'streaming' ? { ...s, writingChars: chars } : s
+            );
+          } else if (frame.event === 'done') {
+            setState({
+              status: 'done',
+              output: payload.output as DeepResearchOutput,
+              costUsd: Number(payload.costUsd) || 0,
+              createdAtISO: String(payload.createdAtISO ?? new Date().toISOString()),
+            });
+          } else if (frame.event === 'error') {
+            setState({
+              status: 'error',
+              message: String(payload.error ?? 'unknown error'),
+              kind: payload.kind ? String(payload.kind) : undefined,
+            });
+          }
+        }
       } catch (err) {
         if (cancelled) return;
-        setState({ status: 'error', message: (err as Error).message });
+        // Don't surface AbortError as a user-facing error — that's
+        // the close-modal path.
+        const e = err as { name?: string; message?: string };
+        if (e?.name === 'AbortError') return;
+        setState({ status: 'error', message: e?.message ?? 'stream failed' });
       }
     })();
     return () => {
       cancelled = true;
+      ctrl.abort();
     };
   }, [symbol]);
 
@@ -84,7 +180,14 @@ export function DeepResearchModal({
           </button>
         </header>
 
-        {state.status === 'loading' && <LoadingView symbol={symbol} />}
+        {state.status === 'streaming' && (
+          <LoadingView
+            symbol={symbol}
+            phase={state.phase}
+            thinkingChars={state.thinkingChars}
+            writingChars={state.writingChars}
+          />
+        )}
         {state.status === 'error' && <ErrorView message={state.message} kind={state.kind} />}
         {state.status === 'done' && (
           <DoneView
@@ -98,24 +201,97 @@ export function DeepResearchModal({
   );
 }
 
-function LoadingView({ symbol }: { symbol: string }) {
+function LoadingView({
+  symbol,
+  phase,
+  thinkingChars,
+  writingChars,
+}: {
+  symbol: string;
+  phase: Phase;
+  thinkingChars: number;
+  writingChars: number;
+}) {
+  // Progressive checklist — earlier phases tick to "done" as the
+  // agent moves through the pipeline. Each phase shows a tiny live
+  // progress counter when there's something to count (chars in /
+  // chars out). All driven by the SSE event stream from the route.
+  type Step = { phase: Phase; label: (active: boolean) => string };
+  const steps: Step[] = [
+    {
+      phase: 'fetching',
+      label: () => `Pulling SEC fundamentals + 10-K / 10-Q text for ${symbol}`,
+    },
+    {
+      phase: 'thinking',
+      label: (active) =>
+        active && thinkingChars > 0
+          ? `Opus 4.7 thinking (${thinkingChars.toLocaleString()} chars of reasoning)`
+          : 'Opus 4.7 thinking through the filings',
+    },
+    {
+      phase: 'writing',
+      label: (active) =>
+        active && writingChars > 0
+          ? `Writing the analysis (${writingChars.toLocaleString()} chars and counting)`
+          : 'Writing the structured research note',
+    },
+    { phase: 'persisting', label: () => 'Saving to your research notes' },
+  ];
+  const phaseOrder: Phase[] = ['fetching', 'thinking', 'writing', 'persisting'];
+  const currentIdx = phaseOrder.indexOf(phase);
+
   return (
-    <div className="space-y-3 py-8 text-sm text-ink-300">
-      <p className="flex items-center gap-2">
-        <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-emerald-400" />
-        Pulling SEC fundamentals + latest 10-K + 10-Q text for {symbol}...
-      </p>
-      <p className="flex items-center gap-2">
-        <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-emerald-400" />
-        Asking Opus 4.7 to read it all and write the research note...
-      </p>
-      <p className="text-xs text-ink-500">
-        Typically 25-50s now that the agent reads full filings. Cost: ~$0.50-2.00 per click. Capped server-side.
+    <div className="space-y-2 py-6 text-sm">
+      {steps.map((step, i) => {
+        const isDone = i < currentIdx;
+        const isActive = i === currentIdx;
+        const isPending = i > currentIdx;
+        return (
+          <p
+            key={step.phase}
+            className={`flex items-center gap-2 ${
+              isDone
+                ? 'text-ink-500'
+                : isActive
+                  ? 'text-ink-200'
+                  : 'text-ink-600'
+            }`}
+          >
+            <span
+              className={`inline-flex h-3 w-3 shrink-0 items-center justify-center rounded-full ${
+                isDone
+                  ? 'bg-emerald-700/60'
+                  : isActive
+                    ? 'animate-pulse bg-emerald-400'
+                    : 'bg-ink-700'
+              }`}
+            >
+              {isDone && (
+                <svg viewBox="0 0 12 12" className="h-2 w-2 text-ink-950">
+                  <path
+                    d="M2 6l3 3 5-6"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    fill="none"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              )}
+            </span>
+            <span className={isPending ? 'opacity-70' : ''}>
+              {step.label(isActive)}
+            </span>
+          </p>
+        );
+      })}
+      <p className="pt-3 text-xs text-ink-500">
+        Streaming over SSE so the connection stays alive for the whole
+        Opus run. Cost: ~$0.50-2.00 per click, capped server-side.
       </p>
       <p className="text-[11px] text-ink-600">
-        Don&apos;t lock your phone — mobile Safari may abort the request after a
-        minute. If you see &quot;Load failed,&quot; just click Research again. (W4
-        will fix this with streaming responses.)
+        Closing the modal cancels the run and stops further token spend.
       </p>
     </div>
   );
