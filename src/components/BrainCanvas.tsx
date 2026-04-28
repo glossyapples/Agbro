@@ -102,19 +102,39 @@ export function BrainCanvas({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [imgLoaded, setImgLoaded] = useState(false);
   const [imgError, setImgError] = useState<string | null>(null);
-  // Mounted flag for the animation loop's cleanup to check.
-  const runningRef = useRef(false);
   // Reduced-motion preference. If true we render a static base image
   // and skip the canvas loop entirely.
   const reducedMotionRef = useRef(false);
+
+  // Live reference to the current props the animation tick needs to
+  // read. Updated via a separate useEffect on prop change so the main
+  // animation effect can stay mounted for the component's lifetime
+  // without restarting on every navigation. Pre-fix the effect deps
+  // included a freshly-constructed `new Date(lastRunAtISO)` which
+  // changed identity every render → effect re-ran every render →
+  // dozens of concurrent rAF loops piling up on the same canvas. The
+  // user-visible symptom was the animation appearing "really fast"
+  // after navigating between strategy / brain categories. Loops
+  // eventually self-cleaned when GC ran or a deeper unmount fired.
+  const propsRef = useRef<{
+    entryCount: number;
+    lastRunAt: Date | null;
+  }>({
+    entryCount,
+    lastRunAt: lastRunAtISO ? new Date(lastRunAtISO) : null,
+  });
+  useEffect(() => {
+    propsRef.current = {
+      entryCount,
+      lastRunAt: lastRunAtISO ? new Date(lastRunAtISO) : null,
+    };
+  }, [entryCount, lastRunAtISO]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
     reducedMotionRef.current =
       window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
   }, []);
-
-  // Parse the lastRunAt prop into a Date once per change.
   const lastRunAt = lastRunAtISO ? new Date(lastRunAtISO) : null;
 
   useEffect(() => {
@@ -123,9 +143,13 @@ export function BrainCanvas({
     if (!canvas || !container) return;
     if (reducedMotionRef.current) return;
 
+    // Per-effect "alive" flag (NOT a shared ref). Each effect run gets
+    // its own closure-local flag, so even if a stray rAF callback from
+    // a stale effect fires after cleanup, it sees its OWN alive=false
+    // and exits — no chance of two loops drawing on the same canvas.
+    let alive = true;
     let frameHandle = 0;
     let lastFrameMs = 0;
-    runningRef.current = true;
 
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
@@ -247,7 +271,10 @@ export function BrainCanvas({
     }
 
     function tick(nowMs: number) {
-      if (!runningRef.current) return;
+      // Local-flag check, NOT a shared ref. Even if a stale rAF
+      // callback fires after this effect has been cleaned up, its
+      // own alive=false stops it from scheduling another frame.
+      if (!alive) return;
       // Frame-rate cap.
       if (nowMs - lastFrameMs < MIN_FRAME_MS) {
         frameHandle = requestAnimationFrame(tick);
@@ -262,7 +289,12 @@ export function BrainCanvas({
         return;
       }
 
-      const intensity = brainIntensity({ entryCount, lastRunAt });
+      // Read CURRENT props via the ref so prop changes (entryCount
+      // grows, agent runs, etc.) take effect on the next tick without
+      // needing the effect to re-run. The effect mounts once and
+      // lives the whole component lifetime.
+      const { entryCount: ec, lastRunAt: lr } = propsRef.current;
+      const intensity = brainIntensity({ entryCount: ec, lastRunAt: lr });
       const targetCount = activeSynapseCount(intensity);
 
       // Top up active synapses to target.
@@ -289,27 +321,42 @@ export function BrainCanvas({
     }
 
     img.onload = () => {
+      // Critical: if the effect already cleaned up before the image
+      // finished loading (rapid mount/unmount during navigation),
+      // don't start a zombie loop on top of whatever new effect is
+      // now alive.
+      if (!alive) return;
       setImgLoaded(true);
       resize();
       sampleValidPositions();
       frameHandle = requestAnimationFrame(tick);
     };
     img.onerror = () => {
+      if (!alive) return;
       setImgError('brain.png not found at ' + imageSrc);
     };
 
     const onResize = () => {
+      if (!alive) return;
       resize();
       sampleValidPositions();
     };
     window.addEventListener('resize', onResize);
 
     return () => {
-      runningRef.current = false;
+      alive = false;
       cancelAnimationFrame(frameHandle);
       window.removeEventListener('resize', onResize);
     };
-  }, [entryCount, lastRunAtISO, imageSrc, lastRunAt]);
+    // Animation effect deliberately depends ONLY on imageSrc — the
+    // animation loop reads entryCount + lastRunAt via propsRef and
+    // doesn't need to restart on either changing. This is the fix
+    // for the multi-loop pile-up bug: the previous deps array
+    // included a fresh `new Date(lastRunAtISO)` which had a new
+    // identity every render, so the effect re-ran every render,
+    // each time starting another rAF loop on top of the previous.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [imageSrc]);
 
   return (
     <div
