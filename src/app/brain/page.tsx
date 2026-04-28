@@ -133,13 +133,13 @@ export default async function BrainPage({
               firing rate scale with brain entry count and time
               since last agent run. See src/lib/brain/animation-math.ts
               for the equation. */}
-          <section className="card flex flex-col gap-3 p-3">
+          <section className="card flex flex-col gap-2 p-3">
             <BrainCanvas
               entryCount={total}
               lastRunAtISO={lastRun?.startedAt.toISOString() ?? null}
-              heightPx={300}
+              heightPx={220}
             />
-            <p className="text-center text-xs text-ink-400">
+            <p className="text-center text-[11px] text-ink-400">
               Continuously analyzing. Always improving.
             </p>
           </section>

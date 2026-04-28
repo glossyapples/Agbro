@@ -23,7 +23,6 @@ import { useEffect, useRef, useState } from 'react';
 import {
   brainIntensity,
   activeSynapseCount,
-  firingArcRate,
 } from '@/lib/brain/animation-math';
 
 export type BrainCanvasProps = {
@@ -34,7 +33,8 @@ export type BrainCanvasProps = {
   lastRunAtISO: string | null;
   // Visual size hint. The canvas matches this CSS dimension; the
   // actual pixel buffer scales with devicePixelRatio (capped at 2).
-  // Default sized for the /brain hero on mobile.
+  // Default tuned so the BrainCallouts grid sits above the fold on
+  // typical iPhone-class viewports (~667-844 px logical height).
   heightPx?: number;
   // Source PNG path. Default works once the user uploads to
   // public/brain/brain.png. Can be overridden for testing variants.
@@ -88,14 +88,6 @@ type Synapse = {
   rScale: number;
 };
 
-// Firing arc — brief connection between two synapses.
-type FiringArc = {
-  fromIdx: number;
-  toIdx: number;
-  birthMs: number;
-  lifeMs: number;
-};
-
 const TARGET_FPS = 24;
 const MIN_FRAME_MS = 1000 / TARGET_FPS;
 const MAX_DPR = 2;
@@ -103,7 +95,7 @@ const MAX_DPR = 2;
 export function BrainCanvas({
   entryCount,
   lastRunAtISO,
-  heightPx = 320,
+  heightPx = 220,
   imageSrc = '/brain/brain.png',
 }: BrainCanvasProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -148,8 +140,6 @@ export function BrainCanvas({
 
     let validPositions: Array<{ x: number; y: number }> = [];
     let synapses: Synapse[] = [];
-    let arcs: FiringArc[] = [];
-    let lastArcSpawnMs = 0;
     let dpr = 1;
 
     function resize() {
@@ -256,25 +246,6 @@ export function BrainCanvas({
       ctx!.fill();
     }
 
-    function drawArc(a: FiringArc, nowMs: number) {
-      const t = (nowMs - a.birthMs) / a.lifeMs;
-      if (t < 0 || t > 1) return;
-      const env = Math.sin(Math.PI * t);
-      const from = synapses[a.fromIdx];
-      const to = synapses[a.toIdx];
-      if (!from || !to) return;
-      ctx!.strokeStyle = `hsla(160, 90%, 70%, ${env * 0.5})`;
-      ctx!.lineWidth = 1 + env;
-      ctx!.beginPath();
-      ctx!.moveTo(from.ax, from.ay);
-      // Quadratic bezier with a slight midpoint offset for organic
-      // feel.
-      const mx = (from.ax + to.ax) / 2 + (Math.random() - 0.5) * 8;
-      const my = (from.ay + to.ay) / 2 + (Math.random() - 0.5) * 8;
-      ctx!.quadraticCurveTo(mx, my, to.ax, to.ay);
-      ctx!.stroke();
-    }
-
     function tick(nowMs: number) {
       if (!runningRef.current) return;
       // Frame-rate cap.
@@ -293,7 +264,6 @@ export function BrainCanvas({
 
       const intensity = brainIntensity({ entryCount, lastRunAt });
       const targetCount = activeSynapseCount(intensity);
-      const arcRate = firingArcRate(intensity);
 
       // Top up active synapses to target.
       synapses = synapses.filter((s) => nowMs - s.birthMs <= s.lifeMs);
@@ -303,29 +273,16 @@ export function BrainCanvas({
         synapses.push(s);
       }
 
-      // Spawn firing arcs at the configured rate (Poisson-ish via
-      // simple time gate).
-      const arcGapMs = 1000 / arcRate;
-      if (nowMs - lastArcSpawnMs >= arcGapMs && synapses.length >= 2) {
-        const i = Math.floor(Math.random() * synapses.length);
-        let j = Math.floor(Math.random() * synapses.length);
-        if (j === i) j = (j + 1) % synapses.length;
-        arcs.push({
-          fromIdx: i,
-          toIdx: j,
-          birthMs: nowMs,
-          lifeMs: 250 + Math.random() * 200,
-        });
-        lastArcSpawnMs = nowMs;
-      }
-      arcs = arcs.filter((a) => nowMs - a.birthMs <= a.lifeMs);
-
-      // Render.
+      // Render. Firing arcs were removed in 0aff... — they didn't read
+      // as "neural activity", they read as random scribbles. The
+      // undulating synapse glows alone carry the "alive" feeling.
+      // Future enhancement: animated tracers that follow the brain's
+      // own circuit-board pattern would be cooler still — needs a
+      // path-extraction step from the brain PNG that's beyond this
+      // pass.
       ctx!.clearRect(0, 0, canvas!.clientWidth, canvas!.clientHeight);
-      // Additive blend so glows stack instead of cancelling.
       ctx!.globalCompositeOperation = 'lighter';
       for (const s of synapses) drawSynapse(s, nowMs);
-      for (const a of arcs) drawArc(a, nowMs);
       ctx!.globalCompositeOperation = 'source-over';
 
       frameHandle = requestAnimationFrame(tick);
