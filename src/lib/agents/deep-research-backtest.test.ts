@@ -4,7 +4,7 @@
 // $50-300 spend the user's gating behind a confirmation step.
 
 import { describe, it, expect } from 'vitest';
-import { estimateAgentBacktestCost } from './deep-research-backtest';
+import { estimateAgentBacktestCost } from './deep-research-backtest-cost';
 
 describe('estimateAgentBacktestCost', () => {
   it('multiplies universe × windows for the call count', () => {

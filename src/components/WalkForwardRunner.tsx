@@ -192,7 +192,7 @@ export function WalkForwardRunner({ priorRuns }: { priorRuns: RunView[] }) {
       // Lazy-import the cost helper so the rest of the form bundle
       // doesn't depend on agent code.
       const { estimateAgentBacktestCost } = await import(
-        '@/lib/agents/deep-research-backtest'
+        '@/lib/agents/deep-research-backtest-cost'
       );
       // Use the default agent universe size + the harness's window
       // count (totalSpan / step). UI doesn't currently surface

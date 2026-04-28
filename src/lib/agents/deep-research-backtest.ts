@@ -292,33 +292,11 @@ export async function rankUniverseByConviction(args: {
   return results;
 }
 
-// Cost-estimate helper. Pure, testable. Uses Opus 4.7 high-effort
-// numbers: ~30k input tokens (system + filings + fundamentals
-// recap) and ~4k output tokens of structured note + several thousand
-// thinking tokens. Approximate per-call cost lands around $0.65 at
-// these defaults; we use $1.00 as a conservative central estimate
-// to give the UI a slight cushion against the true number.
-//
-// Returns midpoint, low (per-call=$0.50), high (per-call=$2.00) so
-// the cost-confirm UI can show a range.
-export type AgentBacktestCostEstimate = {
-  callCount: number;
-  perCallEstimateUsd: number;
-  midpointUsd: number;
-  lowUsd: number;
-  highUsd: number;
-};
-
-export function estimateAgentBacktestCost(args: {
-  universeSize: number;
-  windowCount: number;
-}): AgentBacktestCostEstimate {
-  const callCount = Math.max(0, args.universeSize) * Math.max(0, args.windowCount);
-  return {
-    callCount,
-    perCallEstimateUsd: 1.0,
-    midpointUsd: callCount * 1.0,
-    lowUsd: callCount * 0.5,
-    highUsd: callCount * 2.0,
-  };
-}
+// Cost-estimate helper lives in deep-research-backtest-cost.ts so
+// the client WalkForwardRunner can import it without pulling the
+// Alpaca/dotenv graph this module brings in. Re-exported here for
+// any server caller that already imports from this path.
+export {
+  estimateAgentBacktestCost,
+  type AgentBacktestCostEstimate,
+} from './deep-research-backtest-cost';
