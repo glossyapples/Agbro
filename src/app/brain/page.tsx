@@ -1,8 +1,9 @@
-import Link from 'next/link';
 import { prisma } from '@/lib/db';
 import { requirePageUser } from '@/lib/auth';
 import { isBrainSeeded, lastSeedTimestamp, STARTER_BRAIN_SUMMARY } from '@/lib/brain/seed-brain';
 import { BrainSeedButton } from '@/components/BrainSeedButton';
+import { BrainCanvas } from '@/components/BrainCanvas';
+import { BrainCallouts, type CategoryCount } from '@/components/BrainCallouts';
 import { LocalTime } from '@/components/LocalTime';
 import {
   BRAIN_CATEGORIES,
@@ -59,7 +60,7 @@ export default async function BrainPage({
     ? searchParams.category
     : null;
 
-  const [entries, seeded, lastSyncedAt, categoryCounts] = await Promise.all([
+  const [entries, seeded, lastSyncedAt, categoryCounts, lastRun] = await Promise.all([
     prisma.brainEntry.findMany({
       where: {
         userId: user.id,
@@ -76,6 +77,13 @@ export default async function BrainPage({
       where: { userId: user.id, supersededById: null },
       _count: { _all: true },
     }),
+    // Drives the BrainCanvas activity-burst envelope: brain "lights
+    // up" for ~5min after the agent ran.
+    prisma.agentRun.findFirst({
+      where: { userId: user.id },
+      orderBy: { startedAt: 'desc' },
+      select: { startedAt: true },
+    }),
   ]);
 
   const counts = new Map<BrainCategory, number>();
@@ -83,6 +91,11 @@ export default async function BrainPage({
     counts.set(row.category, row._count._all);
   }
   const total = Array.from(counts.values()).reduce((a, b) => a + b, 0);
+
+  const calloutCounts: CategoryCount[] = [
+    { category: null, count: total },
+    ...BRAIN_CATEGORIES.map((c) => ({ category: c, count: counts.get(c) ?? 0 })),
+  ];
 
   return (
     <div className="flex flex-col gap-4 p-4">
@@ -112,37 +125,33 @@ export default async function BrainPage({
       {!seeded && <BrainSeedButton summary={STARTER_BRAIN_SUMMARY} variant="empty" />}
 
       {seeded && (
-        <nav className="-mb-2 flex flex-wrap items-center gap-1 text-[11px]">
-          <Link
-            href="/brain"
-            className={`rounded-full border px-2.5 py-0.5 transition-colors ${
-              !selectedCategory
-                ? 'border-brand-500/60 bg-brand-500/10 text-brand-200'
-                : 'border-ink-700/60 text-ink-300 hover:border-ink-500'
-            }`}
-          >
-            All ({total})
-          </Link>
-          {BRAIN_CATEGORIES.map((c) => {
-            const n = counts.get(c) ?? 0;
-            if (n === 0) return null;
-            const isActive = selectedCategory === c;
-            return (
-              <Link
-                key={c}
-                href={`/brain?category=${c}`}
-                title={CATEGORY_DESCRIPTION[c]}
-                className={`rounded-full border px-2.5 py-0.5 transition-colors ${
-                  isActive
-                    ? 'border-brand-500/60 bg-brand-500/10 text-brand-200'
-                    : 'border-ink-700/60 text-ink-300 hover:border-ink-500'
-                }`}
-              >
-                {CATEGORY_LABEL[c]} ({n})
-              </Link>
-            );
-          })}
-        </nav>
+        <>
+          {/* Animated brain hero + tagline. The canvas component
+              loads /brain/brain.png as the base, samples its alpha
+              to find pixels on the brain surface, and renders an
+              additive synapse layer on top whose density and
+              firing rate scale with brain entry count and time
+              since last agent run. See src/lib/brain/animation-math.ts
+              for the equation. */}
+          <section className="card flex flex-col gap-3 p-3">
+            <BrainCanvas
+              entryCount={total}
+              lastRunAtISO={lastRun?.startedAt.toISOString() ?? null}
+              heightPx={300}
+            />
+            <p className="text-center text-xs text-ink-400">
+              Continuously analyzing. Always improving.
+            </p>
+          </section>
+
+          {/* Replaces the previous chip-row nav. Slick adaptive grid
+              that holds up on every viewport — 2 cols on phone, 4
+              on tablet, 7 on desktop. Each pill links into the
+              same /brain?category=X filter as before, so the
+              entries list below picks them up without any other
+              changes. */}
+          <BrainCallouts counts={calloutCounts} selected={selectedCategory} />
+        </>
       )}
 
       {entries.length === 0 ? (
