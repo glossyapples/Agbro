@@ -20,24 +20,71 @@ export async function GET() {
   if (user instanceof NextResponse) return user;
 
   try {
-    const recent = await prisma.agentRun.findMany({
-      where: { userId: user.id },
-      orderBy: { startedAt: 'desc' },
-      take: 5,
-      select: {
-        id: true,
-        status: true,
-        trigger: true,
-        startedAt: true,
-        endedAt: true,
-        decision: true,
-        errorMessage: true,
-        costUsd: true,
-        summary: true,
-      },
-    });
+    const [recent, account] = await Promise.all([
+      prisma.agentRun.findMany({
+        where: { userId: user.id },
+        orderBy: { startedAt: 'desc' },
+        take: 5,
+        select: {
+          id: true,
+          status: true,
+          trigger: true,
+          startedAt: true,
+          endedAt: true,
+          decision: true,
+          errorMessage: true,
+          costUsd: true,
+          summary: true,
+        },
+      }),
+      // Account-state diagnostics. The scheduler skips a user
+      // entirely (resulting in tick total=0) when isStopped or
+      // isPaused is true. Surfacing these inline saves the user
+      // a trip into Settings to figure out why auto-wake is
+      // silent.
+      prisma.account.findUnique({
+        where: { userId: user.id },
+        select: {
+          isStopped: true,
+          isPaused: true,
+          killSwitchTriggeredAt: true,
+          killSwitchReason: true,
+          agentCadenceMinutes: true,
+          tradingHoursStart: true,
+          tradingHoursEnd: true,
+          dailyLossKillPct: true,
+          drawdownPauseThresholdPct: true,
+        },
+      }),
+    ]);
+
+    // Plain-English diagnosis of why the scheduler might not be
+    // waking the agent. Computed inline so the response is
+    // self-documenting — the user shouldn't have to cross-reference
+    // multiple fields to figure out what's wrong.
+    const reasons: string[] = [];
+    if (!account) {
+      reasons.push('No Account row exists for this user — finish onboarding.');
+    } else {
+      if (account.isStopped) {
+        reasons.push(
+          `Account is STOPPED${account.killSwitchReason ? ' (kill switch: ' + account.killSwitchReason + ')' : ''}. ` +
+            'Resolve via Settings → Safety Rails → Reset kill switch.'
+        );
+      }
+      if (account.isPaused) {
+        reasons.push('Account is PAUSED. Toggle off in Settings.');
+      }
+    }
+    const willWake = reasons.length === 0;
+
     return NextResponse.json({
       ok: true,
+      diagnosis: {
+        willScheduleWake: willWake,
+        reasons,
+      },
+      account,
       runs: recent.map((r) => ({
         id: r.id,
         status: r.status,
