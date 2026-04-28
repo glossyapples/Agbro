@@ -130,15 +130,19 @@ export default async function BrainPage({
               expand to whatever the column allows. Empty buckets
               are filtered server-side by BrainCallouts so the list
               isn't padded with "Note 0" / "Hypothesis 0" noise.
-              The radial gradient pulls the brain's neon palette
-              into the page bg — without it, the dark brain image
-              floated as a black blob with no relationship to the
-              rest of the UI. */}
+
+              Visual treatment per design pass: a cyan-tinted border
+              + a stronger radial-emerald gradient frame the brain
+              hero as its own distinct UI element. The earlier 8%
+              alpha gradient barely registered; this version
+              reads as "the brain sits in a pocket of the palette"
+              instead of "a black blob floating on the page." */}
           <section
-            className="card flex items-center gap-3 p-3"
+            className="flex items-center gap-3 rounded-2xl border border-emerald-700/40 p-3 shadow-[0_0_24px_rgba(74,222,128,0.05)]"
             style={{
               backgroundImage:
-                'radial-gradient(circle at 30% 50%, rgba(74,222,128,0.08), transparent 70%)',
+                'radial-gradient(ellipse at 30% 50%, rgba(74,222,128,0.16), rgba(20,80,60,0.05) 55%, transparent 80%)',
+              backgroundColor: 'rgb(16 19 28 / 0.6)',
             }}
           >
             <div className="w-[150px] shrink-0">
