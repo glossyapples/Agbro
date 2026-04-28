@@ -60,41 +60,39 @@ export function MeetingControls() {
   }
 
   return (
-    <section className="card flex flex-col gap-2">
-      <div className="flex items-start justify-between gap-2">
-        <div>
-          <h2 className="text-sm font-semibold">Executive meeting</h2>
-          <p className="mt-0.5 text-[11px] text-ink-400">
-            Weekly meetings run on Friday afternoons automatically. Run one
-            now to test or to get an extra read on current conditions.
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={run}
-          disabled={busy}
-          className={`btn-primary whitespace-nowrap ${busy ? 'cursor-not-allowed opacity-60' : ''}`}
-        >
-          {busy ? (
-            <span className="flex items-center gap-1.5">
-              <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-ink-900/40 border-t-ink-900" />
-              {elapsed}s
-            </span>
-          ) : (
-            'Run impromptu meeting'
-          )}
-        </button>
-      </div>
+    <section className="card flex flex-col gap-3">
+      {/* Title — full width header. The previous layout squeezed
+          this into a left column next to the button, which forced
+          the description to wrap into a tall narrow block. */}
+      <h2 className="text-sm font-semibold">Executive meeting</h2>
 
-      {!showAgenda && !busy && (
-        <button
-          type="button"
-          onClick={() => setShowAgenda(true)}
-          className="self-start text-[11px] text-brand-400"
-        >
-          + custom agenda
-        </button>
-      )}
+      {/* Primary action — full card width. The button used to live
+          on the right of the title which meant the description text
+          had to wrap into half the card. With the button on its own
+          row the description below can use full width. */}
+      <button
+        type="button"
+        onClick={run}
+        disabled={busy}
+        className={`btn-primary w-full ${busy ? 'cursor-not-allowed opacity-60' : ''}`}
+      >
+        {busy ? (
+          <span className="flex items-center justify-center gap-1.5">
+            <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-ink-900/40 border-t-ink-900" />
+            {elapsed}s
+          </span>
+        ) : (
+          'Run impromptu meeting'
+        )}
+      </button>
+
+      {/* Description — full card width, ~3 lines instead of stacking
+          5 narrow ones. */}
+      <p className="text-[12px] leading-relaxed text-ink-400">
+        Weekly meetings run on Friday afternoons automatically. Run one
+        now to test or to get an extra read on current conditions.
+      </p>
+
       {showAgenda && (
         <div className="flex flex-col gap-1">
           <label className="text-[10px] uppercase tracking-[0.1em] text-ink-400">
@@ -123,7 +121,25 @@ export function MeetingControls() {
       )}
       {error && <p className="text-[11px] text-red-300">{error}</p>}
 
-      <ResetHistoryButton />
+      {/* Bottom row: + custom agenda on the left, Reset on the right.
+          Border-top separates it visually from the description above
+          per the mockup. Empty span keeps Reset right-aligned via
+          justify-between when the agenda toggle is hidden (during
+          edit / busy states). */}
+      <div className="flex items-center justify-between gap-3 border-t border-ink-700/40 pt-3">
+        {!showAgenda && !busy ? (
+          <button
+            type="button"
+            onClick={() => setShowAgenda(true)}
+            className="text-[12px] font-medium text-brand-400 hover:text-brand-300"
+          >
+            + custom agenda
+          </button>
+        ) : (
+          <span />
+        )}
+        <ResetHistoryButton />
+      </div>
     </section>
   );
 }
@@ -204,8 +220,11 @@ function ResetHistoryButton() {
     }
   }
 
+  // No outer wrapper / border-top here anymore — caller (MeetingControls)
+  // places this in a row with "+ custom agenda" and owns the layout +
+  // separator. Returning a fragment keeps the layout simple.
   return (
-    <div className="flex items-center gap-2 border-t border-ink-700/40 pt-2">
+    <div className="flex items-center gap-2 text-right">
       {!armed ? (
         <button
           type="button"
@@ -213,9 +232,9 @@ function ResetHistoryButton() {
             setArmed(true);
             setTimeout(() => setArmed(false), 6000);
           }}
-          className="text-[10px] text-ink-500 hover:text-red-300"
+          className="text-[12px] font-medium text-ink-400 hover:text-red-300"
         >
-          Reset meeting history…
+          Reset meeting history
         </button>
       ) : (
         <>
@@ -223,20 +242,20 @@ function ResetHistoryButton() {
             type="button"
             onClick={fire}
             disabled={busy}
-            className="text-[10px] font-semibold text-red-300 hover:underline"
+            className="text-[11px] font-semibold text-red-300 hover:underline"
           >
             {busy ? 'Clearing…' : 'Confirm: delete all meetings, items, and proposed changes'}
           </button>
           <button
             type="button"
             onClick={() => setArmed(false)}
-            className="text-[10px] text-ink-400"
+            className="text-[11px] text-ink-400"
           >
             cancel
           </button>
         </>
       )}
-      {toast && <span className="text-[10px] text-brand-300">{toast}</span>}
+      {toast && <span className="text-[11px] text-brand-300">{toast}</span>}
     </div>
   );
 }
