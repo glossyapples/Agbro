@@ -92,9 +92,11 @@ function Tabs({ active }: { active: Tab }) {
               priority={isActive}
               className="object-cover"
             />
-            {isActive && (
-              <span className="pointer-events-none absolute inset-x-0 bottom-3 mx-auto h-1 w-9 rounded-full bg-brand-400 shadow-[0_0_8px_rgba(74,222,128,0.6)]" />
-            )}
+            {/* No accent pill: the card artwork has its label baked in
+                close to the bottom edge, leaving no room for a separate
+                indicator without overlapping the text. The brand-400
+                border + outer halo is already doing the "selected"
+                signalling work — adding more was redundant. */}
           </Link>
         );
       })}
