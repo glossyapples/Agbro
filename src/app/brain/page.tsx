@@ -149,6 +149,7 @@ export default async function BrainPage({
               <BrainCanvas
                 entryCount={total}
                 lastRunAtISO={lastRun?.startedAt.toISOString() ?? null}
+                selectedCategory={selectedCategory}
                 heightPx={150}
               />
             </div>

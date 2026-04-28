@@ -31,6 +31,15 @@ export type BrainCanvasProps = {
   // ISO string of the most recent agent run start. Drives the
   // post-wake activity burst. null when there's never been a run.
   lastRunAtISO: string | null;
+  // Currently-selected brain category (from /brain?category=X). When
+  // set, synapses anchored on that region of the brain (per the
+  // regions mask at /brain/regions.png) smoothly light up — brighter
+  // core, slight hue shift toward the region's signature colour.
+  // Falloff is a per-pixel mask sample, so region shapes follow the
+  // brain's anatomy (frontal lobe, cerebellum, etc.) instead of
+  // approximating with ellipses. Smooth crossfade over ~500-700ms
+  // so transitions never feel poppy.
+  selectedCategory?: string | null;
   // Visual size hint. The canvas matches this CSS dimension; the
   // actual pixel buffer scales with devicePixelRatio (capped at 2).
   // Default tuned so the BrainCallouts grid sits above the fold on
@@ -39,7 +48,78 @@ export type BrainCanvasProps = {
   // Source PNG path. Default works once the user uploads to
   // public/brain/brain.png. Can be overridden for testing variants.
   imageSrc?: string;
+  // Region mask PNG path. Each non-transparent pixel is coloured
+  // according to which category that part of the brain belongs to.
+  // Sampled per synapse to find each one's region.
+  regionMaskSrc?: string;
 };
+
+// Maps mask hue → category + display hue for the boost. The mask
+// PNG was hand-painted; these match the colours the artist used
+// (verified by sampling the file). Tolerance ±25° handles edge
+// anti-aliasing.
+type CategoryColour = {
+  category: string;
+  // Hue range in HSL on the mask (used for matching).
+  maskHueMin: number;
+  maskHueMax: number;
+  // Hue used for the synapse-light-up effect when this category is
+  // selected. Same colour the mask uses, baked into a constant
+  // because the synapse render reads HSL directly.
+  glowHue: number;
+};
+const CATEGORY_COLOURS: CategoryColour[] = [
+  // Green → Principle (top-left frontal lobe)
+  { category: 'principle', maskHueMin: 95, maskHueMax: 145, glowHue: 130 },
+  // Cyan / light blue → Playbook (top-centre)
+  { category: 'playbook', maskHueMin: 180, maskHueMax: 215, glowHue: 200 },
+  // Orange → Reference (right side)
+  { category: 'reference', maskHueMin: 20, maskHueMax: 50, glowHue: 32 },
+  // Teal → Memory (cerebellum / lower-right)
+  { category: 'memory', maskHueMin: 150, maskHueMax: 180, glowHue: 168 },
+  // Purple / violet → Hypothesis (centre)
+  { category: 'hypothesis', maskHueMin: 250, maskHueMax: 320, glowHue: 285 },
+];
+
+// rgb→hsl helper (returns hue in degrees, sat + lightness in [0,1]).
+// Inlined here so we don't pull a colour library for one operation.
+function rgbToHsl(r: number, g: number, b: number): { h: number; s: number; l: number } {
+  const rn = r / 255;
+  const gn = g / 255;
+  const bn = b / 255;
+  const max = Math.max(rn, gn, bn);
+  const min = Math.min(rn, gn, bn);
+  const l = (max + min) / 2;
+  const d = max - min;
+  if (d === 0) return { h: 0, s: 0, l };
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  let h = 0;
+  if (max === rn) h = ((gn - bn) / d + (gn < bn ? 6 : 0)) * 60;
+  else if (max === gn) h = ((bn - rn) / d + 2) * 60;
+  else h = ((rn - gn) / d + 4) * 60;
+  return { h, s, l };
+}
+
+// Classify an RGBA pixel from the regions mask into a category
+// string, or null if the pixel is background / unknown. Saturation
+// floor weeds out edge-anti-aliasing artifacts that have low
+// chroma but happen to fall in a hue range.
+function pixelToCategory(r: number, g: number, b: number, a: number): string | null {
+  if (a < 80) return null;
+  const { h, s } = rgbToHsl(r, g, b);
+  if (s < 0.18) return null;
+  for (const c of CATEGORY_COLOURS) {
+    // Hue ranges are degrees; handle the wrap-around case for
+    // categories whose range crosses 0/360 (none currently, but
+    // future-proof).
+    if (c.maskHueMin <= c.maskHueMax) {
+      if (h >= c.maskHueMin && h <= c.maskHueMax) return c.category;
+    } else {
+      if (h >= c.maskHueMin || h <= c.maskHueMax) return c.category;
+    }
+  }
+  return null;
+}
 
 // Tiny seedable Perlin-ish noise. Not a full Perlin implementation —
 // we just need smooth pseudo-random drift to make synapses "breathe."
@@ -86,6 +166,12 @@ type Synapse = {
   // Radius multiplier (small variance per synapse so they don't all
   // look identical).
   rScale: number;
+  // Which category region this synapse falls in (sampled from the
+  // regions mask at spawn time). null if the synapse spawned outside
+  // any region (e.g. on a part of the brain not coloured in the
+  // mask). When the matching category is selected, this synapse
+  // gets a brightness + hue boost.
+  region: string | null;
 };
 
 const TARGET_FPS = 24;
@@ -95,8 +181,10 @@ const MAX_DPR = 2;
 export function BrainCanvas({
   entryCount,
   lastRunAtISO,
+  selectedCategory = null,
   heightPx = 220,
   imageSrc = '/brain/brain.png',
+  regionMaskSrc = '/brain/regions.png',
 }: BrainCanvasProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -119,16 +207,19 @@ export function BrainCanvas({
   const propsRef = useRef<{
     entryCount: number;
     lastRunAt: Date | null;
+    selectedCategory: string | null;
   }>({
     entryCount,
     lastRunAt: lastRunAtISO ? new Date(lastRunAtISO) : null,
+    selectedCategory,
   });
   useEffect(() => {
     propsRef.current = {
       entryCount,
       lastRunAt: lastRunAtISO ? new Date(lastRunAtISO) : null,
+      selectedCategory,
     };
-  }, [entryCount, lastRunAtISO]);
+  }, [entryCount, lastRunAtISO, selectedCategory]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -162,9 +253,36 @@ export function BrainCanvas({
     img.crossOrigin = 'anonymous';
     img.src = imageSrc;
 
-    let validPositions: Array<{ x: number; y: number }> = [];
+    // Region mask. Loaded in parallel with the brain image. Sampled
+    // at sample time to label each candidate synapse position with
+    // the category region it falls in. A separate Image so the two
+    // load independently — animation can start as soon as the
+    // brain loads; mask binding happens once the mask resolves
+    // (synapses spawned before then carry region=null and just
+    // never light up, which is acceptable visually for the brief
+    // load window).
+    const maskImg = new Image();
+    maskImg.crossOrigin = 'anonymous';
+    maskImg.src = regionMaskSrc;
+    let maskLoaded = false;
+
+    let validPositions: Array<{ x: number; y: number; region: string | null }> = [];
     let synapses: Synapse[] = [];
     let dpr = 1;
+    // Brain placement bounds within the canvas (after object-contain
+    // letterboxing). Stored so resize/sample passes share the math.
+    let brainBounds = { x: 0, y: 0, w: 0, h: 0 };
+    // Per-region intensity, smoothed toward target each tick (1 if
+    // selectedCategory matches, 0 otherwise) via exponential lerp.
+    // Multiple regions can be at non-zero intensity briefly during
+    // a crossfade. Object literal so categories not in CATEGORY_COLOURS
+    // (e.g. 'note') simply never appear here.
+    const regionIntensities: Record<string, number> = {};
+    // Map from category string → glow hue, looked up once for cheap
+    // access during render.
+    const glowHueByCategory = new Map<string, number>(
+      CATEGORY_COLOURS.map((c) => [c.category, c.glowHue])
+    );
 
     function resize() {
       if (!canvas || !container) return;
@@ -183,6 +301,13 @@ export function BrainCanvas({
       // Anything with alpha > threshold is a candidate synapse
       // anchor. Coarse grid keeps the candidate pool small enough
       // to pick from cheaply.
+      //
+      // ALSO render the regions mask into a second offscreen canvas
+      // at the same letterboxed bounds, sample the same grid, and
+      // attach the matching category to each position. brain.png
+      // and regions.png have matching dimensions (verified post-
+      // alignment in scripts/clean-pngs.py + a one-off resize), so
+      // the same dx/dy/dw/dh works for both.
       if (!canvas) return;
       const w = canvas.clientWidth;
       const h = canvas.clientHeight;
@@ -191,7 +316,6 @@ export function BrainCanvas({
       off.height = h;
       const offCtx = off.getContext('2d');
       if (!offCtx) return;
-      // Letterbox the brain image to fit the canvas aspect.
       const ar = img.width / img.height;
       const cAr = w / h;
       let dw, dh, dx, dy;
@@ -207,14 +331,35 @@ export function BrainCanvas({
         dy = 0;
       }
       offCtx.drawImage(img, dx, dy, dw, dh);
-      const pixels = offCtx.getImageData(0, 0, w, h).data;
+      const brainPixels = offCtx.getImageData(0, 0, w, h).data;
+      brainBounds = { x: dx, y: dy, w: dw, h: dh };
 
-      const positions: Array<{ x: number; y: number }> = [];
-      const step = 6; // grid spacing — tighter = more candidates
+      // Mask sampling. Reuses the same offscreen canvas (cheap clear
+      // + redraw) so we don't allocate two getImageData buffers
+      // simultaneously.
+      let maskPixels: Uint8ClampedArray | null = null;
+      if (maskLoaded) {
+        offCtx.clearRect(0, 0, w, h);
+        offCtx.drawImage(maskImg, dx, dy, dw, dh);
+        maskPixels = offCtx.getImageData(0, 0, w, h).data;
+      }
+
+      const positions: Array<{ x: number; y: number; region: string | null }> = [];
+      const step = 6;
       for (let y = 0; y < h; y += step) {
         for (let x = 0; x < w; x += step) {
-          const i = (y * w + x) * 4 + 3; // alpha byte
-          if (pixels[i] > 80) positions.push({ x, y });
+          const i = (y * w + x) * 4;
+          if (brainPixels[i + 3] <= 80) continue; // outside the brain
+          let region: string | null = null;
+          if (maskPixels) {
+            region = pixelToCategory(
+              maskPixels[i],
+              maskPixels[i + 1],
+              maskPixels[i + 2],
+              maskPixels[i + 3]
+            );
+          }
+          positions.push({ x, y, region });
         }
       }
       validPositions = positions;
@@ -234,6 +379,11 @@ export function BrainCanvas({
         hueShift: (Math.random() - 0.5) * 60,
         // Radius variance for visual interest.
         rScale: 0.8 + Math.random() * 0.6,
+        // Region tag from the mask, or null if this synapse spawned
+        // outside any region (e.g. on a cerebellum pixel that wasn't
+        // painted in regions.png — currently nothing important is
+        // unpainted).
+        region: pos.region,
       };
     }
 
@@ -250,8 +400,22 @@ export function BrainCanvas({
       const x = s.ax + dx;
       const y = s.ay + dy;
       const baseR = 1.5 * s.rScale;
-      const peakR = baseR + env * 2.0;
-      const hue = 150 + s.hueShift;
+
+      // Region boost: if this synapse falls in the currently-selected
+      // region, the region's intensity (smoothly lerped 0..1 by the
+      // tick loop) lifts brightness + radius + shifts hue toward the
+      // region's signature colour. Other synapses stay at baseline.
+      const regionBoost = s.region ? regionIntensities[s.region] ?? 0 : 0;
+      const peakR = baseR + env * (2.0 + regionBoost * 1.2);
+      // Hue: blend the synapse's natural ~150° emerald toward the
+      // region's signature hue at full boost. At regionBoost=0 we
+      // get the original emerald hue + small per-synapse shift.
+      const baseHue = 150 + s.hueShift;
+      const targetHue = s.region ? glowHueByCategory.get(s.region) ?? baseHue : baseHue;
+      const hue = baseHue * (1 - regionBoost) + targetHue * regionBoost;
+      // Brightness multiplier — caps at +60% so the boosted region is
+      // clearly emphasised without blowing out the canvas.
+      const envBoosted = env * (1 + regionBoost * 0.6);
 
       // Soft outer glow. Radius reduced from peakR*6 → peakR*4.5
       // per user feedback: at the larger radius, halos around
@@ -261,8 +425,8 @@ export function BrainCanvas({
       // keeps each synapse's bloom contained within the local
       // brain region.
       const grad = ctx!.createRadialGradient(x, y, 0, x, y, peakR * 4.5);
-      grad.addColorStop(0, `hsla(${hue}, 90%, 65%, ${env * 0.55})`);
-      grad.addColorStop(0.4, `hsla(${hue}, 90%, 55%, ${env * 0.18})`);
+      grad.addColorStop(0, `hsla(${hue}, 90%, 65%, ${envBoosted * 0.55})`);
+      grad.addColorStop(0.4, `hsla(${hue}, 90%, 55%, ${envBoosted * 0.18})`);
       grad.addColorStop(1, `hsla(${hue}, 90%, 50%, 0)`);
       ctx!.fillStyle = grad;
       ctx!.beginPath();
@@ -270,7 +434,7 @@ export function BrainCanvas({
       ctx!.fill();
 
       // Bright core.
-      ctx!.fillStyle = `hsla(${hue}, 100%, 80%, ${env})`;
+      ctx!.fillStyle = `hsla(${hue}, 100%, 80%, ${envBoosted})`;
       ctx!.beginPath();
       ctx!.arc(x, y, peakR, 0, Math.PI * 2);
       ctx!.fill();
@@ -299,9 +463,24 @@ export function BrainCanvas({
       // grows, agent runs, etc.) take effect on the next tick without
       // needing the effect to re-run. The effect mounts once and
       // lives the whole component lifetime.
-      const { entryCount: ec, lastRunAt: lr } = propsRef.current;
+      const { entryCount: ec, lastRunAt: lr, selectedCategory: sc } = propsRef.current;
       const intensity = brainIntensity({ entryCount: ec, lastRunAt: lr });
       const targetCount = activeSynapseCount(intensity);
+
+      // Smooth crossfade for region intensities. Each known category
+      // lerps its current intensity toward 1 if it matches the
+      // selected category, 0 otherwise. Exponential lerp with a
+      // ~500ms time-constant — past 3τ (~1.5s) we're effectively at
+      // the target. The user emphasised "never poppy"; this is the
+      // primary mechanism that delivers that.
+      const dtSec = MIN_FRAME_MS / 1000; // ~0.04s at 24fps
+      const tau = 0.5;
+      const lerpAlpha = 1 - Math.exp(-dtSec / tau);
+      for (const c of CATEGORY_COLOURS) {
+        const target = sc === c.category ? 1 : 0;
+        const current = regionIntensities[c.category] ?? 0;
+        regionIntensities[c.category] = current + (target - current) * lerpAlpha;
+      }
 
       // Top up active synapses to target.
       synapses = synapses.filter((s) => nowMs - s.birthMs <= s.lifeMs);
@@ -342,6 +521,29 @@ export function BrainCanvas({
       setImgError('brain.png not found at ' + imageSrc);
     };
 
+    // Mask loaded handler. If the brain has already been sampled
+    // (synapses exist with region=null), re-sample to attach
+    // regions retroactively. If the brain's not ready yet, just
+    // mark the mask loaded — the brain's onload will sample both.
+    maskImg.onload = () => {
+      if (!alive) return;
+      maskLoaded = true;
+      if (validPositions.length > 0) {
+        // Brain already sampled — re-sample to bind regions.
+        sampleValidPositions();
+        // Regions on existing synapses won't update; they live out
+        // their current cycle as region=null. New ones spawn with
+        // regions. This is acceptable for the brief load window.
+      }
+    };
+    maskImg.onerror = () => {
+      // Mask is non-essential for the base animation. Log + continue
+      // without region tagging if it fails to load.
+      if (!alive) return;
+      // eslint-disable-next-line no-console
+      console.warn('BrainCanvas: regions mask failed to load at', regionMaskSrc);
+    };
+
     const onResize = () => {
       if (!alive) return;
       resize();
@@ -354,15 +556,16 @@ export function BrainCanvas({
       cancelAnimationFrame(frameHandle);
       window.removeEventListener('resize', onResize);
     };
-    // Animation effect deliberately depends ONLY on imageSrc — the
-    // animation loop reads entryCount + lastRunAt via propsRef and
-    // doesn't need to restart on either changing. This is the fix
+    // Animation effect deliberately depends ONLY on imageSrc +
+    // regionMaskSrc — the animation loop reads entryCount,
+    // lastRunAt, and selectedCategory via propsRef and doesn't
+    // need to restart on any of them changing. This is the fix
     // for the multi-loop pile-up bug: the previous deps array
     // included a fresh `new Date(lastRunAtISO)` which had a new
     // identity every render, so the effect re-ran every render,
     // each time starting another rAF loop on top of the previous.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [imageSrc]);
+  }, [imageSrc, regionMaskSrc]);
 
   return (
     <div
