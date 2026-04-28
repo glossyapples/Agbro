@@ -1,26 +1,38 @@
 name: Agent tick
 
-# Default cadence for AgBro's agent wake-ups. Fires every 30 minutes during
-# regular US market hours (9:30am–4:00pm ET) on weekdays. The app itself
-# enforces trading hours, weekend skip, and your per-user
-# agentCadenceMinutes — this workflow is just the outer heartbeat, so the
-# actual number of agent runs per day is controlled in /settings.
+# External heartbeat for the autonomous agent. The in-process scheduler
+# in src/lib/scheduler.ts is only as reliable as the Railway container
+# staying alive — and Railway recycles containers when idle. This
+# workflow fires /api/cron/tick from outside, so the wake heartbeat
+# is independent of container lifecycle. Dual-fire is safe: the runner
+# acquires a SchedulerLease (Postgres row lock) so concurrent ticks
+# from the in-process scheduler + this workflow can't collide.
 #
-# Times below are UTC. 13:30–20:30 UTC ≈ 9:30am–4:30pm ET during DST
-# (EDT, UTC-4); during EST (UTC-5) the same UTC window covers 8:30am–3:30pm
-# ET, which still fully contains the market's active hours. The app's
-# server-side trading-hours check keeps us honest either way.
+# Cadence: every 15 minutes, 7 days a week. The runner internally
+# enforces:
+#   * weekend short-circuit (returns total=0 unless regime-forced)
+#   * trading-hours gate (per-account tradingHoursStart/End)
+#   * per-user agentCadenceMinutes (default 240 min)
+# So firing every 15 min is harmless — it produces ~6-7 real agent
+# wakes per weekday, plus continuous crypto + regime monitoring 24/7.
 #
-# GitHub Actions cron has ~15-minute scheduling variance. That's fine —
-# the agent is gated on cadence, not exact timing.
+# GitHub Actions cron has 5-15 min variance under load. That's fine;
+# the agent is gated on cadence elapsed, not exact timing.
 
 on:
   schedule:
-    # "0,30" = at :00 and :30 past every hour in the 13..20 UTC window,
-    # Mon–Fri. ≈ 16 invocations/day; after the app's cadence + trading-hours
-    # gates, expect ~6–7 real agent runs on a normal weekday.
-    - cron: '0,30 13-20 * * 1-5'
+    # Every 15 minutes, all days. ~96 invocations/day → after the
+    # runner's gates this collapses to ~6-7 real agent wakes M-F
+    # plus 24/7 crypto DCA + market-regime tripwire.
+    - cron: '*/15 * * * *'
   workflow_dispatch: {}
+
+# Keep at most one tick in flight. Without this a slow tick (90s+
+# per-user budget × N users) could stack while the next 15-min
+# slot fires.
+concurrency:
+  group: agent-tick
+  cancel-in-progress: false
 
 jobs:
   tick:
@@ -32,13 +44,44 @@ jobs:
           AGBRO_URL: ${{ vars.AGBRO_URL }}
           AGBRO_CRON_SECRET: ${{ secrets.AGBRO_CRON_SECRET }}
         run: |
-          if [ -z "$AGBRO_URL" ] || [ -z "$AGBRO_CRON_SECRET" ]; then
-            echo "::error::AGBRO_URL (repo variable) or AGBRO_CRON_SECRET (repo secret) missing"
+          set -u
+          if [ -z "${AGBRO_URL:-}" ] || [ -z "${AGBRO_CRON_SECRET:-}" ]; then
+            echo "::error::Setup incomplete — see docs/SETUP-SCHEDULER.md"
+            echo ""
+            echo "Missing one or both of:"
+            echo "  • AGBRO_URL (GitHub repo Variable)  — current: ${AGBRO_URL:-<unset>}"
+            echo "  • AGBRO_CRON_SECRET (GitHub repo Secret)  — current: $([ -n "${AGBRO_CRON_SECRET:-}" ] && echo '<set>' || echo '<unset>')"
+            echo ""
+            echo "Quick fix:"
+            echo "  1. Generate a secret:  openssl rand -hex 32"
+            echo "  2. In Railway → service → Variables, add:"
+            echo "       AGBRO_CRON_SECRET = <secret>"
+            echo "  3. In GitHub → Settings → Secrets and variables → Actions:"
+            echo "       Secrets tab    →  AGBRO_CRON_SECRET = <same secret>"
+            echo "       Variables tab  →  AGBRO_URL = https://agbro-production.up.railway.app"
+            echo "  4. Re-run this workflow (Actions → Agent tick → Run workflow)."
             exit 1
           fi
-          # -f fails on 4xx/5xx so a broken deploy breaks the workflow run.
-          # --max-time 300 matches the route's maxDuration budget.
+
+          # --max-time 300 matches /api/cron/tick maxDuration. -f fails
+          # the run on any 4xx/5xx so a broken deploy / wrong secret
+          # surfaces as a red workflow run instead of silent dropping.
+          # -w prints the HTTP status + timing line at the end.
+          echo "Hitting $AGBRO_URL/api/cron/tick"
           curl -sSf --max-time 300 \
-            -X POST \
-            -H "x-agbro-cron-secret: $AGBRO_CRON_SECRET" \
-            "$AGBRO_URL/api/cron/tick"
+               -X POST \
+               -H "x-agbro-cron-secret: $AGBRO_CRON_SECRET" \
+               -H "content-type: application/json" \
+               -o /tmp/tick-response.json \
+               -w "HTTP %{http_code} in %{time_total}s\n" \
+               "$AGBRO_URL/api/cron/tick"
+
+          echo ""
+          echo "Response:"
+          # jq if installed (it is on ubuntu-latest), pretty-print so the
+          # outcomes array is readable in the workflow log.
+          if command -v jq >/dev/null 2>&1; then
+            jq . /tmp/tick-response.json
+          else
+            cat /tmp/tick-response.json
+          fi
