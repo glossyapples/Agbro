@@ -135,6 +135,19 @@ type CompareRow = {
   error: string | null;
 };
 
+// Calendar months between two YYYY-MM-DD strings. Used by the
+// agent-cost confirmation to estimate window count without round-
+// tripping to the server. Approximate — counts whole months by
+// (years * 12 + months) — which matches how splitWindows on the
+// server steps the calendar.
+function monthsBetween(startISO: string, endISO: string): number {
+  const a = new Date(`${startISO}T00:00:00Z`);
+  const b = new Date(`${endISO}T00:00:00Z`);
+  const yearDiff = b.getUTCFullYear() - a.getUTCFullYear();
+  const monthDiff = b.getUTCMonth() - a.getUTCMonth();
+  return Math.max(0, yearDiff * 12 + monthDiff);
+}
+
 function emptyCompareRows(): CompareRow[] {
   return STRATEGY_KEYS.map((k) => ({
     strategyKey: k,
@@ -172,6 +185,36 @@ export function WalkForwardRunner({ priorRuns }: { priorRuns: RunView[] }) {
   const [compareErr, setCompareErr] = useState<string | null>(null);
 
   async function submit() {
+    // Cost-confirm gate for the agent_deep_research strategy. Real
+    // Anthropic spend; the user explicitly authorises before pulling
+    // the trigger. All other strategies bypass this gate.
+    if (strategyKey === 'agent_deep_research') {
+      // Lazy-import the cost helper so the rest of the form bundle
+      // doesn't depend on agent code.
+      const { estimateAgentBacktestCost } = await import(
+        '@/lib/agents/deep-research-backtest'
+      );
+      // Use the default agent universe size + the harness's window
+      // count (totalSpan / step). UI doesn't currently surface
+      // universe override; this matches the server default.
+      const months = Math.max(
+        0,
+        monthsBetween(totalStart, totalEnd) - Number(windowMonths) + Number(stepMonths)
+      );
+      const windowCount = Math.max(1, Math.floor(months / Number(stepMonths)));
+      const est = estimateAgentBacktestCost({ universeSize: 30, windowCount });
+      const ok = window.confirm(
+        `Agent Deep Research will call Opus 4.7 ${est.callCount.toLocaleString()} times ` +
+          `(30 universe symbols × ${windowCount} window${windowCount === 1 ? '' : 's'}).\n\n` +
+          `Estimated cost: $${est.midpointUsd.toFixed(0)} ` +
+          `(range $${est.lowUsd.toFixed(0)}–$${est.highUsd.toFixed(0)} ` +
+          `at $0.50–$2.00 per call with high-effort reasoning).\n\n` +
+          `The run takes 30–60 minutes per window — total ~${(windowCount * 45).toFixed(0)} minutes.\n\n` +
+          `Confirm to proceed?`
+      );
+      if (!ok) return;
+    }
+
     setBusy(true);
     setErr(null);
     try {

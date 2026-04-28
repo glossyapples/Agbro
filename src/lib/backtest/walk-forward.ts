@@ -103,6 +103,12 @@ export type WalkForwardResult = {
     // "5 of 7 windows" when this is non-zero so the user knows the
     // headline median is computed on a subset.
     windowsStarved: number;
+    // Total Anthropic spend across all windows (agent_deep_research
+    // strategy only — undefined / zero for everything else).
+    // Useful as a post-run audit so the user can confirm the
+    // validation matched the cost estimate they approved before
+    // the run.
+    agentCostUsd?: number;
   };
 };
 
@@ -250,6 +256,7 @@ export async function runWalkForward(
   const mode: BacktestMode = config.mode ?? 'tier1';
 
   const windows: WalkForwardWindow[] = [];
+  let agentCostUsdTotal = 0;
 
   for (const slice of slices) {
     try {
@@ -284,6 +291,7 @@ export async function runWalkForward(
           ? metrics.cagrPct - benchmarkCagr
           : null;
 
+      if (sim.agentCostUsd) agentCostUsdTotal += sim.agentCostUsd;
       windows.push({
         startISO: slice.startISO,
         endISO: slice.endISO,
@@ -344,6 +352,7 @@ export async function runWalkForward(
       windowsWithData: windows.filter((w) => w.metrics.cagrPct != null).length,
       tradesTotal: windows.reduce((s, w) => s + w.tradeCount, 0),
       windowsStarved: windows.filter((w) => w.dataStarved).length,
+      agentCostUsd: agentCostUsdTotal > 0 ? agentCostUsdTotal : undefined,
     },
   };
 }

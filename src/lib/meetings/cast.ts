@@ -276,6 +276,11 @@ const CASTS_BY_STRATEGY: Record<StrategyKey, CastBundle> = {
   dividend_growth: DIVIDEND_CAST,
   boglehead_index: BOGLEHEAD_CAST,
   burry_deep_research: BURRY_CAST,
+  // Agent Deep Research is backtest-only (a meta-strategy that runs
+  // the LLM agent itself per name); it never appears in the live
+  // cast-meeting flow. Default to BURRY_CAST so any path that
+  // dispatches by strategyKey still gets a sensible cast.
+  agent_deep_research: BURRY_CAST,
 };
 
 // Infer a strategy key from a free-form active-strategy name. User's

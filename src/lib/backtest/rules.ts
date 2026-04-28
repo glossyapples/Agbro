@@ -10,7 +10,16 @@ export type StrategyKey =
   | 'quality_compounders'
   | 'dividend_growth'
   | 'boglehead_index'
-  | 'burry_deep_research';
+  | 'burry_deep_research'
+  // Real LLM-driven research per name at each window's decision date,
+  // ranked by conviction, top-N deployed equal-weight. Distinct from
+  // burry_deep_research, which is a hand-curated 6-stock buy-and-hold.
+  // This one calls the deep-research agent (point-in-time-correct,
+  // strict-PIT prompt scaffold to fight training-data lookahead bias)
+  // and lets it pick. Validation cost is real: ~$0.50-2.00 per
+  // (symbol, window) pair, so the walk-forward UI gates the run on a
+  // cost-estimate confirmation.
+  | 'agent_deep_research';
 
 export type BacktestRuleset = {
   // Day-zero + rebalance targets. For value strategies that receive an
@@ -121,6 +130,12 @@ export function resolveRuleset(key: StrategyKey): BacktestRuleset {
       // exit; out of scope for a backtest approximation of a style
       // whose real edge is the 10-K read, not the trade mechanics.
       return {};
+    case 'agent_deep_research':
+      // The simulator's standard rule fields don't drive this strategy
+      // — the deep-research agent picks the names per window from the
+      // caller-supplied universe. Empty ruleset signals "use the
+      // agent code path" to runSimulation.
+      return {};
   }
 }
 
@@ -131,6 +146,7 @@ export const STRATEGY_KEYS: StrategyKey[] = [
   'dividend_growth',
   'boglehead_index',
   'burry_deep_research',
+  'agent_deep_research',
 ];
 
 export const STRATEGY_LABELS: Record<StrategyKey, string> = {
@@ -140,6 +156,7 @@ export const STRATEGY_LABELS: Record<StrategyKey, string> = {
   dividend_growth: 'Dividend Growth',
   boglehead_index: 'Boglehead Index',
   burry_deep_research: 'Burry Deep Research',
+  agent_deep_research: 'Agent Deep Research',
 };
 
 // Default universes per strategy. Users can override when starting a
@@ -159,4 +176,17 @@ export const DEFAULT_UNIVERSES: Record<StrategyKey, string[]> = {
   // retail he thought was misunderstood (M, GPS). Deliberate mix of
   // unloved names with long histories.
   burry_deep_research: ['GEO', 'BMY', 'GILD', 'M', 'GPS', 'CVX'],
+  // Default agent universe — broad enough to give the LLM something
+  // to choose from, narrow enough to keep validation cost
+  // reasonable. ~30 large-cap names with long EDGAR + price
+  // histories. The user can override per run via the walk-forward
+  // form. Cost scales linearly with universe size × window count;
+  // this default at 5 windows = 150 agent calls = ~$150 with Opus
+  // high effort.
+  agent_deep_research: [
+    'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'NVDA', 'V', 'MA',
+    'JNJ', 'PG', 'KO', 'PEP', 'COST', 'WMT', 'HD', 'MCD',
+    'BRK.B', 'JPM', 'BAC', 'XOM', 'CVX', 'UNH', 'ABBV', 'LLY',
+    'TMO', 'ADBE', 'CRM', 'NFLX', 'NKE', 'DIS',
+  ],
 };

@@ -36,6 +36,7 @@ const STRATEGY_COLORS: Record<StrategyKey, string> = {
   dividend_growth: '#a78bfa',
   boglehead_index: '#f472b6',
   burry_deep_research: '#f97316', // highlighter-orange, his signature colour
+  agent_deep_research: '#22d3ee', // cyan — distinct from the other six
 };
 
 export function StrategyOverlayChart({ windows }: { windows: BacktestWindow[] }) {

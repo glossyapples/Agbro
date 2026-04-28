@@ -94,6 +94,11 @@ export type SimulatorResult = {
   tradeCount: number;
   endingEquityCents: bigint;
   benchmarkEndingCents: bigint;
+  // Real Anthropic spend incurred during this window. Zero for all
+  // strategies except agent_deep_research, which calls Opus per
+  // (symbol, decision date) pair. The walk-forward harness sums
+  // this across windows so the user can audit total spend post-run.
+  agentCostUsd?: number;
 };
 
 type Position = { symbol: string; qty: number; costBasisPerShare: number; entryDate: string };
@@ -315,6 +320,67 @@ export async function runSimulation(config: SimulatorConfig): Promise<SimulatorR
         backfillResults: backfillSummary,
       },
     });
+  }
+
+  // Agent-driven strategy. Calls the deep-research agent at the
+  // window's decision date (calendar[0]) on every symbol in the
+  // universe, ranks by conviction, picks top-N (cap from
+  // AGBRO_AGENT_TOP_N env var, default 10) and equal-weights them.
+  // Real Anthropic spend; the walk-forward UI gates this behind a
+  // cost-confirmation step. No-op for all other strategies.
+  let agentCostUsd = 0;
+  if (config.strategyKey === 'agent_deep_research' && deployUniverse.length > 0) {
+    const { rankUniverseByConviction } = await import('@/lib/agents/deep-research-backtest');
+    const topN = (() => {
+      const raw = process.env.AGBRO_AGENT_TOP_N;
+      if (!raw) return 10;
+      const n = Number(raw);
+      return Number.isFinite(n) && n > 0 && n <= 50 ? Math.floor(n) : 10;
+    })();
+    const decisionDate = new Date(`${calendar[0]}T00:00:00Z`);
+    const ranked = await rankUniverseByConviction({
+      universe: deployUniverse,
+      decisionDate,
+    });
+    agentCostUsd = ranked.reduce((s, r) => s + r.costUsd, 0);
+    const picks = ranked
+      .filter((r) => r.output != null)
+      .slice(0, topN)
+      .map((r) => r.symbol);
+    if (picks.length > 0) {
+      const w = 1 / picks.length;
+      const targetWeights: Record<string, number> = {};
+      for (const sym of picks) targetWeights[sym] = w;
+      // Mutate the ruleset's targetWeights so deployInitial uses
+      // the agent's picks. Side-effects on `rules` are local to
+      // this run (resolveRuleset returns a fresh object).
+      rules.targetWeights = targetWeights;
+      eventLog.push({
+        date: calendar[0],
+        event: 'fundamentals_backfill',
+        details: {
+          kind: 'agent_picks',
+          universeSize: deployUniverse.length,
+          picksCount: picks.length,
+          topN,
+          totalCostUsd: agentCostUsd.toFixed(4),
+          ranking: ranked.map((r) => ({
+            symbol: r.symbol,
+            conviction: r.output?.convictionScore ?? null,
+            error: r.error ?? null,
+          })),
+        },
+      });
+    } else {
+      eventLog.push({
+        date: calendar[0],
+        event: 'data_warning',
+        details: {
+          kind: 'agent_no_picks',
+          message: 'agent returned no usable picks for this window',
+        },
+      });
+    }
   }
 
   deployInitial(calendar[0], rules, cash, deployUniverse, symbolBars, positions, trades);
@@ -542,6 +608,7 @@ export async function runSimulation(config: SimulatorConfig): Promise<SimulatorR
     tradeCount: trades.length,
     endingEquityCents: BigInt(Math.round((last?.equity ?? 0) * 100)),
     benchmarkEndingCents: BigInt(Math.round((last?.benchmark ?? 0) * 100)),
+    agentCostUsd: agentCostUsd > 0 ? agentCostUsd : undefined,
   };
 }
 
