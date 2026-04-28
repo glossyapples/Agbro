@@ -253,14 +253,20 @@ export function BrainCanvas({
       const peakR = baseR + env * 2.0;
       const hue = 150 + s.hueShift;
 
-      // Soft outer glow.
-      const grad = ctx!.createRadialGradient(x, y, 0, x, y, peakR * 6);
+      // Soft outer glow. Radius reduced from peakR*6 → peakR*4.5
+      // per user feedback: at the larger radius, halos around
+      // synapses near the brain's silhouette were extending past
+      // the brain's edges into the card gradient and reading as
+      // "clipping" at the brain image boundary. The tighter radius
+      // keeps each synapse's bloom contained within the local
+      // brain region.
+      const grad = ctx!.createRadialGradient(x, y, 0, x, y, peakR * 4.5);
       grad.addColorStop(0, `hsla(${hue}, 90%, 65%, ${env * 0.55})`);
       grad.addColorStop(0.4, `hsla(${hue}, 90%, 55%, ${env * 0.18})`);
       grad.addColorStop(1, `hsla(${hue}, 90%, 50%, 0)`);
       ctx!.fillStyle = grad;
       ctx!.beginPath();
-      ctx!.arc(x, y, peakR * 6, 0, Math.PI * 2);
+      ctx!.arc(x, y, peakR * 4.5, 0, Math.PI * 2);
       ctx!.fill();
 
       // Bright core.
