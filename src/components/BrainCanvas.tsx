@@ -385,20 +385,20 @@ export function BrainCanvas({
       if (validPositions.length === 0) return null;
       // Spatial spawn bias. When a category is selected, prefer
       // candidate positions IN that region so the lit-up effect is
-      // visually dramatic — without this, synapses are uniformly
-      // distributed across the brain and only ~20% fall in any one
-      // region, making the "lighting up" effect too subtle.
+      // visible — without this, synapses are uniformly distributed
+      // across the brain and only ~20% fall in any one region.
       //
-      // Bias: 80% of new synapses spawn in the active region (if
-      // possible), 20% spawn anywhere. This produces a visible
-      // cluster in the lit region while still showing some baseline
-      // activity elsewhere. The 80/20 mix is by feel; adjust if
-      // either reads too strong or too weak.
+      // Bias dialled back from 80% → 55% per second-pass user
+      // feedback ("the glow is very heavy"). At 80% the small
+      // lobes (frontal, cerebellum) saturated to a bright white
+      // wash because so many additively-blended glows stacked up
+      // on a small area. 55% still reads as a denser cluster but
+      // doesn't dominate.
       const sc = propsRef.current.selectedCategory;
       let pool = validPositions;
       if (sc) {
         const inRegion = validPositions.filter((p) => p.region === sc);
-        if (inRegion.length > 0 && Math.random() < 0.8) {
+        if (inRegion.length > 0 && Math.random() < 0.55) {
           pool = inRegion;
         }
       }
@@ -436,25 +436,25 @@ export function BrainCanvas({
 
       // Region boost: if this synapse falls in the currently-selected
       // region, the region's intensity (smoothly lerped 0..1 by the
-      // tick loop) lifts brightness + radius + shifts hue toward the
-      // region's signature colour. Other synapses stay at baseline.
-      // Boost values turned up from the v1 (+60% brightness) to
-      // (+150%) because the v1 effect was barely visible in the live
-      // app — only ~20% of synapses fall in any one region, so a
-      // mild boost on a small fraction blended into the baseline
-      // animation. Combined with the spawn bias above the
-      // selected region now reads as a clear glow cluster.
+      // tick loop) lifts brightness + radius + shifts hue toward
+      // the region's signature colour. Other synapses stay at
+      // baseline.
+      //
+      // Per-synapse boost dialled WAY back from the second pass
+      // (radius +2.5px, brightness +150%) because additive stacking
+      // (globalCompositeOperation='lighter') saturated overlapping
+      // glows to white. Now: radius +1px, brightness +50%. The
+      // spawn-bias-driven density does the bulk of the "lit up"
+      // visual work; per-synapse boost is supporting cast.
       const regionBoost = s.region ? regionIntensities[s.region] ?? 0 : 0;
-      const peakR = baseR + env * (2.0 + regionBoost * 2.5);
+      const peakR = baseR + env * (2.0 + regionBoost * 1.0);
       // Hue: blend the synapse's natural ~150° emerald toward the
-      // region's signature hue at full boost. At regionBoost=0 we
-      // get the original emerald hue + small per-synapse shift.
+      // region's signature hue at full boost.
       const baseHue = 150 + s.hueShift;
       const targetHue = s.region ? glowHueByCategory.get(s.region) ?? baseHue : baseHue;
       const hue = baseHue * (1 - regionBoost) + targetHue * regionBoost;
-      // Brightness multiplier — bumped to +150% at full boost so
-      // the lit region pops clearly against baseline synapses.
-      const envBoosted = env * (1 + regionBoost * 1.5);
+      // Brightness multiplier — +50% at full boost.
+      const envBoosted = env * (1 + regionBoost * 0.5);
 
       // Soft outer glow. Radius reduced from peakR*6 → peakR*4.5
       // per user feedback: at the larger radius, halos around
