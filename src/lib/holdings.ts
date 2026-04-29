@@ -12,7 +12,7 @@
 // sparkline — the row still renders with value + P/L.
 
 import { getBars, getPositions } from '@/lib/alpaca';
-import { getCryptoPositions, getCryptoBars } from '@/lib/alpaca-crypto';
+import { getCryptoPositions, getCryptoBars, isCryptoSymbol } from '@/lib/alpaca-crypto';
 import { log } from '@/lib/logger';
 
 export type Holding = {
@@ -125,11 +125,14 @@ export function enrichPosition(raw: {
 
 export async function fetchStockHoldings(): Promise<Holding[]> {
   const raw = (await getPositions().catch(() => [])) as Array<Record<string, unknown>>;
-  // Crypto comes through the same Alpaca positions endpoint — the
-  // symbol format ("BTC/USD") distinguishes it. Filter it out here;
-  // the crypto page uses the dedicated crypto reader.
+  // Crypto comes through the same Alpaca positions endpoint. Earlier
+  // logic excluded only slash-form symbols ("BTC/USD"), but Alpaca's
+  // paper-trading API returns the legacy concat form ("BTCUSD") that
+  // slipped through and showed up in the stocks list. isCryptoSymbol
+  // now recognises both formats; this page uses it to keep stocks
+  // strictly equity.
   const stocks = raw.filter(
-    (p) => typeof p.symbol === 'string' && !(p.symbol as string).includes('/')
+    (p) => typeof p.symbol === 'string' && !isCryptoSymbol(p.symbol as string)
   );
   const enriched = stocks.map((p) =>
     enrichPosition(p as Parameters<typeof enrichPosition>[0])

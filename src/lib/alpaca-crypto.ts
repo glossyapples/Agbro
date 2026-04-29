@@ -11,9 +11,18 @@
 import { getAlpaca } from '@/lib/alpaca';
 import { log } from '@/lib/logger';
 
-// Alpaca crypto symbols use the slash form everywhere.
+// Alpaca crypto symbols come in two formats depending on broker config and
+// SDK path: the canonical "BTC/USD" with a slash, and the legacy concat
+// form "BTCUSD" (visible in paper-trading position listings). We accept
+// both — the slashless form needs a regex check because we can't just
+// scan for "USD" anywhere (would catch made-up equities); the constraint
+// is "all letters/digits, ending in a fiat stable suffix, plausible
+// crypto length". US equity tickers are 1-5 chars and never end in USDT/
+// USDC; the only collision risk is a fictitious 5+char equity ending in
+// USD, which the SEC ticker space doesn't currently contain.
 export function isCryptoSymbol(symbol: string): boolean {
-  return symbol.includes('/');
+  if (symbol.includes('/')) return true;
+  return /^[A-Z0-9]{2,9}(USDT|USDC|USD)$/.test(symbol);
 }
 
 export type CryptoPosition = {
