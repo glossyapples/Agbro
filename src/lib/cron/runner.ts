@@ -95,6 +95,11 @@ export async function runScheduledTick(): Promise<TickResult> {
   // See SchedulerLease in schema.prisma for full rationale.
   const lease = await tryAcquireLease('tick');
   if (!lease.acquired) {
+    // Lease-skip diagnostic. Routes through console.log because Railway
+    // strips structured log.info lines. heldBy here is the OTHER process's
+    // holder ID; if it never changes across many ticks, we have a stale
+    // lease row that needs clearing.
+    console.log(`[scheduler-runner] lease NOT acquired — heldBy=${lease.heldBy ?? 'unknown'}`);
     log.info('tick.skipped_by_lease', { heldBy: lease.heldBy });
     return {
       total: 0,
