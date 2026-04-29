@@ -168,12 +168,29 @@ async function runTickBody(): Promise<TickResult> {
   const accounts = await prisma.account.findMany({
     where: { isStopped: false, isPaused: false },
   });
-  // Diagnostic line: surfaces the case where the scheduler runs cleanly
-  // but the accounts query returns nothing — previously invisible because
-  // tick #N would log total=0 and look identical to "everyone is gated
-  // out by trading-hours / cadence." Logged at info so it's findable in
-  // Railway without flipping log levels.
-  log.info('tick.accounts_query', { count: accounts.length });
+  // Triangulating diagnostic. Railway's log collector strips structured
+  // log.info lines, so this uses console.log directly. Compares three
+  // observations to localise where the accounts row goes missing:
+  //  - filteredCount: the actual query the scheduler depends on.
+  //  - unfilteredCount: any account at all visible to this client.
+  //  - rawCount: bypasses Prisma's query builder entirely.
+  if (accounts.length === 0) {
+    try {
+      const unfiltered = await prisma.account.count();
+      const raw = await prisma.$queryRaw<Array<{ count: bigint }>>`
+        SELECT COUNT(*)::bigint AS count
+        FROM "Account"
+        WHERE "isStopped" = false AND "isPaused" = false
+      `;
+      console.log(
+        `[scheduler-runner] accounts.findMany returned 0 — unfilteredCount=${unfiltered} rawCount=${raw[0]?.count ?? 'null'}`
+      );
+    } catch (err) {
+      console.log(
+        `[scheduler-runner] accounts.findMany returned 0 — diagnostic queries failed: ${(err as Error).message}`
+      );
+    }
+  }
 
   const outcomes: TickOutcome[] = [];
   for (const account of accounts) {
