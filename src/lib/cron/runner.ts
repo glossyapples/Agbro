@@ -19,6 +19,11 @@ import { checkKillSwitches, applyKillSwitch } from '@/lib/safety/rails';
 import { tryAcquireLease, releaseLease } from './lease';
 import { log } from '@/lib/logger';
 
+// Module-load banner. Prints exactly once when this file is first imported
+// by the scheduler. If we DON'T see this in Railway logs after a deploy,
+// the build artifact is stale (older than the source we just pushed).
+console.log('[scheduler-runner] runner.ts loaded — build banner v3');
+
 const PER_USER_BUDGET_MS = 90_000;
 
 export type TickOutcome =
@@ -114,6 +119,7 @@ export async function runScheduledTick(): Promise<TickResult> {
 }
 
 async function runTickBody(): Promise<TickResult> {
+  console.log('[scheduler-runner] runTickBody entered');
   // Sweep expired pending approvals first — self-contained, no
   // per-user loop. Cheap UPDATE by the expiresAt index. Errors here
   // are logged but don't block the rest of the tick.
