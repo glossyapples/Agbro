@@ -37,7 +37,7 @@ export async function tryAcquireLease(
   // The ON CONFLICT branch's WHERE is key — without it, an unexpired
   // lease would get overwritten. Returns the row iff we won the race.
   const rows = await prisma.$queryRaw<
-    Array<{ held_by: string; expires_at: Date }>
+    Array<{ heldBy: string; expiresAt: Date }>
   >`
     INSERT INTO "SchedulerLease" ("leaseId", "heldBy", "acquiredAt", "expiresAt")
     VALUES (${leaseId}, ${HOLDER_ID}, NOW(), ${expiresAt})
@@ -48,7 +48,7 @@ export async function tryAcquireLease(
       WHERE "SchedulerLease"."expiresAt" < NOW()
     RETURNING "heldBy", "expiresAt"
   `;
-  if (rows.length > 0 && rows[0].held_by === HOLDER_ID) {
+  if (rows.length > 0 && rows[0].heldBy === HOLDER_ID) {
     return { acquired: true, holderId: HOLDER_ID, leaseId };
   }
   // Didn't win — find out who's holding it for the log line. Best-
