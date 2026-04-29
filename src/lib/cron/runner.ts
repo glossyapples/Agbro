@@ -167,8 +167,13 @@ async function runTickBody(): Promise<TickResult> {
 
   const accounts = await prisma.account.findMany({
     where: { isStopped: false, isPaused: false },
-    include: { user: true },
   });
+  // Diagnostic line: surfaces the case where the scheduler runs cleanly
+  // but the accounts query returns nothing — previously invisible because
+  // tick #N would log total=0 and look identical to "everyone is gated
+  // out by trading-hours / cadence." Logged at info so it's findable in
+  // Railway without flipping log levels.
+  log.info('tick.accounts_query', { count: accounts.length });
 
   const outcomes: TickOutcome[] = [];
   for (const account of accounts) {
