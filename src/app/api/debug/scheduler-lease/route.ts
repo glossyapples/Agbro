@@ -13,10 +13,23 @@ import { apiError, requireUser } from '@/lib/api';
 
 export const runtime = 'nodejs';
 
-export async function GET() {
+export async function GET(req: Request) {
   const user = await requireUser();
   if (user instanceof NextResponse) return user;
   try {
+    // Mobile-friendly clear: ?clear=1 nukes the rows and returns the
+    // delete result. Lets you bypass the lease deadlock from Safari /
+    // any browser that can't open a JS console.
+    const url = new URL(req.url);
+    if (url.searchParams.get('clear') === '1') {
+      const result = await prisma.schedulerLease.deleteMany({});
+      return NextResponse.json({
+        ok: true,
+        action: 'cleared',
+        deletedCount: result.count,
+        note: 'Next scheduler tick (within 2 min) will reacquire from a clean slate.',
+      });
+    }
     const rows = await prisma.schedulerLease.findMany({
       orderBy: { acquiredAt: 'desc' },
     });
