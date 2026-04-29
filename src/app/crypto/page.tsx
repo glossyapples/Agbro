@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { prisma } from '@/lib/db';
 import { requirePageUser } from '@/lib/auth';
 import { getCryptoPositions, getCryptoBars } from '@/lib/alpaca-crypto';
+import { maybeSnapshotCryptoBook } from '@/lib/crypto/engine';
 import { getBrokerAccount } from '@/lib/alpaca';
 import { CryptoConfigForm } from '@/components/CryptoConfigForm';
 import { CryptoPerformanceChart } from '@/components/CryptoPerformanceChart';
@@ -19,11 +20,26 @@ async function loadInitialChart(userId: string) {
   // open — "what happened today" — and is the cheapest range to load.
   const start = new Date();
   start.setDate(start.getDate() - 1);
-  const snapshots = await prisma.cryptoBookSnapshot.findMany({
+  let snapshots = await prisma.cryptoBookSnapshot.findMany({
     where: { userId, takenAt: { gte: start } },
     orderBy: { takenAt: 'asc' },
     select: { takenAt: true, bookValueCents: true },
   });
+  // First-render bootstrap. Snapshots accumulate hourly via the scheduler
+  // (runCryptoCycleAllUsers → maybeSnapshotCryptoBook), but a brand-new
+  // account or one that pre-dates the lease-bug fix has none — so the
+  // chart shows $0 even when Alpaca has live crypto. Force one snapshot
+  // here from current positions so the chart has at least one anchor and
+  // the headline reflects reality. Subsequent renders within the 55-min
+  // rate-limit window are cheap no-ops.
+  if (snapshots.length === 0) {
+    await maybeSnapshotCryptoBook(userId, { force: true }).catch(() => {});
+    snapshots = await prisma.cryptoBookSnapshot.findMany({
+      where: { userId, takenAt: { gte: start } },
+      orderBy: { takenAt: 'asc' },
+      select: { takenAt: true, bookValueCents: true },
+    });
+  }
   const basisValue = snapshots[0] ? Number(snapshots[0].bookValueCents) / 100 : null;
   const book = snapshots.map((s) => {
     const v = Number(s.bookValueCents) / 100;
