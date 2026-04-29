@@ -1,8 +1,8 @@
 import Link from 'next/link';
 import { prisma } from '@/lib/db';
 import { requirePageUser } from '@/lib/auth';
-import { getCryptoPositions, getCryptoBars } from '@/lib/alpaca-crypto';
-import { maybeSnapshotCryptoBook } from '@/lib/crypto/engine';
+import { getCryptoPositions } from '@/lib/alpaca-crypto';
+import { computeCryptoChart } from '@/lib/crypto/performance';
 import { getBrokerAccount } from '@/lib/alpaca';
 import { CryptoConfigForm } from '@/components/CryptoConfigForm';
 import { CryptoPerformanceChart } from '@/components/CryptoPerformanceChart';
@@ -13,73 +13,12 @@ import { LocalTime } from '@/components/LocalTime';
 
 export const runtime = 'nodejs';
 
-async function loadInitialChart(userId: string) {
-  // Server-side equivalent of /api/crypto/performance with range=1D, so the
-  // chart paints on first byte. Mirrors the stocks-side PerformanceChart
-  // loading pattern. 1D default matches what most users want on first
-  // open — "what happened today" — and is the cheapest range to load.
-  const start = new Date();
-  start.setDate(start.getDate() - 1);
-  let snapshots = await prisma.cryptoBookSnapshot.findMany({
-    where: { userId, takenAt: { gte: start } },
-    orderBy: { takenAt: 'asc' },
-    select: { takenAt: true, bookValueCents: true },
-  });
-  // First-render bootstrap. Snapshots accumulate hourly via the scheduler
-  // (runCryptoCycleAllUsers → maybeSnapshotCryptoBook), but a brand-new
-  // account or one that pre-dates the lease-bug fix has none — so the
-  // chart shows $0 even when Alpaca has live crypto. Force one snapshot
-  // here from current positions so the chart has at least one anchor and
-  // the headline reflects reality. Subsequent renders within the 55-min
-  // rate-limit window are cheap no-ops.
-  if (snapshots.length === 0) {
-    await maybeSnapshotCryptoBook(userId, { force: true }).catch(() => {});
-    snapshots = await prisma.cryptoBookSnapshot.findMany({
-      where: { userId, takenAt: { gte: start } },
-      orderBy: { takenAt: 'asc' },
-      select: { takenAt: true, bookValueCents: true },
-    });
-  }
-  const basisValue = snapshots[0] ? Number(snapshots[0].bookValueCents) / 100 : null;
-  const book = snapshots.map((s) => {
-    const v = Number(s.bookValueCents) / 100;
-    return {
-      t: s.takenAt.getTime(),
-      v,
-      pct: basisValue && basisValue > 0 ? ((v - basisValue) / basisValue) * 100 : 0,
-    };
-  });
-  let btc: Array<{ t: number; pct: number }> = [];
-  if (book.length >= 2) {
-    // 1-hour bars for the 1D range — '1Day' bars would produce 1-2
-    // points total and make the BTC overlay useless.
-    const bars = await getCryptoBars('BTC/USD', '1Hour', book[0].t, book[book.length - 1].t).catch(
-      () => []
-    );
-    const basis = bars[0]?.close ?? null;
-    btc = bars.map((b) => ({
-      t: b.timestampMs,
-      pct: basis && basis > 0 ? ((b.close - basis) / basis) * 100 : 0,
-    }));
-  }
-  const last = book[book.length - 1];
-  const summary =
-    last && basisValue != null
-      ? {
-          currentBookValue: last.v,
-          rangePnl: last.v - basisValue,
-          rangePnlPct: basisValue > 0 ? ((last.v - basisValue) / basisValue) * 100 : 0,
-        }
-      : null;
-  return { range: '1D' as const, summary, book, btc };
-}
-
 async function loadDashboard(userId: string) {
   const [config, account, positionsRaw, chart, broker] = await Promise.all([
     prisma.cryptoConfig.findUnique({ where: { userId } }),
     prisma.account.findUnique({ where: { userId } }),
     getCryptoPositions().catch(() => []),
-    loadInitialChart(userId),
+    computeCryptoChart(userId, '1D'),
     getBrokerAccount().catch(() => null),
   ]);
   const recentTrades = await prisma.trade.findMany({

@@ -88,12 +88,31 @@ export type CryptoBar = {
   close: number;
 };
 
+// Alpaca's supported crypto bar timeframes. Finer than 1Hour is essential
+// for sane intraday charts on a 24/7 market — hourly closes give 24 ticks
+// per day, which can't represent the kind of moves crypto produces between
+// hours. Coarser is fine for multi-month/multi-year ranges where we want
+// fewer points to avoid overplotting.
+export type CryptoBarTimeframe =
+  | '1Min'
+  | '5Min'
+  | '15Min'
+  | '30Min'
+  | '1Hour'
+  | '2Hour'
+  | '4Hour'
+  | '6Hour'
+  | '8Hour'
+  | '12Hour'
+  | '1Day';
+
 // Historical crypto bars. Alpaca's crypto data endpoint is separate from
 // equities (different base URL, different auth header semantics). Used by
-// the /crypto performance chart to render a BTC benchmark line.
+// the /crypto performance chart to reconstruct book value at high
+// resolution + render the BTC benchmark line.
 export async function getCryptoBars(
   symbol: string,
-  timeframe: '1Hour' | '1Day',
+  timeframe: CryptoBarTimeframe,
   startMs: number,
   endMs: number
 ): Promise<CryptoBar[]> {
