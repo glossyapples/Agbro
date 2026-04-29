@@ -10,6 +10,7 @@ import { LocalTime } from '@/components/LocalTime';
 import { MoodStrip } from '@/components/MoodStrip';
 import { KillSwitchBanner } from '@/components/KillSwitchBanner';
 import { getPortfolioHistory, getBars, getBrokerAccount } from '@/lib/alpaca';
+import { getCryptoPositions } from '@/lib/alpaca-crypto';
 import { getUpcomingEvents } from '@/lib/data/events';
 import {
   classifyMarketMood,
@@ -42,26 +43,24 @@ async function getInitialChartPayload(userId: string) {
       return { range: '1D' as const, summary: null, portfolio: [], spy: [] };
     }
     // Subtract crypto from each point so the stocks-tab chart excludes
-    // crypto book value. See /api/performance for the full rationale.
-    const snapshots = await prisma.cryptoBookSnapshot.findMany({
-      where: {
-        userId,
-        takenAt: { lte: new Date(portfolio[portfolio.length - 1].timestampMs) },
-      },
-      orderBy: { takenAt: 'asc' },
-      select: { takenAt: true, bookValueCents: true },
-    });
-    const cryptoAt = (ts: number): number => {
-      let latest: (typeof snapshots)[number] | null = null;
-      for (const s of snapshots) {
-        if (s.takenAt.getTime() <= ts) latest = s;
-        else break;
-      }
-      return latest ? Number(latest.bookValueCents) / 100 : 0;
-    };
+    // crypto book value. We previously walked sparse CryptoBookSnapshot
+    // rows here, but the bug-blocked-scheduler era + the page-render
+    // bootstrap snapshot meant the table only had a single recent point
+    // — which created a vertical cliff at the right edge of the chart
+    // (early ticks subtract 0, late ticks subtract several thousand).
+    //
+    // Live crypto book is the right constant to use: agbro's stocks tab
+    // is meant to exclude *current* crypto exposure, not reconstruct
+    // historical crypto-book accurately for the subtraction line. The
+    // crypto tab handles the historical crypto curve via its own chart.
+    const cryptoPositions = await getCryptoPositions().catch(() => []);
+    const liveCrypto = cryptoPositions.reduce(
+      (s, p) => s + Number(p.marketValueCents) / 100,
+      0
+    );
     const stocksPortfolio = portfolio.map((p) => ({
       t: p.timestampMs,
-      v: p.equity - cryptoAt(p.timestampMs),
+      v: p.equity - liveCrypto,
     }));
     const basis = stocksPortfolio[0].v;
     const portfolioSeries = stocksPortfolio.map((p) => ({
@@ -81,7 +80,6 @@ async function getInitialChartPayload(userId: string) {
     // Prefer the live broker portfolio_value (minus current crypto
     // book) for the headline. If the broker read failed, fall back
     // to the last history point so we still render something.
-    const liveCrypto = cryptoAt(Date.now());
     const liveStocksEquity =
       broker != null
         ? Number(broker.portfolioValueCents) / 100 - liveCrypto

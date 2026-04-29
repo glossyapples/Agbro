@@ -19,7 +19,12 @@
 //    user-facing chart density.
 
 import { prisma } from '@/lib/db';
-import { getCryptoBars, type CryptoBar, type CryptoBarTimeframe } from '@/lib/alpaca-crypto';
+import {
+  getCryptoBars,
+  getCryptoPositions,
+  type CryptoBar,
+  type CryptoBarTimeframe,
+} from '@/lib/alpaca-crypto';
 import { log } from '@/lib/logger';
 
 export type Range = '1D' | '1W' | '1M' | '3M' | 'YTD' | '1Y' | 'ALL';
@@ -150,15 +155,39 @@ export async function computeCryptoChart(
     orderBy: { submittedAt: 'asc' },
     select: { symbol: true, side: true, qty: true, submittedAt: true },
   });
-  if (trades.length === 0) {
-    return { range, book: [], btc: [], summary: null };
+  let filled: FilledTrade[];
+  if (trades.length > 0) {
+    filled = trades.map((t) => ({
+      symbol: t.symbol,
+      side: t.side,
+      qty: t.qty,
+      submittedAtMs: t.submittedAt.getTime(),
+    }));
+  } else {
+    // No DB trail — typical when positions were opened outside agbro
+    // (Alpaca paper-trading UI, pre-agbro state) or when the crypto
+    // engine never ran successfully (lease-bug era). Synthesize a single
+    // virtual buy per held symbol at the start of the chart window with
+    // current qty. The chart then shows price movement of the current
+    // basket, which is the right thing to display when we have no
+    // historical buy/sell pattern to walk.
+    const positions = await getCryptoPositions().catch(() => []);
+    if (positions.length === 0) {
+      return { range, book: [], btc: [], summary: null };
+    }
+    filled = positions
+      .filter((p) => p.qty > 0)
+      .map((p) => ({
+        symbol: p.symbol,
+        side: 'buy',
+        qty: p.qty,
+        // -1 ms before window start so the qty is "held throughout".
+        submittedAtMs: startMs - 1,
+      }));
+    if (filled.length === 0) {
+      return { range, book: [], btc: [], summary: null };
+    }
   }
-  const filled: FilledTrade[] = trades.map((t) => ({
-    symbol: t.symbol,
-    side: t.side,
-    qty: t.qty,
-    submittedAtMs: t.submittedAt.getTime(),
-  }));
 
   const symbols = Array.from(new Set(filled.map((t) => t.symbol)));
 
