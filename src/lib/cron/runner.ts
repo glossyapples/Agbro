@@ -168,29 +168,27 @@ async function runTickBody(): Promise<TickResult> {
   const accounts = await prisma.account.findMany({
     where: { isStopped: false, isPaused: false },
   });
-  // Triangulating diagnostic. Railway's log collector strips structured
-  // log.info lines, so this uses console.log directly. Compares three
-  // observations to localise where the accounts row goes missing:
-  //  - filteredCount: the actual query the scheduler depends on.
-  //  - unfilteredCount: any account at all visible to this client.
-  //  - rawCount: bypasses Prisma's query builder entirely.
-  if (accounts.length === 0) {
-    try {
-      const unfiltered = await prisma.account.count();
-      const raw = await prisma.$queryRaw<Array<{ count: bigint }>>`
-        SELECT COUNT(*)::bigint AS count
-        FROM "Account"
-        WHERE "isStopped" = false AND "isPaused" = false
-      `;
-      console.log(
-        `[scheduler-runner] accounts.findMany returned 0 — unfilteredCount=${unfiltered} rawCount=${raw[0]?.count ?? 'null'}`
-      );
-    } catch (err) {
-      console.log(
-        `[scheduler-runner] accounts.findMany returned 0 — diagnostic queries failed: ${(err as Error).message}`
-      );
-    }
+  // Unconditional diagnostic. Earlier conditional version (only when
+  // length===0) didn't appear in Railway logs either because the
+  // commit hadn't deployed or the runner returned early before this
+  // line. Log on every body run so the absence of this line itself
+  // is information ("body never reached the query").
+  let unfilteredCount: number | string = '?';
+  let rawCount: string = '?';
+  try {
+    unfilteredCount = await prisma.account.count();
+    const raw = await prisma.$queryRaw<Array<{ count: bigint }>>`
+      SELECT COUNT(*)::bigint AS count
+      FROM "Account"
+      WHERE "isStopped" = false AND "isPaused" = false
+    `;
+    rawCount = String(raw[0]?.count ?? 'null');
+  } catch (err) {
+    rawCount = `error: ${(err as Error).message.slice(0, 80)}`;
   }
+  console.log(
+    `[scheduler-runner] accounts query: filtered=${accounts.length} unfiltered=${unfilteredCount} rawSql=${rawCount}`
+  );
 
   const outcomes: TickOutcome[] = [];
   for (const account of accounts) {
