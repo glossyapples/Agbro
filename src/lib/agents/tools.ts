@@ -1038,10 +1038,12 @@ async function placeTradeTool(ctx: ToolContext, input: Record<string, unknown>) 
       );
     }
 
-    // Wallet-reservation check. If the user has parked cash in the
-    // AgBro wallet, subtract it from effective buying power BEFORE
-    // routing to the broker. Pre-flight catch is cleaner than letting
-    // Alpaca reject — we emit a clear error the agent can act on.
+    // Wallet + notional + price-freshness gates. Wallet check applies
+    // to buys only (sells generate cash, don't consume it); the
+    // notional cap and "no price → fail closed" gates apply to BOTH
+    // sides — a fat-finger sell of an illiquid name fills at whatever
+    // the order book offers and can lock in a real loss without a
+    // dollar-value ceiling. Audit C4: previously sells skipped these.
     try {
       const [acct, broker] = await Promise.all([
         prisma.account.findUnique({
@@ -1057,7 +1059,7 @@ async function placeTradeTool(ctx: ToolContext, input: Record<string, unknown>) 
         });
         // Estimate order cost. Prefer live price; fall back to the
         // limit price on limit orders so the notional cap can still
-        // apply. If we have neither, fail CLOSED on buys — previously
+        // apply. If we have neither, fail CLOSED — previously
         // the whole wallet + notional check block was nested inside
         // `if (price != null)`, so a failed price fetch silently
         // bypassed both gates and let an uncapped order through to
@@ -1075,7 +1077,9 @@ async function placeTradeTool(ctx: ToolContext, input: Record<string, unknown>) 
           const estimatedCostCents = BigInt(
             Math.round(priceForEstimate * p.qty * 100)
           );
-          if (estimatedCostCents > spendable.spendableCents) {
+          // Wallet check: buys only. A sell generating cash is fine
+          // even when the wallet reserves the entire current cash.
+          if (p.side === 'buy' && estimatedCostCents > spendable.spendableCents) {
             log.info('trade.blocked_by_wallet', {
               userId: ctx.userId,
               symbol,
@@ -1098,46 +1102,48 @@ async function placeTradeTool(ctx: ToolContext, input: Record<string, unknown>) 
               `place_trade: insufficient spendable cash. Order needs ~$${(Number(estimatedCostCents) / 100).toFixed(0)} but only $${(Number(spendable.spendableCents) / 100).toFixed(0)} is available ($${(Number(spendable.walletBalanceCents) / 100).toFixed(0)} is parked in the wallet). Transfer from wallet to active cash if you want this trade to go through.`
             );
           }
-          // Per-trade notional kill: defensive cap on absolute dollar
-          // amount regardless of portfolio size. Only applies to buys —
-          // sells reduce exposure so we don't cap their size.
-          if (p.side === 'buy') {
-            const { checkTradeNotional } = await import('@/lib/safety/rails');
-            const notional = await checkTradeNotional(ctx.userId, estimatedCostCents);
-            if (!notional.ok) {
-              log.info('trade.blocked_by_notional', {
-                userId: ctx.userId,
-                symbol,
-                estimatedCostCents: estimatedCostCents.toString(),
-              });
-              // Pull the per-trade cap off the account so the audit
-              // row records both sides of the comparison.
-              const capRow = await prisma.account.findUnique({
-                where: { userId: ctx.userId },
-                select: { maxTradeNotionalCents: true },
-              });
-              await rejectWithCode(
-                [
-                  {
-                    code: 'NOTIONAL_CAP_EXCEEDED',
-                    params: {
-                      symbol,
-                      needCents: estimatedCostCents,
-                      capCents: capRow?.maxTradeNotionalCents ?? 0n,
-                    },
+          // Per-trade notional cap: applies to BOTH sides. For buys
+          // it bounds new exposure; for sells it bounds the
+          // worst-case fill on illiquid names where a market sell
+          // walks the book.
+          const { checkTradeNotional } = await import('@/lib/safety/rails');
+          const notional = await checkTradeNotional(ctx.userId, estimatedCostCents);
+          if (!notional.ok) {
+            log.info('trade.blocked_by_notional', {
+              userId: ctx.userId,
+              symbol,
+              side: p.side,
+              estimatedCostCents: estimatedCostCents.toString(),
+            });
+            // Pull the per-trade cap off the account so the audit
+            // row records both sides of the comparison.
+            const capRow = await prisma.account.findUnique({
+              where: { userId: ctx.userId },
+              select: { maxTradeNotionalCents: true },
+            });
+            await rejectWithCode(
+              [
+                {
+                  code: 'NOTIONAL_CAP_EXCEEDED',
+                  params: {
+                    symbol,
+                    needCents: estimatedCostCents,
+                    capCents: capRow?.maxTradeNotionalCents ?? 0n,
                   },
-                ],
-                `place_trade: ${notional.reason}. Raise maxTradeNotionalCents in Settings or split the order.`
-              );
-            }
+                },
+              ],
+              `place_trade: ${notional.reason}. Raise maxTradeNotionalCents in Settings or split the order.`
+            );
           }
-        } else if (p.side === 'buy') {
-          // No price for estimation: fail closed on buys so the
-          // notional cap can't be silently bypassed by a data-feed
-          // hiccup. Sells still fall through (they reduce exposure).
+        } else {
+          // No price for estimation: fail closed on BOTH sides so
+          // the notional cap can't be silently bypassed by a
+          // data-feed hiccup. Buys can't size; sells can't bound the
+          // fill exposure on a market order.
           log.info('trade.blocked_no_price_for_cap', {
             userId: ctx.userId,
             symbol,
+            side: p.side,
             orderType: p.orderType,
           });
           await rejectWithCode(
