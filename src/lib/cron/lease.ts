@@ -50,6 +50,29 @@ export async function tryAcquireLease(
       WHERE "SchedulerLease"."expiresAt" < NOW()
     RETURNING "heldBy", "expiresAt"
   `;
+  // Audit C10: runtime shape assertion. Postgres returns the column
+  // names verbatim from the RETURNING clause (quoted → camelCase).
+  // The TS generic above is a fiction TypeScript can't verify at
+  // runtime. If a future schema migration adds @map("held_by") on
+  // SchedulerLease.heldBy, RETURNING would still respect the literal
+  // column name "heldBy" (because the SQL is hand-written, not
+  // Prisma-generated) — but if anyone refactors the SQL to use the
+  // Prisma client API, the response shape could shift to snake_case
+  // and the equality check below would silently always be false,
+  // re-introducing the original 2-week outage. This guard fails
+  // LOUDLY in that case so we catch it on the first tick.
+  if (rows.length > 0 && !('heldBy' in rows[0])) {
+    log.error(
+      'scheduler.lease.unexpected_row_shape',
+      new Error(
+        `tryAcquireLease got row without heldBy property — column-name contract broken; got keys=${Object.keys(rows[0]).join(',')}`
+      ),
+      { leaseId }
+    );
+    throw new Error(
+      'scheduler lease row shape mismatch — heldBy property missing. See logs.'
+    );
+  }
   if (rows.length > 0 && rows[0].heldBy === HOLDER_ID) {
     return { acquired: true, holderId: HOLDER_ID, leaseId };
   }

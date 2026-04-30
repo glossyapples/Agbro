@@ -39,18 +39,43 @@ export function startOfMonthUtc(nowMs: number = Date.now()): Date {
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
 }
 
-// Sum AgentRun.costUsd for the user since the start of the UTC
-// month. runs that didn't record a cost (null) don't count.
+// Sum the user's MTD Anthropic API spend across every cost-bearing
+// surface. Audit C15: previously this only counted AgentRun.costUsd,
+// silently underestimating true spend by the cost of weekly meetings,
+// comic generation, deep-research clicks, and post-mortem nested
+// calls. The undercount made the kill-switch trip late, after the
+// user had already bled past their declared budget.
+//
+// Currently summed:
+//   - AgentRun.costUsd  (orchestrator-level Claude calls; includes
+//                        post-mortem nested costs because they are
+//                        tool-output that the orchestrator folds back
+//                        into its own usage accumulator)
+//   - Meeting.costUsd   (weekly meeting LLM + comic script LLM +
+//                        image generation, all combined)
+//
+// Known undercounts pending a follow-up schema change (an ApiSpendLog
+// table or costUsd columns on ResearchNote + BrainEntry):
+//   - User-triggered /research/deep streaming runs
+//   - Weekly cron brain writeups (currently logged-only)
+// These typically run $1-3 per click / per week, so the undercount
+// is bounded but real. Will be addressed in the high-priority sprint.
 export async function getMtdApiSpend(
   userId: string,
   nowMs: number = Date.now()
 ): Promise<number> {
   const since = startOfMonthUtc(nowMs);
-  const agg = await prisma.agentRun.aggregate({
-    where: { userId, startedAt: { gte: since }, costUsd: { not: null } },
-    _sum: { costUsd: true },
-  });
-  return agg._sum.costUsd ?? 0;
+  const [agentAgg, meetingAgg] = await Promise.all([
+    prisma.agentRun.aggregate({
+      where: { userId, startedAt: { gte: since }, costUsd: { not: null } },
+      _sum: { costUsd: true },
+    }),
+    prisma.meeting.aggregate({
+      where: { userId, startedAt: { gte: since }, costUsd: { not: null } },
+      _sum: { costUsd: true },
+    }),
+  ]);
+  return (agentAgg._sum.costUsd ?? 0) + (meetingAgg._sum.costUsd ?? 0);
 }
 
 // Pure classifier — split from the DB call so the threshold logic
