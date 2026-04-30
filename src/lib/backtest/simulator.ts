@@ -238,9 +238,28 @@ export async function runSimulation(config: SimulatorConfig): Promise<SimulatorR
 
   // Benchmark tracker — virtual "what if we just bought $X of SPY on
   // day zero" so the UI can overlay it.
-  const benchmarkFirst = benchmarkPrice(calendar[0], benchmarkMap);
+  //
+  // Audit C8: previously this read benchmarkMap.get(calendar[0])
+  // directly, returning null when the first calendar day was a
+  // holiday with no SPY print. benchmarkShares would then be 0 and
+  // the entire benchmark line plotted at $0 forever, alpha calc
+  // divided by zero, and NaN polluted the aggregate. Scan forward
+  // until we find the first day with a real benchmark price and use
+  // that as the basis. The chart and alpha calc then anchor to the
+  // actual first tradeable session.
+  let benchmarkFirst: number | null = null;
+  for (const d of calendar) {
+    const p = benchmarkPrice(d, benchmarkMap);
+    if (p != null && p > 0) {
+      benchmarkFirst = p;
+      break;
+    }
+  }
   const benchmarkShares =
     benchmarkFirst != null ? Number(config.startingCashCents) / 100 / benchmarkFirst : 0;
+  // Forward-fill cursor for daily mark-to-market. Initialised to the
+  // first valid price so a holiday on day 0 doesn't render benchmark=0.
+  let lastBenchmarkPrice: number | null = benchmarkFirst;
 
   // Rebalance / DCA timestamps (tracked as indices into the calendar).
   let lastRebalanceDay: string | null = null;
@@ -591,8 +610,13 @@ export async function runSimulation(config: SimulatorConfig): Promise<SimulatorR
       if (price != null) positionValue += pos.qty * price;
     }
     const equity = cash + positionValue;
-    const benchmarkPriceToday = benchmarkPrice(date, benchmarkMap) ?? 0;
-    const benchmarkEquity = benchmarkShares * benchmarkPriceToday;
+    // Audit C8: forward-fill benchmark price too. A SPY-missing day
+    // (holiday in the calendar, transient data gap) used to plot a
+    // $0 dip in the benchmark line — forward-fill so the line is
+    // continuous and alpha math doesn't see a phantom -100% return.
+    const todayBench = benchmarkPrice(date, benchmarkMap);
+    if (todayBench != null && todayBench > 0) lastBenchmarkPrice = todayBench;
+    const benchmarkEquity = benchmarkShares * (lastBenchmarkPrice ?? 0);
 
     equitySeries.push({
       t: new Date(`${date}T00:00:00Z`).getTime(),
