@@ -70,13 +70,19 @@ export async function checkKillSwitches(userId: string): Promise<RailVerdict> {
   let monthBars: { equity: number }[] | undefined;
   let dailyFetchFailed = false;
   let drawdownFetchFailed = false;
+  // Capture the underlying Alpaca error so the verdict's reason field
+  // tells us WHICH call failed and why — Railway's log viewer has been
+  // eating our log.warn lines, leaving no visible diagnostic.
+  let dailyFetchErr: string | null = null;
+  let drawdownFetchErr: string | null = null;
 
   if (dailyEnabled) {
     try {
       dayBars = await getPortfolioHistory('1D');
     } catch (err) {
       dailyFetchFailed = true;
-      log.warn('safety.daily_loss_fetch_failed', { userId, err: (err as Error).message });
+      dailyFetchErr = (err as Error).message?.slice(0, 200) ?? String(err);
+      log.warn('safety.daily_loss_fetch_failed', { userId, err: dailyFetchErr });
     }
   }
   if (drawdownEnabled) {
@@ -84,7 +90,8 @@ export async function checkKillSwitches(userId: string): Promise<RailVerdict> {
       monthBars = await getPortfolioHistory('1M');
     } catch (err) {
       drawdownFetchFailed = true;
-      log.warn('safety.drawdown_fetch_failed', { userId, err: (err as Error).message });
+      drawdownFetchErr = (err as Error).message?.slice(0, 200) ?? String(err);
+      log.warn('safety.drawdown_fetch_failed', { userId, err: drawdownFetchErr });
     }
   }
 
@@ -96,6 +103,17 @@ export async function checkKillSwitches(userId: string): Promise<RailVerdict> {
     dailyFetchFailed,
     drawdownFetchFailed,
   });
+  // Inline the actual Alpaca error text into the data_unavailable
+  // reason so it surfaces in /api/debug/scheduler-trace without a
+  // logger that's silently dropping warns.
+  if (!verdict.ok && verdict.triggeredBy === 'data_unavailable') {
+    const parts: string[] = [];
+    if (dailyFetchErr) parts.push(`daily: ${dailyFetchErr}`);
+    if (drawdownFetchErr) parts.push(`drawdown: ${drawdownFetchErr}`);
+    if (parts.length > 0) {
+      return { ...verdict, reason: `${verdict.reason} — ${parts.join(' | ')}` };
+    }
+  }
   // Log trip-level events (not data-unavailable, which is a transient
   // skip, not a trip).
   if (!verdict.ok && verdict.triggeredBy === 'daily_loss') {
