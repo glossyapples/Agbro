@@ -283,8 +283,13 @@ async function runTickBody(): Promise<TickResult> {
       outcomes.push({ userId: account.userId, skipped: true, reason: 'outside_trading_hours' });
       continue;
     }
+    // Cadence is keyed on COMPLETED runs only. Erroring/timed-out
+    // runs were locking the next 240-min window for no reason —
+    // a single 5-min timeout would silence the agent for 4 hours.
+    // 'running' is excluded too so an inflight crash that never
+    // updated the status doesn't permanently block.
     const lastRun = await prisma.agentRun.findFirst({
-      where: { userId: account.userId },
+      where: { userId: account.userId, status: 'completed' },
       orderBy: { startedAt: 'desc' },
     });
 
