@@ -62,6 +62,37 @@ const status: SchedulerStatus = {
   bootDelayMs: BOOT_DELAY_MS,
 };
 
+// Ring buffer of the last N tick decisions (one per tick), kept in
+// memory so /api/debug/scheduler-trace can return them as JSON. Lets
+// us diagnose "why is the agent silent" without having to scroll
+// Railway logs — Railway's log viewer has been blanking our [wrn]
+// lines, leaving zero visible reason for every skipped tick.
+export type TickTrace = {
+  tickNumber: number;
+  startedAt: string;
+  completedAt: string | null;
+  elapsedMs: number | null;
+  total: number;
+  ran: number;
+  skipped: number;
+  failed: number;
+  regimeChanged: boolean;
+  // One entry per account, in the order they were processed.
+  outcomes: Array<
+    | { userId: string; kind: 'skipped'; reason: string }
+    | { userId: string; kind: 'ran'; agentRunId: string; decision: string | null; status: string }
+    | { userId: string; kind: 'failed'; reason: string }
+  >;
+  error: string | null;
+};
+
+const TRACE_BUFFER_SIZE = 50;
+const tickTrace: TickTrace[] = [];
+
+export function getTickTrace(): TickTrace[] {
+  return [...tickTrace];
+}
+
 let timer: NodeJS.Timeout | null = null;
 let bootTimer: NodeJS.Timeout | null = null;
 
@@ -180,10 +211,45 @@ async function tickOnce(): Promise<void> {
     console.log(
       `[scheduler] tick #${status.tickCount} done in ${elapsed}ms — total=${result.total} ran=${result.ran} skipped=${result.skipped} failed=${result.failed} regimeChanged=${result.regimeChanged}${reasonsStr}${ranStr}${failedStr}`
     );
+    // Push this tick's outcomes into the ring buffer so the debug
+    // endpoint can show the decision trail without us hand-feeding
+    // logs back and forth.
+    tickTrace.push({
+      tickNumber: status.tickCount,
+      startedAt: status.lastTickStartedAt!,
+      completedAt: status.lastTickCompletedAt,
+      elapsedMs: elapsed,
+      total: result.total,
+      ran: result.ran,
+      skipped: result.skipped,
+      failed: result.failed,
+      regimeChanged: result.regimeChanged,
+      outcomes: result.outcomes.map((o) => {
+        if ('skipped' in o) return { userId: o.userId, kind: 'skipped' as const, reason: o.reason };
+        if ('ran' in o) return { userId: o.userId, kind: 'ran' as const, agentRunId: o.agentRunId, decision: o.decision, status: o.status };
+        return { userId: o.userId, kind: 'failed' as const, reason: o.reason };
+      }),
+      error: null,
+    });
+    while (tickTrace.length > TRACE_BUFFER_SIZE) tickTrace.shift();
   } catch (err) {
     const msg = (err as Error).message ?? String(err);
     status.lastTickError = msg.slice(0, 500);
     console.error(`[scheduler] tick #${status.tickCount + 1} FAILED: ${msg}`);
+    tickTrace.push({
+      tickNumber: status.tickCount + 1,
+      startedAt: status.lastTickStartedAt ?? new Date().toISOString(),
+      completedAt: null,
+      elapsedMs: null,
+      total: 0,
+      ran: 0,
+      skipped: 0,
+      failed: 0,
+      regimeChanged: false,
+      outcomes: [],
+      error: msg.slice(0, 500),
+    });
+    while (tickTrace.length > TRACE_BUFFER_SIZE) tickTrace.shift();
   } finally {
     if (watchdog != null) clearTimeout(watchdog);
     // Only clear if the watchdog hasn't already done it — avoids a
