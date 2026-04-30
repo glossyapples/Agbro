@@ -81,12 +81,16 @@ export function LeakTestRunner() {
   } | null>(null);
   const [progress, setProgress] = useState<ProgressEvent[]>([]);
   const [summary, setSummary] = useState<SummaryEvent | null>(null);
+  const [pairErrors, setPairErrors] = useState<
+    Array<{ i: number; symbol: string; error: string }>
+  >([]);
 
   const run = useCallback(async () => {
     setError(null);
     setStart(null);
     setProgress([]);
     setSummary(null);
+    setPairErrors([]);
     setRunning(true);
     try {
       const modelId = provider === 'anthropic' ? anthropicPreset : openaiModel;
@@ -143,8 +147,14 @@ export function LeakTestRunner() {
           } else if (evt === 'summary') {
             setSummary(data as SummaryEvent);
           } else if (evt === 'pair_error') {
-            // Surface but don't fail the whole run.
-            console.warn('leak-test pair error', data);
+            // Capture so the UI can show the user what failed —
+            // critical when EVERY pair errors (e.g. OpenAI returns
+            // model_not_found for every request) and the run looks
+            // "complete" but with zero results.
+            setPairErrors((prev) => [
+              ...prev,
+              data as { i: number; symbol: string; error: string },
+            ]);
           }
         }
       }
@@ -381,6 +391,58 @@ export function LeakTestRunner() {
               </li>
             ))}
           </ul>
+        </section>
+      )}
+
+      {pairErrors.length > 0 && (
+        <section className="card border border-rose-500/40 bg-rose-500/10">
+          <h2 className="text-sm font-semibold text-rose-200">
+            {pairErrors.length === progress.length + pairErrors.length &&
+            progress.length === 0
+              ? `All ${pairErrors.length} pairs errored — provider rejected every request`
+              : `${pairErrors.length} pair${pairErrors.length === 1 ? '' : 's'} errored`}
+          </h2>
+          {/* When every pair fails the same way, the first error is
+              the diagnostic. Surface it BIG so the user can read the
+              exact provider response and tell us what to fix
+              (model_not_found, invalid auth, content_policy, etc). */}
+          <div className="mt-2 rounded-md bg-ink-900/60 p-2.5">
+            <p className="text-[10px] uppercase tracking-wider text-ink-400">
+              First error
+            </p>
+            <p className="mt-1 break-all font-mono text-[11px] leading-snug text-rose-100">
+              [{pairErrors[0].symbol}] {pairErrors[0].error}
+            </p>
+          </div>
+          {pairErrors.length > 1 && (
+            <details className="mt-2">
+              <summary className="cursor-pointer text-[11px] text-ink-300">
+                Show all {pairErrors.length} errors
+              </summary>
+              <ul className="mt-2 max-h-[30vh] space-y-1 overflow-auto font-mono text-[10px] text-ink-300">
+                {pairErrors.map((e) => (
+                  <li key={`${e.i}-${e.symbol}`} className="break-all">
+                    [{e.symbol}] {e.error}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+          <p className="mt-3 text-[11px] text-ink-300">
+            Common fixes: if it&apos;s <code>model_not_found</code>, the
+            model ID isn&apos;t enabled on your OpenAI plan — try a
+            different preset or check{' '}
+            <a
+              href="https://platform.openai.com/docs/models"
+              target="_blank"
+              rel="noreferrer"
+              className="underline"
+            >
+              platform.openai.com/docs/models
+            </a>{' '}
+            for the exact ID. If it&apos;s a 401, the BYOK key in
+            Settings → API keys is invalid or expired.
+          </p>
         </section>
       )}
 
