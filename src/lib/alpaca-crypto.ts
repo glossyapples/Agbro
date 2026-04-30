@@ -154,6 +154,12 @@ export type CryptoOrderArgs = {
   qty?: number;
   notionalUsd?: number;
   timeInForce?: 'ioc' | 'gtc'; // crypto only supports these
+  // Idempotency token. Alpaca dedupes orders that share a client_order_id
+  // within ~24h, so a deterministic per-leg hash protects us from
+  // duplicate buys when the engine retries after a network drop on the
+  // response (the broker accepted the order, but our process never saw
+  // the ack). Audit C7.
+  clientOrderId?: string;
 };
 
 export async function placeCryptoOrder(args: CryptoOrderArgs) {
@@ -169,6 +175,7 @@ export async function placeCryptoOrder(args: CryptoOrderArgs) {
   };
   if (args.qty != null) body.qty = String(args.qty);
   if (args.notionalUsd != null) body.notional = String(args.notionalUsd.toFixed(2));
+  if (args.clientOrderId) body.client_order_id = args.clientOrderId;
   // SDK's createOrder will accept arbitrary fields.
   const order = (await (a as unknown as {
     createOrder: (o: Record<string, unknown>) => Promise<{ id: string; status: string; symbol: string }>;

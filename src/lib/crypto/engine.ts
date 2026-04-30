@@ -14,6 +14,7 @@
 // Both operations self-rate-limit via timestamps stored on CryptoConfig.
 // Hourly cron ticks are cheap when nothing is due.
 
+import { createHash } from 'node:crypto';
 import { prisma } from '@/lib/db';
 import { log } from '@/lib/logger';
 import { getBrokerAccount } from '@/lib/alpaca';
@@ -77,13 +78,29 @@ function resolveTargets(config: CryptoConfig): { validTargets: Targets; totalWei
 // buy before hitting Account.maxCryptoAllocationPct. Returns 0 if we're at
 // or over the cap. SELLS are always allowed regardless — they reduce the
 // ratio, which is what the cap is trying to enforce.
+//
+// Audit C5: previously this swallowed `getCryptoPositions()` errors and
+// treated them as "zero positions held," which let a user already at the
+// allocation cap re-DCA all the way back to the cap (doubling exposure)
+// whenever Alpaca had a transient hiccup. Now any error returns 0
+// headroom — fail-closed. A truly empty crypto book passes through with
+// `positions === []` and zero added to the book value, same outcome.
 async function getCryptoBuyHeadroomUsd(account: Account): Promise<number> {
   const broker = await getBrokerAccount().catch(() => null);
   if (!broker) return 0;
   const portfolioValueUsd = Number(broker.portfolioValueCents) / 100;
   if (portfolioValueUsd <= 0) return 0;
 
-  const positions = await getCryptoPositions().catch(() => [] as CryptoPosition[]);
+  let positions: CryptoPosition[];
+  try {
+    positions = await getCryptoPositions();
+  } catch (err) {
+    log.warn('crypto.headroom_positions_read_failed_fail_closed', {
+      userId: account.userId,
+      err: (err as Error).message,
+    });
+    return 0;
+  }
   const cryptoBookUsd = positions.reduce(
     (s, p) => s + Number(p.marketValueCents) / 100,
     0
@@ -184,10 +201,41 @@ async function tryDca(
     });
   }
 
+  // Bump lastDcaAt BEFORE submitting any leg. Audit C6: previously we
+  // only bumped on success, which meant a network drop between Alpaca
+  // accepting the order and our process seeing the response would
+  // re-fire the entire DCA cycle on the next tick — duplicate buys.
+  // Bumping first means: if every leg fails, we wait until next cadence
+  // window. If a leg succeeds at the broker but the response drops, the
+  // client_order_id below dedupes the retry. The trade-off is "one
+  // missed cycle on a real all-legs-failed day" instead of "two real
+  // DCA cycles in a single day on a flaky network."
+  const dcaCycleStart = new Date();
+  await prisma.cryptoConfig.update({
+    where: { userId },
+    data: { lastDcaAt: dcaCycleStart },
+  });
+
+  // Stable per-cycle key for idempotency. Same userId + same cycle =
+  // same client_order_id per leg; if Alpaca already saw it, the
+  // duplicate is rejected at the broker. Day-granularity is enough
+  // because dcaCadenceDays >= 1 day in practice.
+  const cycleDayKey = dcaCycleStart.toISOString().slice(0, 10);
+
   const trades: DcaTrade[] = [];
   for (const [symbol, weight] of Object.entries(validTargets)) {
     const notionalUsd = (dcaUsd * weight) / totalWeight;
     if (notionalUsd < 1) continue; // Alpaca crypto minimum is $1
+
+    // Deterministic per-leg idempotency token. Alpaca dedupes orders
+    // that share client_order_id within ~24h. We hash userId + symbol
+    // + cycle day so any retry with the same content is silently
+    // rejected at the broker — protects against the network-drop
+    // duplicate-buy class.
+    const clientOrderId = `dca-${createHash('sha256')
+      .update(`${userId}|${symbol}|${cycleDayKey}`)
+      .digest('hex')
+      .slice(0, 24)}`;
 
     try {
       const order = await placeCryptoOrder({
@@ -195,6 +243,7 @@ async function tryDca(
         side: 'buy',
         notionalUsd,
         timeInForce: 'gtc',
+        clientOrderId,
       });
       const priceAtOrder = await getCryptoLatestPrice(symbol).catch(() => null);
       const qty = priceAtOrder ? notionalUsd / priceAtOrder : 0;
@@ -222,19 +271,15 @@ async function tryDca(
         symbol,
         notionalUsd: notionalUsd.toFixed(2),
         orderId: order.id,
+        clientOrderId,
       });
     } catch (err) {
-      log.error('crypto.dca_order_failed', err, { userId, symbol });
+      log.error('crypto.dca_order_failed', err, { userId, symbol, clientOrderId });
     }
   }
 
-  // Only bump lastDcaAt when at least one leg went through; otherwise the
-  // next tick retries.
+  // Cash-contention telemetry (only emit when at least one leg landed).
   if (trades.length > 0) {
-    await prisma.cryptoConfig.update({
-      where: { userId },
-      data: { lastDcaAt: new Date() },
-    });
 
     // Cash-contention signal. Crypto and stocks share Alpaca's cash pool,
     // so a DCA that burns cash reduces what the stock agent can deploy.
