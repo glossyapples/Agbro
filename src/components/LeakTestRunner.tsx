@@ -29,12 +29,25 @@ type SummaryEvent = {
   abortReason: string | null;
 };
 
+type Provider = 'anthropic' | 'openai';
+type AnthropicPreset = 'haiku' | 'opus';
+
+// Curated default model IDs per provider. The OpenAI list reflects
+// the GPT-5 family as of Jan 2026; user can paste any model ID via
+// the textbox if their account has access to something else.
+const OPENAI_PRESETS = ['gpt-5', 'gpt-5-pro', 'gpt-5.5', 'gpt-5-mini'] as const;
+
 export function LeakTestRunner() {
-  const [model, setModel] = useState<'haiku' | 'opus'>('haiku');
+  const [provider, setProvider] = useState<Provider>('anthropic');
+  const [anthropicPreset, setAnthropicPreset] =
+    useState<AnthropicPreset>('haiku');
+  const [openaiModel, setOpenaiModel] = useState<string>('gpt-5');
   const [costCapUsd, setCostCapUsd] = useState<string>('1.00');
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [start, setStart] = useState<{
+    provider?: string;
+    model?: string;
     pairCount: number;
     costCapUsd: number;
     pairsName: string;
@@ -49,11 +62,13 @@ export function LeakTestRunner() {
     setSummary(null);
     setRunning(true);
     try {
+      const modelId = provider === 'anthropic' ? anthropicPreset : openaiModel;
       const res = await fetch('/api/research/leak-test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model,
+          provider,
+          model: modelId,
           costCapUsd: Number(costCapUsd),
         }),
       });
@@ -88,7 +103,13 @@ export function LeakTestRunner() {
           }
           if (evt === 'start') {
             setStart(
-              data as { pairCount: number; costCapUsd: number; pairsName: string }
+              data as {
+                provider?: string;
+                model?: string;
+                pairCount: number;
+                costCapUsd: number;
+                pairsName: string;
+              }
             );
           } else if (evt === 'progress') {
             setProgress((prev) => [...prev, data as ProgressEvent]);
@@ -105,11 +126,21 @@ export function LeakTestRunner() {
     } finally {
       setRunning(false);
     }
-  }, [model, costCapUsd]);
+  }, [provider, anthropicPreset, openaiModel, costCapUsd]);
 
   // Estimate up-front cost so the user sees what they're agreeing to.
-  // 61 pairs × 2 arms. Haiku ~$0.005/call; Opus ~$0.05/call.
-  const estimateUsd = model === 'haiku' ? 61 * 2 * 0.005 : 61 * 2 * 0.05;
+  // 61 pairs × 2 arms. Per-call costs vary widely by model — these
+  // numbers come from the actual W0 Opus run (~$0.029/call) plus
+  // tier-based extrapolation for everything else.
+  const perCallUsd = (() => {
+    if (provider === 'anthropic') {
+      return anthropicPreset === 'haiku' ? 0.005 : 0.029;
+    }
+    if (openaiModel.includes('mini')) return 0.001;
+    if (openaiModel.includes('pro') || openaiModel.includes('5.5')) return 0.040;
+    return 0.015; // gpt-5 family default
+  })();
+  const estimateUsd = 61 * 2 * perCallUsd;
 
   return (
     <>
@@ -117,48 +148,117 @@ export function LeakTestRunner() {
         <h2 className="text-sm font-semibold text-ink-100">Configure</h2>
         <div className="mt-3 flex flex-col gap-3">
           <div>
-            <label className="text-xs text-ink-300">Model</label>
+            <label className="text-xs text-ink-300">Provider</label>
             <div className="mt-1 grid grid-cols-2 gap-2">
               <button
                 type="button"
                 onClick={() => {
-                  setModel('haiku');
-                  setCostCapUsd('1.00');
+                  setProvider('anthropic');
+                  setCostCapUsd(anthropicPreset === 'haiku' ? '1.00' : '5.00');
                 }}
                 disabled={running}
                 className={`rounded-md px-3 py-2 text-xs ${
-                  model === 'haiku'
+                  provider === 'anthropic'
                     ? 'bg-brand-500/30 border border-brand-500 text-ink-50'
                     : 'border border-ink-700 text-ink-300'
                 }`}
               >
-                Haiku 4.5
+                Anthropic
                 <br />
-                <span className="text-[10px] text-ink-400">
-                  Directional, ~$0.30
-                </span>
+                <span className="text-[10px] text-ink-400">Claude</span>
               </button>
               <button
                 type="button"
                 onClick={() => {
-                  setModel('opus');
-                  setCostCapUsd('15.00');
+                  setProvider('openai');
+                  setCostCapUsd('5.00');
                 }}
                 disabled={running}
                 className={`rounded-md px-3 py-2 text-xs ${
-                  model === 'opus'
+                  provider === 'openai'
                     ? 'bg-brand-500/30 border border-brand-500 text-ink-50'
                     : 'border border-ink-700 text-ink-300'
                 }`}
               >
-                Opus 4.7
+                OpenAI
                 <br />
                 <span className="text-[10px] text-ink-400">
-                  Rigorous, ~$5-7
+                  GPT-5 family (BYOK)
                 </span>
               </button>
             </div>
           </div>
+
+          {provider === 'anthropic' && (
+            <div>
+              <label className="text-xs text-ink-300">Model</label>
+              <div className="mt-1 grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAnthropicPreset('haiku');
+                    setCostCapUsd('1.00');
+                  }}
+                  disabled={running}
+                  className={`rounded-md px-3 py-2 text-xs ${
+                    anthropicPreset === 'haiku'
+                      ? 'bg-brand-500/30 border border-brand-500 text-ink-50'
+                      : 'border border-ink-700 text-ink-300'
+                  }`}
+                >
+                  Haiku 4.5
+                  <br />
+                  <span className="text-[10px] text-ink-400">
+                    Directional, ~$0.60
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAnthropicPreset('opus');
+                    setCostCapUsd('5.00');
+                  }}
+                  disabled={running}
+                  className={`rounded-md px-3 py-2 text-xs ${
+                    anthropicPreset === 'opus'
+                      ? 'bg-brand-500/30 border border-brand-500 text-ink-50'
+                      : 'border border-ink-700 text-ink-300'
+                  }`}
+                >
+                  Opus 4.7
+                  <br />
+                  <span className="text-[10px] text-ink-400">
+                    Rigorous, ~$3-5
+                  </span>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {provider === 'openai' && (
+            <div>
+              <label className="text-xs text-ink-300">Model</label>
+              <input
+                type="text"
+                value={openaiModel}
+                disabled={running}
+                onChange={(e) => setOpenaiModel(e.target.value.trim())}
+                placeholder="gpt-5"
+                list="openai-presets"
+                className="mt-1 w-full rounded-md border border-ink-700 bg-ink-900 px-3 py-2 text-sm text-ink-50"
+              />
+              <datalist id="openai-presets">
+                {OPENAI_PRESETS.map((m) => (
+                  <option key={m} value={m} />
+                ))}
+              </datalist>
+              <p className="mt-1 text-[10px] text-ink-400">
+                Type any OpenAI chat model your key has access to. Reasoning
+                tiers (gpt-5-pro, gpt-5.5) cost ~5-15× the base — keep the
+                cap honest.
+              </p>
+            </div>
+          )}
           <div>
             <label className="text-xs text-ink-300">
               Cost cap (USD) — runner stops at this dollar amount
@@ -186,7 +286,7 @@ export function LeakTestRunner() {
           >
             {running ? 'Running…' : 'Start leak test'}
           </button>
-          {model === 'opus' && (
+          {provider === 'anthropic' && anthropicPreset === 'opus' && (
             <p className="text-[11px] text-amber-300">
               Opus run takes 20-40 minutes. Keep this page open
               and your phone screen on. If the connection drops the

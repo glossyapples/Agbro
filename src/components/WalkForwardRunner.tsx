@@ -54,6 +54,13 @@ type AggregateView = {
   // Count of windows excluded from medians + consistency due to data
   // starvation (Alpaca IEX coverage gap). Optional for back-compat.
   windowsStarved?: number;
+  // Total Anthropic spend across all windows for agent_deep_research.
+  // Surfaced so the user can post-audit cost vs estimate.
+  agentCostUsd?: number;
+  // Set when the run was aborted because a window crossed the per-
+  // window cost ceiling. Subsequent windows were skipped — UI must
+  // explain the truncated result rather than treating it as normal.
+  costAbortedAtUsd?: number;
 };
 
 type RunView = {
@@ -509,8 +516,28 @@ function RunCard({ run }: { run: RunView }) {
         </p>
       ) : a ? (
         <>
+          {/* Audit follow-up: per-window cost ceiling fired and
+              the run was aborted to protect the budget. Surface
+              this loudly so the user doesn't read the truncated
+              window list as a complete result. */}
+          {a.costAbortedAtUsd != null && (
+            <div className="mt-3 rounded-md border border-amber-500/40 bg-amber-500/10 p-2.5 text-[11px] text-amber-200">
+              <p className="font-semibold">Run aborted on cost ceiling.</p>
+              <p className="mt-0.5">
+                A window&apos;s cumulative cost crossed the per-window
+                ceiling at ${a.costAbortedAtUsd.toFixed(2)}. Subsequent
+                windows were not run. The aggregate metrics below are
+                computed only on the windows that completed.
+              </p>
+            </div>
+          )}
           <ConsistencyHeadline aggregate={a} />
           <WindowGrid windows={run.windows} />
+          {a.agentCostUsd != null && a.agentCostUsd > 0 && (
+            <p className="mt-2 text-[11px] text-ink-400">
+              Agent spend this run: ${a.agentCostUsd.toFixed(2)}
+            </p>
+          )}
         </>
       ) : (
         <p className="mt-3 text-xs text-ink-400">No aggregate data.</p>

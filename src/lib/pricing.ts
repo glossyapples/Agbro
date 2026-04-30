@@ -22,7 +22,7 @@ type PriceRow = {
 };
 
 // Tier-based defaults. Match by prefix so future minor revisions (4.7 → 4.8)
-// don't silently lose cost tracking.
+// don't silently lose cost tracking. Anthropic models OR OpenAI GPT-5 family.
 const TIER_DEFAULTS: Array<{ match: (m: string) => boolean; price: PriceRow }> = [
   {
     match: (m) => m.includes('opus'),
@@ -35,6 +35,33 @@ const TIER_DEFAULTS: Array<{ match: (m: string) => boolean; price: PriceRow }> =
   {
     match: (m) => m.includes('haiku'),
     price: { inPerMtok: 1, outPerMtok: 5, cacheReadPerMtok: 0.1, cacheWritePerMtok: 1.25 },
+  },
+  // ── OpenAI GPT-5 family (best-effort estimates as of Jan 2026) ───────────
+  // Override via AGBRO_PRICE_IN_PER_MTOK_GPT_5 / _GPT_5_PRO / etc. env vars.
+  // Order matters: more-specific match before less-specific.
+  {
+    match: (m) => m.includes('gpt-5-pro') || m.includes('gpt5-pro') || m.includes('gpt-5.5'),
+    price: { inPerMtok: 15, outPerMtok: 60 },
+  },
+  {
+    match: (m) => m.includes('gpt-5-mini') || m.includes('gpt5-mini'),
+    price: { inPerMtok: 0.1, outPerMtok: 0.4 },
+  },
+  {
+    match: (m) => m.includes('gpt-5') || m.includes('gpt5'),
+    price: { inPerMtok: 1.25, outPerMtok: 10 },
+  },
+  {
+    match: (m) => m.includes('gpt-4o'),
+    price: { inPerMtok: 2.5, outPerMtok: 10 },
+  },
+  {
+    match: (m) => m.includes('o1-pro') || m.includes('o3-pro'),
+    price: { inPerMtok: 15, outPerMtok: 60 },
+  },
+  {
+    match: (m) => /\bo[13]\b/.test(m),
+    price: { inPerMtok: 1.25, outPerMtok: 10 },
   },
 ];
 

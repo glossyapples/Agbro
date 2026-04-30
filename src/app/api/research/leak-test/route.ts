@@ -26,6 +26,7 @@ import {
 } from '@/lib/agents/lookahead/leak-test';
 import { FAST_MODEL, TRADE_DECISION_MODEL } from '@/lib/agents/models';
 import { recordApiSpend } from '@/lib/safety/api-spend-log';
+import { getUserCredential } from '@/lib/credentials';
 import { log } from '@/lib/logger';
 
 export const runtime = 'nodejs';
@@ -34,13 +35,32 @@ export const runtime = 'nodejs';
 export const maxDuration = 600;
 
 const Body = z.object({
-  model: z.enum(['haiku', 'opus']).default('haiku'),
+  // Provider dispatch — 'anthropic' uses the Anthropic SDK + agbro's
+  // own ANTHROPIC_API_KEY env; 'openai' fetches the user's OpenAI
+  // BYOK key via getUserCredential.
+  provider: z.enum(['anthropic', 'openai']).default('anthropic'),
+  // Either the friendly preset names (haiku/opus) for Anthropic
+  // backwards-compat, or a literal model ID for any provider.
+  model: z.string().default('haiku'),
   // Soft cost cap — runner stops mid-batch if exceeded.
   costCapUsd: z.number().positive().max(50).default(1.0),
   // Default uses the bundled 61-pair fixture. UI doesn't expose
   // alternates yet but the route accepts a name for future flexibility.
   pairsName: z.string().default('pairs-2026-05.json'),
 });
+
+function resolveModel(provider: 'anthropic' | 'openai', input: string): string {
+  if (provider === 'anthropic') {
+    if (input === 'haiku') return FAST_MODEL;
+    if (input === 'opus') return TRADE_DECISION_MODEL;
+    return input; // already a literal model ID
+  }
+  // OpenAI: pass through whatever the user typed. Defaults the
+  // ambiguous 'haiku'/'opus' inputs to gpt-5 so a user who didn't
+  // change the field gets a sensible request.
+  if (input === 'haiku' || input === 'opus' || !input) return 'gpt-5';
+  return input;
+}
 
 function loadPairs(name: string): LeakPair[] {
   // Restrict to the canonical research dir to prevent path traversal.
@@ -66,8 +86,25 @@ export async function POST(req: Request) {
   try {
     const body = await req.json().catch(() => ({}));
     const args = Body.parse(body);
-    const model = args.model === 'opus' ? TRADE_DECISION_MODEL : FAST_MODEL;
+    const model = resolveModel(args.provider, args.model);
     const pairs = loadPairs(args.pairsName);
+
+    // OpenAI dispatch needs the user's BYOK key. Fetch upfront so a
+    // missing-key error is reported BEFORE we open the SSE stream
+    // (cleaner UX than trickling a per-pair error 61 times).
+    let openaiKey: string | null = null;
+    if (args.provider === 'openai') {
+      openaiKey = await getUserCredential(user.id, 'openai').catch(() => null);
+      if (!openaiKey) {
+        return NextResponse.json(
+          {
+            error:
+              'No OpenAI API key on file. Add one in Settings → API keys, then retry.',
+          },
+          { status: 400 }
+        );
+      }
+    }
 
     const stream = new ReadableStream({
       async start(controller) {
@@ -76,13 +113,14 @@ export async function POST(req: Request) {
         };
 
         send('start', {
+          provider: args.provider,
           model,
           pairCount: pairs.length,
           costCapUsd: args.costCapUsd,
           pairsName: args.pairsName,
         });
 
-        const client = new Anthropic();
+        const client = args.provider === 'anthropic' ? new Anthropic() : undefined;
         const results: LeakPairResult[] = [];
         let totalCostUsd = 0;
         let aborted = false;
@@ -95,7 +133,13 @@ export async function POST(req: Request) {
             break;
           }
           try {
-            const r = await runLeakPair({ pair: pairs[i], model, client });
+            const r = await runLeakPair({
+              pair: pairs[i],
+              model,
+              provider: args.provider,
+              client,
+              openaiKey: openaiKey ?? undefined,
+            });
             results.push(r);
             const pairCost = r.strict.costUsd + r.unrestricted.costUsd;
             totalCostUsd += pairCost;
@@ -107,6 +151,7 @@ export async function POST(req: Request) {
               costUsd: pairCost,
               metadata: {
                 source: 'leak_test',
+                provider: args.provider,
                 symbol: pairs[i].symbol,
                 decisionDate: pairs[i].decisionDateISO,
               },

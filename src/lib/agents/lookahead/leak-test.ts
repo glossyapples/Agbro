@@ -74,18 +74,40 @@ export type LeakBatchSummary = {
 export async function runLeakPair(args: {
   pair: LeakPair;
   model?: string;
+  // Provider dispatch. Defaults to anthropic for backwards compat.
+  // 'openai' requires args.openaiKey to be set; the API route fetches
+  // it from the user's encrypted UserApiCredential.
+  provider?: LeakProvider;
   client?: Anthropic;
+  openaiKey?: string;
   // Hard cap to prevent runaway output if the model ignores the
   // "JSON only" instruction. ~600 tokens is plenty for the schema.
   maxTokens?: number;
 }): Promise<LeakPairResult> {
+  const provider: LeakProvider = args.provider ?? 'anthropic';
   const model = args.model ?? FAST_MODEL;
-  const client = args.client ?? new Anthropic();
+  const client = provider === 'anthropic' ? args.client ?? new Anthropic() : undefined;
   const maxTokens = args.maxTokens ?? 600;
 
   const [strict, unrestricted] = await Promise.all([
-    runOneArm({ arm: 'strict', pair: args.pair, model, client, maxTokens }),
-    runOneArm({ arm: 'unrestricted', pair: args.pair, model, client, maxTokens }),
+    runOneArm({
+      arm: 'strict',
+      pair: args.pair,
+      model,
+      provider,
+      client,
+      openaiKey: args.openaiKey,
+      maxTokens,
+    }),
+    runOneArm({
+      arm: 'unrestricted',
+      pair: args.pair,
+      model,
+      provider,
+      client,
+      openaiKey: args.openaiKey,
+      maxTokens,
+    }),
   ]);
 
   const decisionPrice = await closeOnOrAfter(args.pair.symbol, args.pair.decisionDateISO);
@@ -126,7 +148,9 @@ export async function runLeakPair(args: {
 export async function runLeakBatch(args: {
   pairs: LeakPair[];
   model?: string;
+  provider?: LeakProvider;
   client?: Anthropic;
+  openaiKey?: string;
   // Soft cost cap. If the rolling cost exceeds this before the
   // batch completes, the runner stops mid-batch and returns
   // partial results. Cheap insurance against the prompt going
@@ -140,7 +164,13 @@ export async function runLeakBatch(args: {
   let totalCost = 0;
   for (let i = 0; i < args.pairs.length; i++) {
     if (args.costCapUsd != null && totalCost >= args.costCapUsd) break;
-    const result = await runLeakPair({ pair: args.pairs[i], model: args.model, client: args.client });
+    const result = await runLeakPair({
+      pair: args.pairs[i],
+      model: args.model,
+      provider: args.provider,
+      client: args.client,
+      openaiKey: args.openaiKey,
+    });
     results.push(result);
     totalCost += result.strict.costUsd + result.unrestricted.costUsd;
     args.onPair?.(i, result);
@@ -182,11 +212,15 @@ function summarize(results: LeakPairResult[], totalCost: number): LeakBatchSumma
   };
 }
 
+export type LeakProvider = 'anthropic' | 'openai';
+
 async function runOneArm(args: {
   arm: LeakArm;
   pair: LeakPair;
   model: string;
-  client: Anthropic;
+  provider: LeakProvider;
+  client?: Anthropic;
+  openaiKey?: string;
   maxTokens: number;
 }): Promise<LeakArmResult> {
   const { system, user } = buildLeakPrompt({
@@ -194,11 +228,26 @@ async function runOneArm(args: {
     symbol: args.pair.symbol,
     decisionDateISO: args.pair.decisionDateISO,
   });
-  const resp = await args.client.messages.create({
+  if (args.provider === 'anthropic') {
+    return runOneArmAnthropic({ ...args, system, user });
+  }
+  return runOneArmOpenAI({ ...args, system, user });
+}
+
+async function runOneArmAnthropic(args: {
+  arm: LeakArm;
+  model: string;
+  client?: Anthropic;
+  maxTokens: number;
+  system: string;
+  user: string;
+}): Promise<LeakArmResult> {
+  const client = args.client ?? new Anthropic();
+  const resp = await client.messages.create({
     model: args.model,
     max_tokens: args.maxTokens,
-    system,
-    messages: [{ role: 'user', content: user }],
+    system: args.system,
+    messages: [{ role: 'user', content: args.user }],
   });
   const rawText = resp.content
     .filter((b): b is Anthropic.TextBlock => b.type === 'text')
@@ -210,6 +259,65 @@ async function runOneArm(args: {
     outputTokens: u?.output_tokens ?? 0,
     cacheReadTokens: u?.cache_read_input_tokens ?? 0,
     cacheWriteTokens: u?.cache_creation_input_tokens ?? 0,
+  };
+  return {
+    arm: args.arm,
+    rawText,
+    parsed: parseLeakResponse(rawText),
+    usage,
+    costUsd: estimateCostUsd(args.model, usage),
+  };
+}
+
+// OpenAI dispatch via raw fetch to /v1/chat/completions, mirroring the
+// pattern in src/lib/meetings/comic.ts. Newer reasoning models
+// (gpt-5-pro, o1-pro, o3-pro) accept `max_completion_tokens` instead
+// of `max_tokens`; we send both keys and trust the API to ignore the
+// one it doesn't understand. response_format=json_object pushes the
+// model toward valid JSON output without a separate JSON-mode prompt.
+async function runOneArmOpenAI(args: {
+  arm: LeakArm;
+  model: string;
+  openaiKey?: string;
+  maxTokens: number;
+  system: string;
+  user: string;
+}): Promise<LeakArmResult> {
+  if (!args.openaiKey) {
+    throw new Error(
+      'runOneArmOpenAI: openaiKey missing. Add an OpenAI API key in Settings → API keys.'
+    );
+  }
+  const body: Record<string, unknown> = {
+    model: args.model,
+    messages: [
+      { role: 'system', content: args.system },
+      { role: 'user', content: args.user },
+    ],
+    max_tokens: args.maxTokens,
+    max_completion_tokens: args.maxTokens,
+    response_format: { type: 'json_object' },
+  };
+  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${args.openaiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const errBody = await res.text();
+    throw new Error(`openai chat ${res.status}: ${errBody.slice(0, 300)}`);
+  }
+  const data = (await res.json()) as {
+    choices?: Array<{ message?: { content?: string } }>;
+    usage?: { prompt_tokens?: number; completion_tokens?: number };
+  };
+  const rawText = data.choices?.[0]?.message?.content ?? '';
+  const usage: TokenUsage = {
+    inputTokens: data.usage?.prompt_tokens ?? 0,
+    outputTokens: data.usage?.completion_tokens ?? 0,
   };
   return {
     arm: args.arm,
