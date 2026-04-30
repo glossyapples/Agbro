@@ -263,6 +263,20 @@ export async function runBacktestDeepResearch(args: {
 // hammer the Anthropic rate limit; the walk-forward harness already
 // expects per-window runtime in the tens of minutes for the agent
 // strategy.
+export class WindowCostExceededError extends Error {
+  constructor(
+    public spentUsd: number,
+    public capUsd: number,
+    public completedSymbols: number,
+    public totalSymbols: number
+  ) {
+    super(
+      `window cost ceiling exceeded: spent $${spentUsd.toFixed(2)} of $${capUsd.toFixed(2)} cap after ${completedSymbols}/${totalSymbols} symbols`
+    );
+    this.name = 'WindowCostExceededError';
+  }
+}
+
 export async function rankUniverseByConviction(args: {
   universe: string[];
   decisionDate: Date;
@@ -270,15 +284,44 @@ export async function rankUniverseByConviction(args: {
   // Optional progress callback so the simulator can log "12/30
   // complete" without waiting for the full sweep.
   onProgress?: (done: number, total: number, latest: BacktestPickResult) => void;
+  // Per-window cost ceiling. When set, the loop accumulates costUsd
+  // across calls and throws WindowCostExceededError as soon as the
+  // running total crosses the cap — protecting the user from a
+  // pathological window that would burn through their entire backtest
+  // budget. Without this, a single window can spend arbitrary
+  // dollars on its way to "completion" with no abort path.
+  maxWindowCostUsd?: number;
+  // Test seam. Defaults to the real LLM-calling implementation;
+  // unit tests pass a stub so the cost-ceiling abort logic is
+  // exercisable without a real Anthropic key.
+  runOne?: (a: {
+    symbol: string;
+    decisionDate: Date;
+    client?: Anthropic;
+  }) => Promise<BacktestPickResult>;
 }): Promise<BacktestPickResult[]> {
+  const runOne = args.runOne ?? runBacktestDeepResearch;
   const results: BacktestPickResult[] = [];
+  let cumulativeCostUsd = 0;
   for (let i = 0; i < args.universe.length; i++) {
-    const r = await runBacktestDeepResearch({
+    if (
+      args.maxWindowCostUsd != null &&
+      cumulativeCostUsd >= args.maxWindowCostUsd
+    ) {
+      throw new WindowCostExceededError(
+        cumulativeCostUsd,
+        args.maxWindowCostUsd,
+        results.length,
+        args.universe.length
+      );
+    }
+    const r = await runOne({
       symbol: args.universe[i],
       decisionDate: args.decisionDate,
       client: args.client,
     });
     results.push(r);
+    cumulativeCostUsd += r.costUsd;
     args.onProgress?.(i + 1, args.universe.length, r);
   }
   // Sort: highest conviction first. null outputs (errors) go to the

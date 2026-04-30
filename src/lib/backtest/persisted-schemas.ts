@@ -56,6 +56,11 @@ export const AggregateViewSchema = z.object({
   medianAlphaPct: z.number().nullable(),
   consistencyScore: z.number(),
   windowCount: z.number(),
+  windowsWithData: z.number().optional(),
+  tradesTotal: z.number().optional(),
+  windowsStarved: z.number().optional(),
+  agentCostUsd: z.number().optional(),
+  costAbortedAtUsd: z.number().optional(),
 });
 export type AggregateViewParsed = z.infer<typeof AggregateViewSchema>;
 

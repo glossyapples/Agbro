@@ -46,6 +46,12 @@ export type SimulatorConfig = {
   // 'tier2' = additionally screen the universe by point-in-time EDGAR
   // fundamentals at each decision date.
   mode: BacktestMode;
+  // Per-window cost ceiling for agent_deep_research strategy. When
+  // set, the rank loop tracks cumulative costUsd and aborts as soon
+  // as it crosses the cap — protecting the user from a pathological
+  // window that would burn through the entire backtest budget.
+  // No-op for strategies that don't call the LLM.
+  maxWindowCostUsd?: number;
 };
 
 export type SimulatorEvent = {
@@ -364,6 +370,7 @@ export async function runSimulation(config: SimulatorConfig): Promise<SimulatorR
     const ranked = await rankUniverseByConviction({
       universe: deployUniverse,
       decisionDate,
+      maxWindowCostUsd: config.maxWindowCostUsd,
     });
     agentCostUsd = ranked.reduce((s, r) => s + r.costUsd, 0);
     const picks = ranked

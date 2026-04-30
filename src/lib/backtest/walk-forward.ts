@@ -44,6 +44,14 @@ export type WalkForwardConfig = {
   benchmarkSymbol?: string; // default 'SPY'
   startingCashCents?: bigint; // default 100k
   mode?: BacktestMode; // default 'tier1' — tier2 needs per-symbol EDGAR coverage
+  // Per-window cost ceiling for the agent_deep_research strategy.
+  // Default $40 — at $1/call midpoint with the 30-name default
+  // universe that's a generous 33% buffer over the expected $30
+  // per-window cost. A pathological window crossing this cap aborts
+  // the entire run with status='aborted_cost_exceeded' so the user
+  // doesn't bleed past their declared backtest budget. No-op for
+  // strategies that don't call the LLM.
+  maxWindowCostUsd?: number;
 };
 
 export type WalkForwardWindow = {
@@ -109,6 +117,11 @@ export type WalkForwardResult = {
     // validation matched the cost estimate they approved before
     // the run.
     agentCostUsd?: number;
+    // Set when the run was aborted because a window's cumulative
+    // cost crossed maxWindowCostUsd. Value is the spend at the
+    // moment of abort. Subsequent windows in the slice list are
+    // absent. UI surfaces this as a partial-result state.
+    costAbortedAtUsd?: number;
   };
 };
 
@@ -254,9 +267,11 @@ export async function runWalkForward(
   const benchmarkSymbol = config.benchmarkSymbol ?? 'SPY';
   const startingCashCents = config.startingCashCents ?? 100_000_00n;
   const mode: BacktestMode = config.mode ?? 'tier1';
+  const maxWindowCostUsd = config.maxWindowCostUsd ?? 40;
 
   const windows: WalkForwardWindow[] = [];
   let agentCostUsdTotal = 0;
+  let costAbortedAtUsd: number | null = null;
 
   for (const slice of slices) {
     try {
@@ -268,6 +283,7 @@ export async function runWalkForward(
         endDate: new Date(slice.endISO + 'T00:00:00Z'),
         startingCashCents,
         mode,
+        maxWindowCostUsd,
       });
       const metrics = computeMetrics(sim.equitySeries);
       // Window-scoped alpha: simple difference between annualised
@@ -301,6 +317,41 @@ export async function runWalkForward(
         dataStarved: isDataStarved(config.universe.length, sim.tradeCount),
       });
     } catch (err) {
+      // Cost-exceeded is fatal to the entire run: continuing would
+      // burn past the user's declared backtest budget. Mark the bad
+      // window, record the abort reason, and break out of the loop.
+      // Audit: previously a single pathological window had no
+      // ceiling; the entire $300-500 budget could be consumed by one
+      // bad slice with no abort path.
+      const isCostAbort =
+        err instanceof Error && err.name === 'WindowCostExceededError';
+      if (isCostAbort) {
+        const e = err as Error & { spentUsd?: number };
+        costAbortedAtUsd = e.spentUsd ?? maxWindowCostUsd;
+        log.warn('walk_forward.aborted_cost_exceeded', {
+          strategy: config.strategyKey,
+          startISO: slice.startISO,
+          endISO: slice.endISO,
+          spentUsd: costAbortedAtUsd,
+          capUsd: maxWindowCostUsd,
+        });
+        windows.push({
+          startISO: slice.startISO,
+          endISO: slice.endISO,
+          metrics: {
+            totalReturnPct: 0,
+            benchmarkReturnPct: 0,
+            cagrPct: null,
+            sharpeAnnual: null,
+            maxDrawdownPct: 0,
+            worstMonthPct: 0,
+          },
+          alphaPct: null,
+          tradeCount: 0,
+          dataStarved: true,
+        });
+        break;
+      }
       log.error('walk_forward.window_failed', err, {
         strategy: config.strategyKey,
         startISO: slice.startISO,
@@ -353,6 +404,11 @@ export async function runWalkForward(
       tradesTotal: windows.reduce((s, w) => s + w.tradeCount, 0),
       windowsStarved: windows.filter((w) => w.dataStarved).length,
       agentCostUsd: agentCostUsdTotal > 0 ? agentCostUsdTotal : undefined,
+      // When set, a window crossed maxWindowCostUsd and the run
+      // was aborted to protect the user's budget. UI should
+      // explain the partial result rather than treat it as a
+      // normal completion.
+      costAbortedAtUsd: costAbortedAtUsd ?? undefined,
     },
   };
 }
