@@ -11,6 +11,7 @@ import { MoodStrip } from '@/components/MoodStrip';
 import { KillSwitchBanner } from '@/components/KillSwitchBanner';
 import { getPortfolioHistory, getBars, getBrokerAccount } from '@/lib/alpaca';
 import { getCryptoPositions } from '@/lib/alpaca-crypto';
+import { computeCryptoChart } from '@/lib/crypto/performance';
 import { getUpcomingEvents } from '@/lib/data/events';
 import {
   classifyMarketMood,
@@ -35,36 +36,43 @@ async function getInitialChartPayload(userId: string) {
     // portfolio_value for the scalar keeps the headline honest when
     // the user opens the app outside market hours or right after a
     // deposit, while the history drives the shape of the curve.
-    const [portfolio, broker] = await Promise.all([
+    const [portfolio, broker, cryptoChart] = await Promise.all([
       getPortfolioHistory('1D').catch(() => []),
       getBrokerAccount().catch(() => null),
+      computeCryptoChart(userId, '1D').catch(
+        () => ({ book: [] as Array<{ t: number; v: number; pct: number }> })
+      ),
     ]);
     if (portfolio.length === 0) {
       return { range: '1D' as const, summary: null, portfolio: [], spy: [] };
     }
-    // Alpaca's portfolio_history.equity is already "stocks + cash"
-    // (crypto positions are tracked separately and not folded into the
-    // equity series). So the historical chart needs no subtraction —
-    // each point IS the stocks-side equity at that timestamp.
-    //
-    // The live broker.portfolioValueCents on the other hand includes
-    // crypto, so the headline scalar still subtracts liveCrypto below
-    // to match the chart's "stocks + cash" semantics.
-    //
-    // Earlier we tried per-tick CryptoBookSnapshot subtraction (cliff
-    // at the right edge once the bootstrap snapshot existed) and
-    // constant liveCrypto subtraction (double-counted the crypto buy
-    // that already shows up in the cash drawdown). Removing entirely
-    // is what matches the actual data shape.
+    // Alpaca's portfolio_history.equity (paper-trading) is "stocks + cash"
+    // — crypto positions are tracked separately and not folded into the
+    // equity series. So a crypto buy converts cash → crypto and the
+    // chart shows a vertical drop equal to the buy size, even though
+    // total wealth didn't change. Add the historical crypto book value
+    // back at each timestamp so category shifts net to zero. Pre-buy
+    // points get +$0 (no crypto held yet); post-buy points get +
+    // (qty × price-at-time-T) computed from trade history + bars.
+    const cryptoBook = cryptoChart.book;
+    let cryptoIdx = 0;
+    let lastCrypto = 0;
     const cryptoPositions = await getCryptoPositions().catch(() => []);
     const liveCrypto = cryptoPositions.reduce(
       (s, p) => s + Number(p.marketValueCents) / 100,
       0
     );
-    const stocksPortfolio = portfolio.map((p) => ({
-      t: p.timestampMs,
-      v: p.equity,
-    }));
+    const stocksPortfolio = portfolio.map((p) => {
+      // Walk crypto book in lock-step with portfolio timestamps.
+      while (cryptoIdx < cryptoBook.length && cryptoBook[cryptoIdx].t <= p.timestampMs) {
+        lastCrypto = cryptoBook[cryptoIdx].v;
+        cryptoIdx += 1;
+      }
+      return {
+        t: p.timestampMs,
+        v: p.equity + lastCrypto,
+      };
+    });
     const basis = stocksPortfolio[0].v;
     const portfolioSeries = stocksPortfolio.map((p) => ({
       t: p.t,
@@ -80,13 +88,11 @@ async function getInitialChartPayload(userId: string) {
       pct: spyBasis && spyBasis > 0 ? ((b.close - spyBasis) / spyBasis) * 100 : 0,
     }));
     const last = stocksPortfolio[stocksPortfolio.length - 1];
-    // Prefer the live broker portfolio_value (minus current crypto
-    // book) for the headline. If the broker read failed, fall back
-    // to the last history point so we still render something.
+    // Headline now matches the chart's "total wealth" semantics: live
+    // broker.portfolioValueCents already includes crypto in its total,
+    // so no subtraction needed here either.
     const liveStocksEquity =
-      broker != null
-        ? Number(broker.portfolioValueCents) / 100 - liveCrypto
-        : last.v;
+      broker != null ? Number(broker.portfolioValueCents) / 100 : last.v;
     const currentEquity = liveStocksEquity;
     return {
       range: '1D' as const,

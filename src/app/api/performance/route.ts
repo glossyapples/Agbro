@@ -19,28 +19,9 @@ import {
   getBrokerAccount,
   type PortfolioHistoryRange,
 } from '@/lib/alpaca';
+import { computeCryptoChart, type Range as CryptoRange } from '@/lib/crypto/performance';
 import { apiError, requireUser } from '@/lib/api';
 import { log } from '@/lib/logger';
-import { prisma } from '@/lib/db';
-
-// For each Alpaca portfolio-history timestamp, estimate how much of the
-// reported equity came from the crypto book so we can subtract it and
-// surface a stocks-only view. Matches to the nearest-prior
-// CryptoBookSnapshot per point; falls back to 0 for points before our
-// snapshot series exists (crypto wasn't part of the portfolio yet).
-function subtractCryptoAt(
-  portfolioTimestampMs: number,
-  snapshots: Array<{ takenAt: Date; bookValueCents: bigint }>
-): number {
-  if (snapshots.length === 0) return 0;
-  let latest: (typeof snapshots)[number] | null = null;
-  for (const s of snapshots) {
-    if (s.takenAt.getTime() <= portfolioTimestampMs) latest = s;
-    else break; // snapshots are sorted asc; first future one means stop
-  }
-  if (!latest) return 0;
-  return Number(latest.bookValueCents) / 100;
-}
 
 export const runtime = 'nodejs';
 export const maxDuration = 30;
@@ -74,7 +55,7 @@ export async function GET(req: Request) {
   const range = parsed.data.range;
 
   try {
-    const [portfolio, broker] = await Promise.all([
+    const [portfolio, broker, cryptoChart] = await Promise.all([
       getPortfolioHistory(range).catch((err) => {
         log.warn('performance.portfolio_history_failed', { range }, err);
         return [];
@@ -88,28 +69,34 @@ export async function GET(req: Request) {
         log.warn('performance.broker_read_failed', { range }, err);
         return null;
       }),
+      // Per-tick crypto book values for the same range, so we can
+      // restore "total wealth" semantics in the chart. Alpaca's paper-
+      // trading portfolio_history.equity excludes crypto, which means
+      // a crypto buy shows up as a cliff in cash. Adding crypto back
+      // at each timestamp nets the category shift to zero.
+      computeCryptoChart(user.id, range as CryptoRange).catch(() => ({
+        book: [] as Array<{ t: number; v: number; pct: number }>,
+      })),
     ]);
 
-    // Crypto subtraction. Alpaca's portfolio_history returns TOTAL account
-    // equity (cash + stocks + options + crypto). The stocks-tab chart
-    // should exclude crypto so it doesn't get polluted by a 1%–10% crypto
-    // sleeve moving 5% in a day. Use our own CryptoBookSnapshot series
-    // (hourly) and subtract nearest-prior snapshot value per point.
-    const snapshots =
-      portfolio.length > 0
-        ? await prisma.cryptoBookSnapshot.findMany({
-            where: {
-              userId: user.id,
-              takenAt: { lte: new Date(portfolio[portfolio.length - 1].timestampMs) },
-            },
-            orderBy: { takenAt: 'asc' },
-            select: { takenAt: true, bookValueCents: true },
-          })
-        : [];
-    const stocksPortfolio = portfolio.map((p) => ({
-      timestampMs: p.timestampMs,
-      equity: p.equity - subtractCryptoAt(p.timestampMs, snapshots),
-    }));
+    // Walk the crypto book in lock-step with the portfolio timestamps.
+    // Both arrays are sorted asc; for each portfolio point, advance
+    // through the crypto series and remember the latest book value
+    // at-or-before that timestamp. Pre-purchase = +$0, post-purchase
+    // = +(qty × price-at-T) computed from trades + bars.
+    const cryptoBook = cryptoChart.book;
+    let cryptoIdx = 0;
+    let lastCrypto = 0;
+    const stocksPortfolio = portfolio.map((p) => {
+      while (cryptoIdx < cryptoBook.length && cryptoBook[cryptoIdx].t <= p.timestampMs) {
+        lastCrypto = cryptoBook[cryptoIdx].v;
+        cryptoIdx += 1;
+      }
+      return {
+        timestampMs: p.timestampMs,
+        equity: p.equity + lastCrypto,
+      };
+    });
 
     // Anchor returns to the first point so portfolio and SPY share a y-axis.
     const basis = stocksPortfolio[0]?.equity ?? null;
@@ -145,13 +132,11 @@ export async function GET(req: Request) {
     }
 
     const last = stocksPortfolio[stocksPortfolio.length - 1];
-    // Prefer live broker portfolio_value (minus current crypto book)
-    // for the headline; fall back to the last history point when
-    // broker read fails.
-    const liveCrypto = subtractCryptoAt(Date.now(), snapshots);
+    // Headline matches chart semantics now (total wealth incl. crypto),
+    // so use broker.portfolioValueCents directly.
     const currentEquity =
       broker != null
-        ? Number(broker.portfolioValueCents) / 100 - liveCrypto
+        ? Number(broker.portfolioValueCents) / 100
         : last?.equity ?? null;
     const summary =
       last && currentEquity != null
