@@ -16,6 +16,7 @@ import { getCurrentRegime } from '@/lib/data/regime';
 import { getUserCredential } from '@/lib/credentials';
 import { castForStrategy, BURRY_GUEST_SHEET, type CastBundle } from './cast';
 import { estimateCostUsd } from '@/lib/pricing';
+import { recordApiSpend } from '@/lib/safety/api-spend-log';
 
 const MEETING_MODEL = 'claude-opus-4-7';
 const MEETING_MAX_TOKENS = 16_000;
@@ -162,6 +163,17 @@ export async function runMeeting(params: {
           },
         });
       }
+    });
+
+    // Audit C15: persist to ApiSpendLog so MTD aggregation captures
+    // the meeting LLM cost. Meeting.costUsd column stays for the per-
+    // row UI surface.
+    await recordApiSpend({
+      userId,
+      kind: 'meeting',
+      model: MEETING_MODEL,
+      costUsd,
+      metadata: { meetingId: meeting.id, meetingKind: kind },
     });
 
     log.info('meeting.completed', {

@@ -20,6 +20,14 @@ import Anthropic from '@anthropic-ai/sdk';
 import { prisma } from '@/lib/db';
 import { FAST_MODEL } from '@/lib/agents/models';
 import { log } from '@/lib/logger';
+import { recordApiSpend } from '@/lib/safety/api-spend-log';
+
+// Average cost per blurb at typical input/output token counts. We use
+// a constant rather than tracking per-call usage because the Haiku
+// `usage` object isn't always returned and the aggregate signal we
+// want (frequency × average) is what matters for the budget — not a
+// fraction-of-a-cent granularity per row.
+const BLURB_AVG_COST_USD = 0.001;
 
 const SYSTEM_PROMPT = `You are summarizing a single trading-agent brain entry for display on the user's home page card. The user wants to see at a glance what the agent learned or did, without reading the full analyst-style entry.
 
@@ -94,6 +102,7 @@ export async function generateBrainBlurb(args: {
 // adding a row-level lock.
 export async function ensureBrainBlurb(entry: {
   id: string;
+  userId: string;
   title: string;
   body: string;
   kind: string;
@@ -108,6 +117,16 @@ export async function ensureBrainBlurb(entry: {
     kind: entry.kind,
   });
   if (!blurb) return null;
+  // Audit C15: record the Haiku spend even though it's tiny ($0.001/call).
+  // Aggregate-friendly: kind='brain_blurb' lets us track frequency over
+  // time independent of the cost.
+  await recordApiSpend({
+    userId: entry.userId,
+    kind: 'brain_blurb',
+    model: FAST_MODEL,
+    costUsd: BLURB_AVG_COST_USD,
+    metadata: { entryId: entry.id, brainKind: entry.kind },
+  });
   // Persist for next render. Best-effort — if the write fails (rare),
   // we still return the blurb for this render and try again next
   // time.

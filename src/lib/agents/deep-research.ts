@@ -27,6 +27,7 @@ import { refreshFundamentalsForSymbol } from '@/lib/data/refresh-fundamentals';
 import { getResearchFilings, type ResearchFilings } from '@/lib/data/sec-filings';
 import { getBars } from '@/lib/alpaca';
 import { log } from '@/lib/logger';
+import { recordApiSpend } from '@/lib/safety/api-spend-log';
 
 // 8k thinking + 4k output = ~$0.75 worst-case with Opus 4.7. Capped
 // so a single click can't blow the budget. Adaptive thinking on
@@ -485,6 +486,18 @@ export async function runDeepResearch(
     createdAt = note.createdAt;
     log.info('deep_research.persisted', { userId: args.userId, symbol, noteId, costUsd });
   }
+
+  // Audit C15: record the spend so it shows up in MTD aggregation.
+  // Deep-research is user-triggered ($1+ per click), runs outside the
+  // agent loop, and historically had no persistence path that the
+  // budget enforcer could read.
+  await recordApiSpend({
+    userId: args.userId,
+    kind: 'deep_research',
+    model: TRADE_DECISION_MODEL,
+    costUsd,
+    metadata: { symbol, noteId },
+  });
 
   const result: DeepResearchResult = {
     symbol,

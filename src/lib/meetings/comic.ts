@@ -15,6 +15,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { prisma } from '@/lib/db';
 import { log } from '@/lib/logger';
 import { estimateCostUsd } from '@/lib/pricing';
+import { recordApiSpend } from '@/lib/safety/api-spend-log';
 import { MeetingOutputSchema, type MeetingOutput } from './schema';
 import {
   castForStrategyKey,
@@ -150,6 +151,29 @@ export async function generateMeetingComic(params: {
       comicError: null, // clear any prior error on successful retry
     },
   });
+
+  // Audit C15: persist comic costs as TWO ApiSpendLog rows so the
+  // breakdown survives in the audit trail (script LLM vs image gen
+  // are different model+kind). Both count toward the user's MTD
+  // aggregate.
+  if (script.costUsd > 0) {
+    await recordApiSpend({
+      userId,
+      kind: 'comic_script',
+      model: 'claude-opus-4-7',
+      costUsd: script.costUsd,
+      metadata: { meetingId },
+    });
+  }
+  if (imageCostUsd > 0) {
+    await recordApiSpend({
+      userId,
+      kind: 'comic_image',
+      model: 'gpt-image-2',
+      costUsd: imageCostUsd,
+      metadata: { meetingId },
+    });
+  }
 
   log.info('comic.completed', {
     meetingId,

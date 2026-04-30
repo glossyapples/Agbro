@@ -21,6 +21,7 @@ import { AGBRO_PRINCIPLES } from './prompts';
 import { TOOL_DEFS, runTool, isMutatingTool } from './tools';
 import { child, log } from '@/lib/logger';
 import { estimateCostUsd, type TokenUsage } from '@/lib/pricing';
+import { recordApiSpend } from '@/lib/safety/api-spend-log';
 import {
   loadMeetingPriorities,
   renderPrioritiesForWakePrompt,
@@ -480,6 +481,14 @@ export async function runAgent(args: RunAgentArgs): Promise<RunAgentResult> {
         costUsd,
       },
     });
+    // Errored runs still consumed tokens — record the spend.
+    await recordApiSpend({
+      userId: args.userId,
+      kind: 'agent_run',
+      model: TRADE_DECISION_MODEL,
+      costUsd,
+      metadata: { agentRunId: run.id, trigger: args.trigger, errored: true },
+    });
     log.error('agent.run.errored', err, { costUsd, usage: totalUsage });
     throw err;
   }
@@ -508,6 +517,18 @@ export async function runAgent(args: RunAgentArgs): Promise<RunAgentResult> {
   await prisma.agentRun.update({
     where: { id: run.id },
     data: { costUsd },
+  });
+
+  // Audit C15: also write a row to ApiSpendLog so the budget enforcer
+  // sees this spend in its single-source aggregation. AgentRun.costUsd
+  // continues to be set above for per-row UI convenience but isn't
+  // authoritative for budget anymore.
+  await recordApiSpend({
+    userId: args.userId,
+    kind: 'agent_run',
+    model: TRADE_DECISION_MODEL,
+    costUsd,
+    metadata: { agentRunId: run.id, trigger: args.trigger },
   });
 
   const final = await prisma.agentRun.findUnique({ where: { id: run.id } });

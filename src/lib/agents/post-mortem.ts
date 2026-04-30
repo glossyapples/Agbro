@@ -33,6 +33,7 @@ import { prisma } from '@/lib/db';
 import { TRADE_DECISION_MODEL } from './models';
 import { log } from '@/lib/logger';
 import { estimateCostUsd } from '@/lib/pricing';
+import { recordApiSpend } from '@/lib/safety/api-spend-log';
 
 export const MAX_TRADES_PER_POST_MORTEM = 5;
 
@@ -279,6 +280,17 @@ export async function runPostMortem(
           : 0;
 
       const { analysis, costUsd } = await analyzeOne(client, ctx, pnlUsd, realizedPnlPct);
+      // Audit C15: record the nested Anthropic call so MTD aggregation
+      // sees post-mortem spend. The orchestrator's totalUsage tracker
+      // doesn't capture this — it lives inside a tool subroutine that
+      // makes its own messages.create call.
+      await recordApiSpend({
+        userId: args.userId,
+        kind: 'post_mortem',
+        model: TRADE_DECISION_MODEL,
+        costUsd,
+        metadata: { tradeId: trade.id, symbol: trade.symbol, outcome },
+      });
       const confidence = classifyConfidence(realizedPnlPct);
 
       const tagSet = ['post_mortem', 'auto-recorded'];

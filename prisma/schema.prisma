@@ -45,6 +45,7 @@ model User {
   governorDecisions GovernorDecision[]
   pendingApprovals PendingApproval[]
   walkForwardRuns WalkForwardRun[]
+  apiSpendLogs  ApiSpendLog[]
 }
 
 // BYOK — per-user API keys for third-party providers. The raw key is
@@ -1188,4 +1189,48 @@ model PendingApproval {
   @@index([userId, status])
   @@index([expiresAt])
   @@index([userId, createdAt])
+}
+
+// -------------------- API spend log (single source of truth) --------------------
+
+// One row per Anthropic-billable call across the system. Audit C15:
+// previously MTD spend was computed by summing AgentRun.costUsd +
+// Meeting.costUsd, which silently missed deep-research user-clicks,
+// post-mortem nested calls, and weekly-cron brain writeups. Those
+// surfaces had no per-row cost field, so their cost was logged but
+// never persisted to anything getMtdApiSpend could read.
+//
+// ApiSpendLog is the post-fix single source of truth. Every code path
+// that calls Anthropic writes one row with kind/model/costUsd; the
+// budget enforcer aggregates from this table only. The legacy
+// AgentRun.costUsd and Meeting.costUsd columns stay for per-row
+// convenience (used in /api/debug/last-agent-run, the meeting card,
+// etc.) but no longer drive budget decisions — they're mirrors, not
+// authoritative.
+//
+// kind values (free-form string for forward extensibility, not enum):
+//   'agent_run'      — orchestrator's messages.create across all turns
+//   'deep_research'  — user-triggered /research/deep streaming run
+//   'post_mortem'    — post-mortem analysis nested call from agent loop
+//   'meeting'        — weekly meeting LLM dispatch
+//   'comic_script'   — comic dialogue generation
+//   'comic_image'    — gpt-image-2 generation (OpenAI, but counted toward agbro budget)
+//   'weekly_brain'   — cron/weekly brain writeup
+//   'brain_blurb'    — Haiku call for the home-page summary
+//
+// metadata is a small JSON object for kind-specific context (symbol
+// for deep_research, meetingId for meeting, agentRunId for the agent
+// surfaces, etc.). NOT used for aggregation — debug only.
+model ApiSpendLog {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kind      String
+  model     String
+  costUsd   Float
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([userId, kind, createdAt])
 }

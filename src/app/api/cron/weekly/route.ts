@@ -9,6 +9,7 @@ import { BRAIN_WRITER_SYSTEM } from '@/lib/agents/prompts';
 import { apiError, assertCronSecret } from '@/lib/api';
 import { log } from '@/lib/logger';
 import { estimateCostUsd } from '@/lib/pricing';
+import { recordApiSpend } from '@/lib/safety/api-spend-log';
 
 export const runtime = 'nodejs';
 export const maxDuration = 300;
@@ -123,6 +124,15 @@ Return plain markdown. No preamble.`;
               cacheWriteTokens: u.cache_creation_input_tokens ?? 0,
             })
           : 0;
+        // Audit C15: persist the spend. Weekly cron runs over Anthropic
+        // every week per user; previously logged but invisible to the
+        // budget enforcer.
+        await recordApiSpend({
+          userId: user.id,
+          kind: 'weekly_brain',
+          model: BRAIN_WRITEUP_MODEL,
+          costUsd,
+        });
         log.info('cron.weekly.user_ok', { userId: user.id, costUsd, model: BRAIN_WRITEUP_MODEL });
 
         const text = resp.content

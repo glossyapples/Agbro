@@ -39,43 +39,33 @@ export function startOfMonthUtc(nowMs: number = Date.now()): Date {
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
 }
 
-// Sum the user's MTD Anthropic API spend across every cost-bearing
-// surface. Audit C15: previously this only counted AgentRun.costUsd,
-// silently underestimating true spend by the cost of weekly meetings,
-// comic generation, deep-research clicks, and post-mortem nested
-// calls. The undercount made the kill-switch trip late, after the
-// user had already bled past their declared budget.
+// Sum the user's MTD Anthropic API spend from ApiSpendLog — the
+// single source of truth for cost-bearing calls across the system.
+// Every Anthropic surface (orchestrator, deep-research, post-mortem,
+// meetings, comic, weekly-cron, brain-blurb) writes one row to
+// ApiSpendLog at the moment of charge; this aggregator simply sums
+// the current month.
 //
-// Currently summed:
-//   - AgentRun.costUsd  (orchestrator-level Claude calls; includes
-//                        post-mortem nested costs because they are
-//                        tool-output that the orchestrator folds back
-//                        into its own usage accumulator)
-//   - Meeting.costUsd   (weekly meeting LLM + comic script LLM +
-//                        image generation, all combined)
+// Audit C15: previously aggregated AgentRun.costUsd ± Meeting.costUsd
+// directly, which silently missed deep-research user-clicks, weekly-
+// cron brain writeups, post-mortem nested calls, and comic
+// generation. ApiSpendLog closes that gap permanently — the budget
+// enforcer now has visibility into every Anthropic spend regardless
+// of which entity persisted the per-row cost.
 //
-// Known undercounts pending a follow-up schema change (an ApiSpendLog
-// table or costUsd columns on ResearchNote + BrainEntry):
-//   - User-triggered /research/deep streaming runs
-//   - Weekly cron brain writeups (currently logged-only)
-// These typically run $1-3 per click / per week, so the undercount
-// is bounded but real. Will be addressed in the high-priority sprint.
+// Backwards-compat: AgentRun.costUsd and Meeting.costUsd columns are
+// still set at write time for per-row UI display (e.g.
+// /api/debug/last-agent-run). They're mirrors, not authoritative.
 export async function getMtdApiSpend(
   userId: string,
   nowMs: number = Date.now()
 ): Promise<number> {
   const since = startOfMonthUtc(nowMs);
-  const [agentAgg, meetingAgg] = await Promise.all([
-    prisma.agentRun.aggregate({
-      where: { userId, startedAt: { gte: since }, costUsd: { not: null } },
-      _sum: { costUsd: true },
-    }),
-    prisma.meeting.aggregate({
-      where: { userId, startedAt: { gte: since }, costUsd: { not: null } },
-      _sum: { costUsd: true },
-    }),
-  ]);
-  return (agentAgg._sum.costUsd ?? 0) + (meetingAgg._sum.costUsd ?? 0);
+  const agg = await prisma.apiSpendLog.aggregate({
+    where: { userId, createdAt: { gte: since } },
+    _sum: { costUsd: true },
+  });
+  return agg._sum.costUsd ?? 0;
 }
 
 // Pure classifier — split from the DB call so the threshold logic
