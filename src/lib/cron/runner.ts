@@ -74,26 +74,41 @@ function isSameEtDay(a: Date, b: Date): boolean {
 // that the inner work can listen on so it actually stops doing work
 // when the deadline hits — not just rejects the outer promise while
 // the orchestrator keeps spending tokens. Audit C2.
-function withTimeoutAndSignal<T>(
+//
+// Defense-in-depth: races the inner against the timeout deadline. A
+// cooperative inner (one that listens to the signal and rejects on
+// abort, like the Anthropic SDK) settles first and the timeout race
+// is moot. A non-cooperative inner (legacy SDK, third-party tool that
+// ignores AbortSignal) still gets a real outer rejection at the
+// deadline — the inner keeps running in the background, but the
+// caller is unblocked. Without this race, a non-cooperative inner
+// would hang forever even though the deadline fired.
+//
+// Exported for tests; not part of the runner's public API.
+export function withTimeoutAndSignal<T>(
   factory: (signal: AbortSignal) => Promise<T>,
   ms: number,
   tag: string
 ): Promise<T> {
   const ctrl = new AbortController();
-  const timer = setTimeout(
-    () => ctrl.abort(new Error(`${tag} timed out after ${ms}ms`)),
-    ms
-  );
+  let timeoutFired = false;
   const inner = factory(ctrl.signal);
-  return new Promise((resolve, reject) => {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      timeoutFired = true;
+      ctrl.abort(new Error(`${tag} timed out after ${ms}ms`));
+      reject(new Error(`${tag} timed out after ${ms}ms`));
+    }, ms);
     inner.then(
       (v) => {
         clearTimeout(timer);
-        resolve(v);
+        if (!timeoutFired) resolve(v);
       },
       (e) => {
         clearTimeout(timer);
-        // Surface a cleaner timeout message when the abort fires.
+        if (timeoutFired) return; // already rejected with timeout msg
+        // If the inner rejected because we aborted it, prefer the
+        // timeout message — cleaner for log-grep.
         if (ctrl.signal.aborted && e instanceof Error && /abort/i.test(e.message)) {
           reject(new Error(`${tag} timed out after ${ms}ms`));
           return;
