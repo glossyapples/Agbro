@@ -35,9 +35,11 @@ export function middleware(req: NextRequest) {
 
 // Exclude: Auth.js routes, cron routes (secret-gated), health (public liveness),
 // scheduler status (public liveness for the autonomous wake loop),
+// scheduler-trace (public diagnostic — tick decisions only, no secrets,
+// added to break the "agent silent for weeks, no logs visible" loop),
 // Next.js internals, static assets.
 export const config = {
   matcher: [
-    '/((?!api/auth|api/cron|api/health|api/scheduler/status|_next/static|_next/image|favicon.ico|manifest.webmanifest|.*\\.(?:png|jpg|jpeg|svg|webp|ico)$).*)',
+    '/((?!api/auth|api/cron|api/health|api/scheduler/status|api/debug/scheduler-trace|_next/static|_next/image|favicon.ico|manifest.webmanifest|.*\\.(?:png|jpg|jpeg|svg|webp|ico)$).*)',
   ],
 };
