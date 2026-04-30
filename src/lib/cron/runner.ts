@@ -70,16 +70,34 @@ function isSameEtDay(a: Date, b: Date): boolean {
   return fmt.format(a) === fmt.format(b);
 }
 
-function withTimeout<T>(promise: Promise<T>, ms: number, tag: string): Promise<T> {
+// Helper: wrap a promise with a deadline AND surface an AbortSignal
+// that the inner work can listen on so it actually stops doing work
+// when the deadline hits — not just rejects the outer promise while
+// the orchestrator keeps spending tokens. Audit C2.
+function withTimeoutAndSignal<T>(
+  factory: (signal: AbortSignal) => Promise<T>,
+  ms: number,
+  tag: string
+): Promise<T> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(
+    () => ctrl.abort(new Error(`${tag} timed out after ${ms}ms`)),
+    ms
+  );
+  const inner = factory(ctrl.signal);
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`${tag} timed out after ${ms}ms`)), ms);
-    promise.then(
+    inner.then(
       (v) => {
         clearTimeout(timer);
         resolve(v);
       },
       (e) => {
         clearTimeout(timer);
+        // Surface a cleaner timeout message when the abort fires.
+        if (ctrl.signal.aborted && e instanceof Error && /abort/i.test(e.message)) {
+          reject(new Error(`${tag} timed out after ${ms}ms`));
+          return;
+        }
         reject(e);
       }
     );
@@ -280,8 +298,8 @@ async function runTickBody(): Promise<TickResult> {
     }
 
     try {
-      const result = await withTimeout(
-        runAgent({ userId: account.userId, trigger: 'schedule' }),
+      const result = await withTimeoutAndSignal(
+        (signal) => runAgent({ userId: account.userId, trigger: 'schedule', signal }),
         PER_USER_BUDGET_MS,
         `agent(${account.userId})`
       );

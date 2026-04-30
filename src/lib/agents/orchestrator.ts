@@ -79,6 +79,14 @@ export class AgentRunInflightError extends Error {
 export type RunAgentArgs = {
   userId: string;
   trigger: 'schedule' | 'manual' | 'user_deposit' | 'market_event';
+  // Optional cancellation signal. When triggered, the orchestrator
+  // stops issuing new Anthropic turns and propagates the abort to the
+  // current in-flight messages.create call so token spend stops with
+  // it. Audit C2: the per-user 90s tick timeout previously rejected
+  // the outer promise but left the orchestrator running in the
+  // background, accumulating cost and potentially firing place_trade
+  // after the tick had already moved on.
+  signal?: AbortSignal;
 };
 
 export type RunAgentResult = {
@@ -264,15 +272,29 @@ export async function runAgent(args: RunAgentArgs): Promise<RunAgentResult> {
     : {};
   try {
     for (let turn = 0; turn < MAX_TURNS; turn++) {
-      const resp = await client.messages.create({
-        model: TRADE_DECISION_MODEL,
-        max_tokens: MAX_OUTPUT_TOKENS,
-        system: AGBRO_PRINCIPLES,
-        tools: cachedTools,
-        messages,
-        // Adaptive thinking — see thinkingParam comment above.
-        ...thinkingParam,
-      });
+      // Honor cancellation between turns. If the caller's signal was
+      // aborted (tick timeout, manual cancel, container shutting
+      // down) we stop issuing new Anthropic calls. The current
+      // in-flight call is also passed the signal below so it
+      // terminates the stream and stops token spend.
+      if (args.signal?.aborted) {
+        throw new Error(`runAgent aborted: ${args.signal.reason ?? 'caller signaled cancellation'}`);
+      }
+      const resp = await client.messages.create(
+        {
+          model: TRADE_DECISION_MODEL,
+          max_tokens: MAX_OUTPUT_TOKENS,
+          system: AGBRO_PRINCIPLES,
+          tools: cachedTools,
+          messages,
+          // Adaptive thinking — see thinkingParam comment above.
+          ...thinkingParam,
+        },
+        // Anthropic SDK accepts AbortSignal as the second arg; when
+        // the signal aborts the network stream is cancelled and the
+        // promise rejects with an AbortError. Audit C2.
+        args.signal ? { signal: args.signal } : undefined
+      );
 
       // Accumulate token usage across every turn so AgentRun.costUsd reflects
       // the full run, not just the final turn. The cache fields are present
