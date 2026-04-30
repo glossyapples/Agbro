@@ -125,10 +125,17 @@ export type PortfolioHistoryRange = '1D' | '1W' | '1M' | '3M' | 'YTD' | '1Y' | '
 // Alpaca period strings and bar timeframe for each UX range. YTD isn't a
 // native Alpaca period, so we compute the start date ourselves and request
 // a date-bounded history instead.
+// Alpaca rejects period/timeframe pairs that produce too many bars
+// (returns 422). 1M with 1H bars is over the limit; drop to 1D bars
+// for any range >= 1M. The drawdown safety rail only needs daily
+// granularity over a 30-day window, so this is no functional loss
+// — and it's what kept the agent silent for two weeks (every tick
+// hit kill_switch:data_unavailable from the 422). 1W stays at 1H
+// because that combination IS within Alpaca's bar-count cap.
 const RANGE_PARAMS: Record<PortfolioHistoryRange, { period?: string; timeframe: string; ytd?: boolean }> = {
   '1D':  { period: '1D',  timeframe: '5Min'  },
   '1W':  { period: '1W',  timeframe: '1H'    },
-  '1M':  { period: '1M',  timeframe: '1H'    },
+  '1M':  { period: '1M',  timeframe: '1D'    },
   '3M':  { period: '3M',  timeframe: '1D'    },
   'YTD': {                 timeframe: '1D', ytd: true },
   '1Y':  { period: '1A',  timeframe: '1D'    },
