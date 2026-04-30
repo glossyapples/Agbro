@@ -32,16 +32,43 @@ type SummaryEvent = {
 type Provider = 'anthropic' | 'openai';
 type AnthropicPreset = 'haiku' | 'opus';
 
-// Curated default model IDs per provider. The OpenAI list reflects
-// the GPT-5 family as of Jan 2026; user can paste any model ID via
-// the textbox if their account has access to something else.
-const OPENAI_PRESETS = ['gpt-5', 'gpt-5-pro', 'gpt-5.5', 'gpt-5-mini'] as const;
+// Curated OpenAI model presets surfaced as toggle buttons. Mirrors
+// the Anthropic Haiku/Opus toggle so mobile users don't have to type
+// model IDs on a touchscreen. Cost hints are best-effort estimates;
+// pricing.ts has the authoritative per-model rates.
+const OPENAI_PRESETS = [
+  {
+    id: 'gpt-5',
+    label: 'GPT-5',
+    sub: 'Flagship, ~$2',
+    capUsd: '5.00',
+  },
+  {
+    id: 'gpt-5.5',
+    label: 'GPT-5.5',
+    sub: 'Latest, ~$5',
+    capUsd: '8.00',
+  },
+  {
+    id: 'gpt-5-pro',
+    label: 'GPT-5 Pro',
+    sub: 'Reasoning, ~$5',
+    capUsd: '8.00',
+  },
+  {
+    id: 'gpt-5-mini',
+    label: 'GPT-5 Mini',
+    sub: 'Cheap, ~$0.15',
+    capUsd: '1.00',
+  },
+] as const;
+type OpenAIPresetId = (typeof OPENAI_PRESETS)[number]['id'];
 
 export function LeakTestRunner() {
   const [provider, setProvider] = useState<Provider>('anthropic');
   const [anthropicPreset, setAnthropicPreset] =
     useState<AnthropicPreset>('haiku');
-  const [openaiModel, setOpenaiModel] = useState<string>('gpt-5');
+  const [openaiModel, setOpenaiModel] = useState<OpenAIPresetId>('gpt-5');
   const [costCapUsd, setCostCapUsd] = useState<string>('1.00');
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -238,24 +265,32 @@ export function LeakTestRunner() {
           {provider === 'openai' && (
             <div>
               <label className="text-xs text-ink-300">Model</label>
-              <input
-                type="text"
-                value={openaiModel}
-                disabled={running}
-                onChange={(e) => setOpenaiModel(e.target.value.trim())}
-                placeholder="gpt-5"
-                list="openai-presets"
-                className="mt-1 w-full rounded-md border border-ink-700 bg-ink-900 px-3 py-2 text-sm text-ink-50"
-              />
-              <datalist id="openai-presets">
+              <div className="mt-1 grid grid-cols-2 gap-2">
                 {OPENAI_PRESETS.map((m) => (
-                  <option key={m} value={m} />
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => {
+                      setOpenaiModel(m.id);
+                      setCostCapUsd(m.capUsd);
+                    }}
+                    disabled={running}
+                    className={`rounded-md px-3 py-2 text-xs ${
+                      openaiModel === m.id
+                        ? 'bg-brand-500/30 border border-brand-500 text-ink-50'
+                        : 'border border-ink-700 text-ink-300'
+                    }`}
+                  >
+                    {m.label}
+                    <br />
+                    <span className="text-[10px] text-ink-400">{m.sub}</span>
+                  </button>
                 ))}
-              </datalist>
+              </div>
               <p className="mt-1 text-[10px] text-ink-400">
-                Type any OpenAI chat model your key has access to. Reasoning
-                tiers (gpt-5-pro, gpt-5.5) cost ~5-15× the base — keep the
-                cap honest.
+                If your OpenAI key returns &quot;model not found&quot;, the
+                tier you picked may not be enabled on your plan — pick
+                a different one or check OpenAI dashboard.
               </p>
             </div>
           )}
