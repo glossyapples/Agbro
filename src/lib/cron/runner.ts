@@ -24,7 +24,12 @@ import { log } from '@/lib/logger';
 // the build artifact is stale (older than the source we just pushed).
 console.log('[scheduler-runner] runner.ts loaded — build banner v3');
 
-const PER_USER_BUDGET_MS = 90_000;
+// Per-user soft budget for one runAgent invocation. Was 90s; that's
+// tight when the orchestrator does multiple tool turns + adaptive
+// thinking (a single tool turn can be 30s on Opus). Bumped to 5
+// minutes, still inside the 6-minute scheduler hard ceiling so a
+// hung run can't permanently block the tick loop.
+const PER_USER_BUDGET_MS = 5 * 60_000;
 
 export type TickOutcome =
   | { userId: string; skipped: true; reason: string }
