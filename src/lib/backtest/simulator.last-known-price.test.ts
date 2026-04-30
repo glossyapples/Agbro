@@ -35,10 +35,17 @@ import { _clearBarCacheForTests } from './data';
 import { runSimulation } from './simulator';
 
 // Build trading-day timestamps between two ISO dates inclusive.
+// Generates NYSE-realistic timestamps: session-open at 14:30 UTC.
+// That's 9:30 ET during EST and 10:30 ET during EDT — both safely
+// inside the same ET trading day so isoDateET formats them as the
+// expected calendar date regardless of DST. The previous version
+// used UTC midnight which is 8pm ET previous day, surfacing as the
+// wrong calendar date the moment the simulator started formatting in
+// ET (audit calendar-shift fix).
 function tradingDays(startISO: string, endISO: string): number[] {
   const out: number[] = [];
-  const start = new Date(startISO + 'T00:00:00Z');
-  const end = new Date(endISO + 'T00:00:00Z');
+  const start = new Date(startISO + 'T14:30:00Z');
+  const end = new Date(endISO + 'T14:30:00Z');
   for (let d = new Date(start); d <= end; d.setUTCDate(d.getUTCDate() + 1)) {
     const dow = d.getUTCDay();
     if (dow === 0 || dow === 6) continue;
@@ -111,6 +118,9 @@ describe('simulator — last-day mark-to-market bug', () => {
     // day's equity should fall back to last-known price, not show a
     // synthetic dip to "cash + zero for this position".
     const allDays = tradingDays('2017-01-02', '2018-12-28');
+    // Match the simulator's equity-series timestamp shape: t is built
+    // as `new Date('${date}T00:00:00Z').getTime()` where `date` is the
+    // ET-format YYYY-MM-DD. Construct the same way for the lookup.
     const gapDay = new Date('2018-06-15T00:00:00Z').getTime();
     const vtiBars = allDays
       .filter((t) => t !== gapDay)

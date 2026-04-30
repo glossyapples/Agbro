@@ -36,11 +36,31 @@ export async function loadDailyBars(
 // close at on 2020-03-16" without scanning the array each day. Missing
 // days (weekends, holidays, early IPO periods) just don't appear in the
 // map — caller falls back to "skip this day for this symbol."
+//
+// Audit note: dates are formatted in America/New_York (NYSE local time)
+// not UTC. NYSE daily bars are timestamped at session start (9:30 ET);
+// during EDT that's 13:30 UTC and during EST that's 14:30 UTC — both
+// safely within the same UTC date as ET. But a future move to intraday
+// bars or a different exchange would have early-morning ET bars at
+// 04:30+ UTC, where the UTC slice silently rolls back a day. Pinning
+// the format to ET timezone makes the calendar agree with NYSE's
+// trading day regardless of bar resolution or DST. Uses 'en-CA'
+// locale specifically because it formats ISO YYYY-MM-DD natively.
+const ET_DATE_FORMAT = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'America/New_York',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
+
+export function isoDateET(timestampMs: number): string {
+  return ET_DATE_FORMAT.format(new Date(timestampMs));
+}
+
 export function indexByDate(bars: Bar[]): Map<string, number> {
   const out = new Map<string, number>();
   for (const b of bars) {
-    const iso = new Date(b.timestampMs).toISOString().slice(0, 10);
-    out.set(iso, b.close);
+    out.set(isoDateET(b.timestampMs), b.close);
   }
   return out;
 }

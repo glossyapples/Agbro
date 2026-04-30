@@ -24,7 +24,7 @@
 //   - Comparison of strategies on the same data
 
 import type { Bar } from '@/lib/alpaca';
-import { loadDailyBars, indexByDate, unionDates } from './data';
+import { loadDailyBars, indexByDate, unionDates, isoDateET } from './data';
 import { resolveRuleset, type StrategyKey, type BacktestRuleset } from './rules';
 import { backfillMany } from './historical-fundamentals';
 import {
@@ -148,11 +148,15 @@ export async function runSimulation(config: SimulatorConfig): Promise<SimulatorR
   const benchmarkMap = indexByDate(benchmarkBars);
 
   // Build the walk calendar from the union of all symbols + benchmark.
+  // Compare ET date strings to ET date strings — previously the filter
+  // built `${d}T00:00:00Z`.getTime() and compared milliseconds, which
+  // coupled to UTC semantics while indexByDate's keys were ET. With
+  // both sides in ET, day boundaries align with NYSE's trading day
+  // regardless of DST. (Audit calendar-shift fix.)
   const allMaps = [...symbolBars.values(), benchmarkMap];
-  const calendar = unionDates(allMaps).filter((d) => {
-    const t = new Date(`${d}T00:00:00Z`).getTime();
-    return t >= startMs && t <= endMs;
-  });
+  const startISO = isoDateET(startMs);
+  const endISO = isoDateET(endMs);
+  const calendar = unionDates(allMaps).filter((d) => d >= startISO && d <= endISO);
 
   // Forward-filled price index. For each symbol, every calendar day
   // maps to the most recent close ≤ that day. Used for VALUATION
