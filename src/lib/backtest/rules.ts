@@ -19,7 +19,23 @@ export type StrategyKey =
   // and lets it pick. Validation cost is real: ~$0.50-2.00 per
   // (symbol, window) pair, so the walk-forward UI gates the run on a
   // cost-estimate confirmation.
-  | 'agent_deep_research';
+  | 'agent_deep_research'
+  // ── Baselines ─────────────────────────────────────────────────────
+  // Two zero-cost (no LLM, no fundamentals filtering) reference
+  // strategies that any deployed strategy MUST beat to justify its
+  // existence. Run W5 for agent_deep_research AND for these two; if
+  // the agent isn't materially ahead of equal_weight_universe over
+  // the same windows, the agent's selection is value-destructive
+  // (you're paying real Anthropic dollars to expensively rediscover
+  // equal-weight). If equal-weight beats SPY but the agent doesn't
+  // beat equal-weight, your edge is in the universe construction,
+  // not the agent. The audit specifically called out the absence of
+  // baselines as the gap that prevents alpha from being PROVED.
+  //
+  // Both baselines are <$0.01 per backtest run (just bar fetches +
+  // arithmetic), so adding them to a comparison costs nothing.
+  | 'spy_buy_hold'
+  | 'equal_weight_universe';
 
 export type BacktestRuleset = {
   // Day-zero + rebalance targets. For value strategies that receive an
@@ -136,6 +152,24 @@ export function resolveRuleset(key: StrategyKey): BacktestRuleset {
       // caller-supplied universe. Empty ruleset signals "use the
       // agent code path" to runSimulation.
       return {};
+    case 'spy_buy_hold':
+      // Single-position buy-and-hold of SPY. Day-zero deploy, no
+      // rebalance, no exits. The cheapest possible alpha baseline:
+      // "what if you just bought the index and never touched it?"
+      // Universe must contain 'SPY' (default does).
+      return {
+        targetWeights: { SPY: 1.0 },
+      };
+    case 'equal_weight_universe':
+      // Equal-weight every name in the caller-supplied universe with
+      // a quarterly rebalance band. No fundamentals filtering, no
+      // LLM, no DCA. Tests whether agent_deep_research's NAME
+      // SELECTION (over the same universe) is doing better than
+      // simply holding all of it equally.
+      return {
+        rebalanceBandPct: 5,
+        rebalanceCadenceDays: 90,
+      };
   }
 }
 
@@ -147,6 +181,8 @@ export const STRATEGY_KEYS: StrategyKey[] = [
   'boglehead_index',
   'burry_deep_research',
   'agent_deep_research',
+  'spy_buy_hold',
+  'equal_weight_universe',
 ];
 
 export const STRATEGY_LABELS: Record<StrategyKey, string> = {
@@ -157,6 +193,8 @@ export const STRATEGY_LABELS: Record<StrategyKey, string> = {
   boglehead_index: 'Boglehead Index',
   burry_deep_research: 'Burry Deep Research',
   agent_deep_research: 'Agent Deep Research',
+  spy_buy_hold: 'SPY (baseline)',
+  equal_weight_universe: 'Equal-weight universe (baseline)',
 };
 
 // Default universes per strategy. Users can override when starting a
@@ -184,6 +222,19 @@ export const DEFAULT_UNIVERSES: Record<StrategyKey, string[]> = {
   // this default at 5 windows = 150 agent calls = ~$150 with Opus
   // high effort.
   agent_deep_research: [
+    'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'NVDA', 'V', 'MA',
+    'JNJ', 'PG', 'KO', 'PEP', 'COST', 'WMT', 'HD', 'MCD',
+    'BRK.B', 'JPM', 'BAC', 'XOM', 'CVX', 'UNH', 'ABBV', 'LLY',
+    'TMO', 'ADBE', 'CRM', 'NFLX', 'NKE', 'DIS',
+  ],
+  // SPY-only universe for the SPY baseline. The simulator deploys
+  // the targetWeights{SPY:1} on day zero against this universe.
+  spy_buy_hold: ['SPY'],
+  // Use the same default 30-name universe as agent_deep_research so
+  // the equal-weight baseline answers "what if you held all 30
+  // equally?" — the apples-to-apples comparison for the agent's
+  // name-picking value-add.
+  equal_weight_universe: [
     'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'NVDA', 'V', 'MA',
     'JNJ', 'PG', 'KO', 'PEP', 'COST', 'WMT', 'HD', 'MCD',
     'BRK.B', 'JPM', 'BAC', 'XOM', 'CVX', 'UNH', 'ABBV', 'LLY',

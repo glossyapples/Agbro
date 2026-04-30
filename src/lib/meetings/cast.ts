@@ -281,6 +281,12 @@ const CASTS_BY_STRATEGY: Record<StrategyKey, CastBundle> = {
   // cast-meeting flow. Default to BURRY_CAST so any path that
   // dispatches by strategyKey still gets a sensible cast.
   agent_deep_research: BURRY_CAST,
+  // Baselines are backtest-only reference strategies — they have no
+  // narrative cast (you don't have a "meeting" about index investing).
+  // Default to BOGLEHEAD_CAST so any incidental dispatch still
+  // resolves; production meeting flow filters these out upstream.
+  spy_buy_hold: BOGLEHEAD_CAST,
+  equal_weight_universe: BOGLEHEAD_CAST,
 };
 
 // Infer a strategy key from a free-form active-strategy name. User's

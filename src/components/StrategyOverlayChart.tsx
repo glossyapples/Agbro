@@ -37,6 +37,11 @@ const STRATEGY_COLORS: Record<StrategyKey, string> = {
   boglehead_index: '#f472b6',
   burry_deep_research: '#f97316', // highlighter-orange, his signature colour
   agent_deep_research: '#22d3ee', // cyan — distinct from the other six
+  // Baselines: muted grays so they read as reference lines on the
+  // chart, not competing strategies. Equal-weight gets a slightly
+  // darker shade so the two are distinguishable when overlaid.
+  spy_buy_hold: '#94a3b8',
+  equal_weight_universe: '#64748b',
 };
 
 export function StrategyOverlayChart({ windows }: { windows: BacktestWindow[] }) {
