@@ -19,7 +19,7 @@ import { prisma } from '@/lib/db';
 import { TRADE_DECISION_MODEL, assertTradeModel } from './models';
 import { AGBRO_PRINCIPLES } from './prompts';
 import { TOOL_DEFS, runTool, isMutatingTool } from './tools';
-import { child } from '@/lib/logger';
+import { child, log } from '@/lib/logger';
 import { estimateCostUsd, type TokenUsage } from '@/lib/pricing';
 import {
   loadMeetingPriorities,
@@ -536,6 +536,31 @@ async function syncPositions(userId: string): Promise<void> {
 
   const brokerSymbols = Array.from(new Set(broker.map((p) => p.symbol)));
 
+  // Catastrophic-risk guard. Without this, a transient Alpaca outage that
+  // returns an empty array would `notIn: []` match every local Position
+  // and wipe the table — then the next agent wake would see zero held
+  // names and re-buy everything. The auditor flagged this as the worst
+  // bug in the codebase.
+  //
+  // The check: if the broker says "no positions" but our local table
+  // shows positions with qty > 0, refuse to delete. This trades a slow
+  // delete-of-truly-closed-positions (we'll catch them on the next
+  // healthy sync) for safety against the broker-flake-wipes-everything
+  // failure mode. A truly empty account never enters this branch
+  // because there's nothing local to wipe.
+  if (broker.length === 0) {
+    const existingHeld = await prisma.position.count({
+      where: { userId, qty: { gt: 0 } },
+    });
+    if (existingHeld > 0) {
+      log.warn('orchestrator.sync_positions.broker_empty_skip', {
+        userId,
+        localHeldCount: existingHeld,
+      });
+      return;
+    }
+  }
+
   await prisma.$transaction([
     // Upsert everything the broker is reporting.
     ...broker.map((p) =>
@@ -551,8 +576,7 @@ async function syncPositions(userId: string): Promise<void> {
       })
     ),
     // Remove local rows the broker no longer reports (closed positions).
-    // When brokerSymbols is empty, `notIn: []` would match everything — safe,
-    // since it means the broker has zero positions for this user.
+    // The broker.length === 0 path is gated above.
     prisma.position.deleteMany({
       where: { userId, symbol: { notIn: brokerSymbols } },
     }),
