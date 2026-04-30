@@ -418,6 +418,29 @@ async function tryRebalance(
     drifts: drifts.map((d) => ({ sym: d.symbol, diff: d.diffUsd.toFixed(2) })),
   });
 
+  // Bump lastRebalancedAt BEFORE submitting legs (mirrors the DCA fix
+  // in audit C7). A network drop after Alpaca accepts an order but
+  // before our process sees the response would otherwise re-fire the
+  // entire rebalance on the next tick — duplicate sells AND buys. By
+  // bumping first: if every leg fails, we wait until the next
+  // rebalanceCadenceDays window. If a leg succeeded at the broker but
+  // the response dropped, the per-leg client_order_id below dedupes
+  // the retry server-side at Alpaca.
+  const rebalanceCycleStart = new Date();
+  await prisma.cryptoConfig.update({
+    where: { userId },
+    data: { lastRebalancedAt: rebalanceCycleStart },
+  });
+
+  // Stable per-cycle key for idempotency. Day-granularity matches
+  // rebalanceCadenceDays semantics (≥ 1 day in practice).
+  const cycleDayKey = rebalanceCycleStart.toISOString().slice(0, 10);
+  const rebalanceClientId = (side: 'buy' | 'sell', symbol: string): string =>
+    `rb-${side}-${createHash('sha256')
+      .update(`${userId}|${symbol}|${cycleDayKey}`)
+      .digest('hex')
+      .slice(0, 22)}`;
+
   // Execute sells first to free up cash for the buys. Keeps sequencing
   // predictable and avoids buy rejections for insufficient funds.
   const trades: RebalanceTrade[] = [];
@@ -426,12 +449,14 @@ async function tryRebalance(
 
   for (const sell of sells) {
     const notionalUsd = sell.diffUsd;
+    const clientOrderId = rebalanceClientId('sell', sell.symbol);
     try {
       const order = await placeCryptoOrder({
         symbol: sell.symbol,
         side: 'sell',
         notionalUsd,
         timeInForce: 'gtc',
+        clientOrderId,
       });
       const priceAtOrder = await getCryptoLatestPrice(sell.symbol).catch(() => null);
       const qty = priceAtOrder ? notionalUsd / priceAtOrder : 0;
@@ -459,9 +484,14 @@ async function tryRebalance(
         symbol: sell.symbol,
         notionalUsd: notionalUsd.toFixed(2),
         orderId: order.id,
+        clientOrderId,
       });
     } catch (err) {
-      log.error('crypto.rebalance_sell_failed', err, { userId, symbol: sell.symbol });
+      log.error('crypto.rebalance_sell_failed', err, {
+        userId,
+        symbol: sell.symbol,
+        clientOrderId,
+      });
     }
   }
 
@@ -492,12 +522,14 @@ async function tryRebalance(
     // dust, skip this leg.
     const notionalUsd = -buy.diffUsd * scaleFactor; // diffUsd is negative for underweight
     if (notionalUsd < 1) continue;
+    const clientOrderId = rebalanceClientId('buy', buy.symbol);
     try {
       const order = await placeCryptoOrder({
         symbol: buy.symbol,
         side: 'buy',
         notionalUsd,
         timeInForce: 'gtc',
+        clientOrderId,
       });
       const priceAtOrder = await getCryptoLatestPrice(buy.symbol).catch(() => null);
       const qty = priceAtOrder ? notionalUsd / priceAtOrder : 0;
@@ -525,18 +557,19 @@ async function tryRebalance(
         symbol: buy.symbol,
         notionalUsd: notionalUsd.toFixed(2),
         orderId: order.id,
+        clientOrderId,
       });
     } catch (err) {
-      log.error('crypto.rebalance_buy_failed', err, { userId, symbol: buy.symbol });
+      log.error('crypto.rebalance_buy_failed', err, {
+        userId,
+        symbol: buy.symbol,
+        clientOrderId,
+      });
     }
   }
 
-  if (trades.length > 0) {
-    await prisma.cryptoConfig.update({
-      where: { userId },
-      data: { lastRebalancedAt: new Date() },
-    });
-  }
+  // lastRebalancedAt was already bumped above, before the leg loop —
+  // see audit C7-style comment. No second update needed here.
 
   return {
     ran: trades.length > 0,
