@@ -544,9 +544,10 @@ export default async function OverviewPage() {
                   {overdue && (
                     <>
                       {' '}
-                      · check <code>/api/scheduler/status</code> — if
-                      tickCount isn&apos;t incrementing, the in-process
-                      scheduler isn&apos;t firing.
+                      · The agent should have woken by now. Tap
+                      &quot;Wake agent&quot; to run it manually, or
+                      check Settings → Safety Rails if it stays
+                      overdue.
                     </>
                   )}
                 </p>

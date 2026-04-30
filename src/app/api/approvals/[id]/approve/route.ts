@@ -82,6 +82,7 @@ export async function POST(
       tradeResult = (await runTool('place_trade', input, {
         userId: user.id,
         agentRunId: approval.agentRunId,
+        caller: 'approval-executor',
         bypassAutonomyLadder: true,
       })) as typeof tradeResult;
     } catch (toolErr) {

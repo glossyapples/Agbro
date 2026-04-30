@@ -90,7 +90,7 @@ describe('POST /api/approvals/[id]/approve', () => {
     expect(runTool).not.toHaveBeenCalled();
   });
 
-  it('dispatches place_trade with bypassAutonomyLadder=true', async () => {
+  it('dispatches place_trade with bypassAutonomyLadder=true and caller=approval-executor', async () => {
     findUnique.mockResolvedValue(pendingRow);
     runTool.mockResolvedValue({
       tradeId: 'trade-1',
@@ -102,6 +102,8 @@ describe('POST /api/approvals/[id]/approve', () => {
     const [name, input, ctx] = runTool.mock.calls[0];
     expect(name).toBe('place_trade');
     expect(ctx.bypassAutonomyLadder).toBe(true);
+    // Audit C3: bypass requires both the flag and the caller identity.
+    expect(ctx.caller).toBe('approval-executor');
     expect(ctx.userId).toBe('user-a');
     expect(ctx.agentRunId).toBe('run-1');
     // The reconstructed input restores the agent-facing fields.

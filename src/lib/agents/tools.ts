@@ -576,10 +576,17 @@ export type ToolContext = {
   // Trade.agentRunId when present.
   agentRunId: string | null;
   userId: string;
+  // Caller identity. Used to gate the autonomy-bypass below: only
+  // 'approval-executor' may legitimately request it. If a future code
+  // path forgets to set this and passes bypassAutonomyLadder=true,
+  // the assertion at the tool layer will refuse. Audit C3 — the
+  // previous "single trusted boolean" was the kind of thing that
+  // turns Observe → live trading on a misplaced flag.
+  caller?: 'agent' | 'approval-executor';
   // Escape hatch used by the approval queue's execute path. When
-  // true, placeTradeTool skips the observe/propose autonomy
-  // divergence and runs the full gate + broker path. Never set from
-  // the agent loop.
+  // true AND caller === 'approval-executor', placeTradeTool skips
+  // the observe/propose autonomy divergence and runs the full gate
+  // + broker path. Never honored from any other caller.
   bypassAutonomyLadder?: boolean;
 };
 
@@ -927,7 +934,17 @@ async function placeTradeTool(ctx: ToolContext, input: Record<string, unknown>) 
   // pass (see below). The bypassAutonomyLadder flag (set only by
   // the approval-queue executor) skips both divergences so an
   // already-approved proposal can reach the broker.
-  if (autonomyLevel === 'observe' && !ctx.bypassAutonomyLadder) {
+  //
+  // Audit C3: the bypass is only honored when ctx.caller is
+  // explicitly 'approval-executor'. Previously a stray boolean was
+  // sufficient to skip the gate; now both the boolean AND a typed
+  // caller identity must agree. The agent loop sets caller='agent'
+  // (or leaves it undefined → falsy), so any agent path that
+  // accidentally constructed a ctx with bypass=true would still
+  // route through Observe.
+  const bypassActive =
+    ctx.bypassAutonomyLadder === true && ctx.caller === 'approval-executor';
+  if (autonomyLevel === 'observe' && !bypassActive) {
     const approval = await createPendingApproval({
       userId: ctx.userId,
       agentRunId: ctx.agentRunId ?? null,
@@ -1170,9 +1187,9 @@ async function placeTradeTool(ctx: ToolContext, input: Record<string, unknown>) 
   // Propose autonomy: every gate-approved trade routes to the queue
   // instead of the broker. We DO NOT reserve a pending Trade row or
   // a daily-cap slot here — the user's approval will re-enter the
-  // tx path below. Sell-side proposals queue too. Bypass flag
-  // (approval executor) skips the divergence.
-  if (autonomyLevel === 'propose' && !ctx.bypassAutonomyLadder) {
+  // tx path below. Sell-side proposals queue too. Bypass requires
+  // both the flag AND caller='approval-executor' (audit C3).
+  if (autonomyLevel === 'propose' && !bypassActive) {
     const approval = await createPendingApproval({
       userId: ctx.userId,
       agentRunId: ctx.agentRunId ?? null,
