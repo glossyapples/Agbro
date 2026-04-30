@@ -11,6 +11,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { apiError, requireUser } from '@/lib/api';
+import { parseEquitySeries } from '@/lib/backtest/persisted-schemas';
 
 export const runtime = 'nodejs';
 
@@ -43,8 +44,6 @@ export async function GET(req: Request) {
       if (!latest.has(r.strategyKey)) latest.set(r.strategyKey, r);
     }
 
-    type EquityPoint = { t: number; equity: number; benchmark: number };
-
     const strategySeries: Array<{
       strategyKey: string;
       runId: string;
@@ -58,9 +57,8 @@ export async function GET(req: Request) {
     let benchmarkTaken = false;
 
     for (const r of latest.values()) {
-      const series = Array.isArray(r.equitySeries)
-        ? (r.equitySeries as unknown as EquityPoint[])
-        : [];
+      // Audit C11: parse via Zod, fall back to empty on shape drift.
+      const series = parseEquitySeries(r.equitySeries, `BacktestRun(${r.id}).equitySeries`);
 
       // Runs with <2 equity points happen when Alpaca's free IEX feed
       // had no bars for the universe in the requested window (e.g.

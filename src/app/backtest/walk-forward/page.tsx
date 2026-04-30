@@ -3,6 +3,7 @@ import { prisma } from '@/lib/db';
 import { requirePageUser } from '@/lib/auth';
 import { WalkForwardRunner } from '@/components/WalkForwardRunner';
 import type { StrategyKey } from '@/lib/backtest/rules';
+import { parseWindowViews, parseAggregateView } from '@/lib/backtest/persisted-schemas';
 
 export const runtime = 'nodejs';
 
@@ -54,11 +55,11 @@ export default async function WalkForwardPage() {
     errorMessage: r.errorMessage,
     startedAt: r.startedAt.toISOString(),
     completedAt: r.completedAt?.toISOString() ?? null,
-    windows: Array.isArray(r.windows) ? (r.windows as unknown as WindowView[]) : [],
-    aggregate:
-      r.aggregate && typeof r.aggregate === 'object'
-        ? (r.aggregate as unknown as AggregateView | null)
-        : null,
+    // Audit C11: parse rather than cast. If the producer drifted, the
+    // parser logs loudly and we fall back to empty/null — chart still
+    // renders, error is caught on first read.
+    windows: parseWindowViews(r.windows, `WalkForwardRun(${r.id}).windows`),
+    aggregate: parseAggregateView(r.aggregate, `WalkForwardRun(${r.id}).aggregate`),
   }));
 
   return (

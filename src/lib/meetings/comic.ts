@@ -15,7 +15,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { prisma } from '@/lib/db';
 import { log } from '@/lib/logger';
 import { estimateCostUsd } from '@/lib/pricing';
-import type { MeetingOutput } from './schema';
+import { MeetingOutputSchema, type MeetingOutput } from './schema';
 import {
   castForStrategyKey,
   castSheet,
@@ -42,7 +42,22 @@ export async function generateMeetingComic(params: {
     log.warn('comic.skipped_no_transcript', { meetingId });
     return { ok: false };
   }
-  const output = meeting.transcriptJson as unknown as MeetingOutput;
+  // Audit C11: parse the persisted JSON via Zod instead of a blind cast.
+  // If the producer drifts or the row was hand-edited, we log loudly and
+  // refuse to render the comic rather than throwing an opaque NPE three
+  // function calls deep when an expected field is undefined.
+  const parsed = MeetingOutputSchema.safeParse(meeting.transcriptJson);
+  if (!parsed.success) {
+    log.error(
+      'comic.persisted.shape_drift',
+      new Error(
+        `Meeting.transcriptJson failed schema parse for ${meetingId}: ${parsed.error.issues[0]?.message ?? 'unknown'}`
+      ),
+      { meetingId, issues: parsed.error.issues.slice(0, 3) }
+    );
+    return { ok: false };
+  }
+  const output: MeetingOutput = parsed.data as MeetingOutput;
   // Resolve the cast from the meeting's snapshot if present (new
   // meetings), else infer from the strategy key. Legacy meetings
   // without either fall back to the default cast. Guest characters

@@ -2,6 +2,8 @@
 // multi-turn Claude call plays all five executive roles in one go and
 // emits this JSON. Keeps the "firm with five partners arguing" fiction
 // alive while spending like a single agent.
+
+import { z } from 'zod';
 //
 // Every character has a "botified" name so we never misrepresent a
 // real person. Visuals in comics use robot features explicitly —
@@ -43,6 +45,65 @@ export type ActionItemUpdate = {
   status: 'started' | 'on_hold' | 'completed' | 'blocked';
   note?: string;
 };
+
+// Zod parser for MeetingOutput as persisted on Meeting.transcriptJson.
+// Audit C11: every read of transcriptJson previously cast `unknown as
+// MeetingOutput`, which TypeScript can't verify at runtime. A model
+// drift or schema field rename would silently produce broken comic
+// generation with no compile error. parseMeetingOutput() runs this
+// schema and returns null + logs on any drift; callers must handle
+// the null case (e.g. fall back to the meeting's plain summary).
+const RoleSchema = z.enum([
+  'warren_buffbot',
+  'charlie_mungbot',
+  'analyst',
+  'risk',
+  'operations',
+  'michael_burrybot',
+]);
+
+export const MeetingOutputSchema = z.object({
+  transcript: z.array(z.object({ role: RoleSchema, text: z.string() })),
+  summary: z.string(),
+  decisions: z.array(z.string()),
+  actionItemUpdates: z.array(
+    z.object({
+      id: z.string(),
+      status: z.enum(['started', 'on_hold', 'completed', 'blocked']),
+      note: z.string().optional(),
+    })
+  ),
+  actionItems: z.array(
+    z.object({
+      kind: z.enum(['research', 'adjust_strategy', 'review_position', 'wait_for_data', 'note']),
+      description: z.string(),
+    })
+  ),
+  policyChanges: z.array(
+    z.object({
+      kind: z.enum(['account', 'cadence']),
+      targetKey: z.string(),
+      before: z.unknown(),
+      after: z.unknown(),
+      rationale: z.string(),
+    })
+  ),
+  sentiment: z.enum(['bullish', 'cautious', 'defensive', 'opportunistic']),
+  comicFocus: z.object({
+    title: z.string(),
+    arc: z.string(),
+    roles: z.array(RoleSchema),
+  }),
+  cast: z
+    .object({
+      strategyKey: z.string(),
+      characters: z.record(
+        z.string(),
+        z.object({ name: z.string(), personality: z.string(), visual: z.string() })
+      ),
+    })
+    .optional(),
+});
 
 export type MeetingOutput = {
   // Chronological list of turns across all roles. 10-16 turns is the
