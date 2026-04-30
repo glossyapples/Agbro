@@ -270,11 +270,12 @@ async function runOneArmAnthropic(args: {
 }
 
 // OpenAI dispatch via raw fetch to /v1/chat/completions, mirroring the
-// pattern in src/lib/meetings/comic.ts. Newer reasoning models
-// (gpt-5-pro, o1-pro, o3-pro) accept `max_completion_tokens` instead
-// of `max_tokens`; we send both keys and trust the API to ignore the
-// one it doesn't understand. response_format=json_object pushes the
-// model toward valid JSON output without a separate JSON-mode prompt.
+// pattern in src/lib/meetings/comic.ts. GPT-5 family rejects the
+// legacy `max_tokens` field — only `max_completion_tokens` is
+// accepted, and on reasoning models that budget INCLUDES the hidden
+// reasoning tokens, so we set it to 4000 to leave headroom for the
+// visible JSON answer. response_format=json_object nudges the model
+// toward valid JSON without a separate JSON-mode prompt.
 async function runOneArmOpenAI(args: {
   arm: LeakArm;
   model: string;
@@ -288,14 +289,18 @@ async function runOneArmOpenAI(args: {
       'runOneArmOpenAI: openaiKey missing. Add an OpenAI API key in Settings → API keys.'
     );
   }
+  // Reasoning models burn most of the budget on hidden tokens. 4000
+  // gives ~3000 of reasoning slack plus ~1000 for the JSON answer.
+  // Caller's `maxTokens` (600) is the right ceiling for Anthropic but
+  // would zero-out the visible answer on a GPT-5 reasoning trace.
+  const completionTokens = Math.max(args.maxTokens, 4000);
   const body: Record<string, unknown> = {
     model: args.model,
     messages: [
       { role: 'system', content: args.system },
       { role: 'user', content: args.user },
     ],
-    max_tokens: args.maxTokens,
-    max_completion_tokens: args.maxTokens,
+    max_completion_tokens: completionTokens,
     response_format: { type: 'json_object' },
   };
   const res = await fetch('https://api.openai.com/v1/chat/completions', {

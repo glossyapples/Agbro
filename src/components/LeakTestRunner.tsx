@@ -36,6 +36,10 @@ type AnthropicPreset = 'haiku' | 'opus';
 // the Anthropic Haiku/Opus toggle so mobile users don't have to type
 // model IDs on a touchscreen. Cost hints are best-effort estimates;
 // pricing.ts has the authoritative per-model rates.
+// Model IDs verified against developers.openai.com/api/docs/models —
+// `gpt-5-pro` does NOT exist as a literal ID; the Pro tier is named
+// `gpt-5.5-pro`. Using the wrong ID returns model_not_found and every
+// pair fails (see W0 OpenAI run, 0/61 errored).
 const OPENAI_PRESETS = [
   {
     id: 'gpt-5',
@@ -50,8 +54,8 @@ const OPENAI_PRESETS = [
     capUsd: '8.00',
   },
   {
-    id: 'gpt-5-pro',
-    label: 'GPT-5 Pro',
+    id: 'gpt-5.5-pro',
+    label: 'GPT-5.5 Pro',
     sub: 'Reasoning, ~$5',
     capUsd: '8.00',
   },
