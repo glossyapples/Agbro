@@ -1,12 +1,12 @@
 # Scheduler setup — getting auto-wake working
 
-The agent has TWO wake sources:
+The agent has THREE concerns to wire up:
 
-1. **In-process scheduler** (src/lib/scheduler.ts) — fires every 2 min from inside the Railway container. **Fragile.** Dies when Railway recycles the container. Treat this as a backup only.
+1. **Trigger source** — what makes the agent run on cadence (GitHub Actions, fully external).
+2. **Outage detection** — what alerts you when the agent has stopped running silently (UptimeRobot or equivalent, free tier).
+3. **In-process scheduler** (src/lib/scheduler.ts) — secondary trigger that fires every 2 min from inside the Railway container. Backup only; dies when Railway recycles the container.
 
-2. **GitHub Actions cron** (.github/workflows/agent-tick.yml) — fires every 15 min from GitHub's infrastructure, hits `/api/cron/tick`. **Authoritative.** Survives any container restart.
-
-This doc gets #2 working. Five minutes, three places to paste a string.
+The first two are 5-minute setups. The third needs no configuration. After all three are in place, a recurrence of the original 2-week silent outage is detectable within ~2 hours instead of "whenever you next happen to look at /trades."
 
 ---
 
@@ -101,3 +101,79 @@ Anthropic API: the cron just *triggers* the agent loop; the agent itself respect
 ## Once this is working, can I disable the in-process scheduler?
 
 Yes. Set `AGBRO_DISABLE_SCHEDULER=true` in Railway env. The in-process timer becomes a no-op; GitHub Actions is your only wake source. Recommended once you've seen the workflow run cleanly for a few days.
+
+---
+
+# Part 2 — Outage detection (the alert that would have caught the 2-week bug)
+
+The original silent outage (the one that took 8 rounds of debugging to find) was undetectable from outside the codebase: every layer above the lease-typo bug returned 200, the home page rendered, manual wakes worked, the agent just never ran on its own. Nothing watched the *correctness* of what the scheduler was doing; everything watched only its *aliveness*.
+
+The fix is a public health endpoint that returns 503 when the system is alive but doing nothing, plus an external monitor that pages on 503.
+
+## Step 1 — confirm the endpoint works
+
+In any browser, hit:
+
+```
+https://agbro-production.up.railway.app/api/health/scheduler-correctness
+```
+
+During market hours (M-F, 09:30–16:00 ET), with at least one un-stopped account, you should see:
+
+```json
+{
+  "ok": true,
+  "marketHours": true,
+  "tickCount": 47,
+  "lastTickCompletedAt": "2026-04-30T14:23:11.000Z",
+  "lastTickSummary": { "total": 1, "ran": 1, "skipped": 0, "failed": 0, ... },
+  "reasons": []
+}
+```
+
+Response code 200 means everything is healthy. Outside market hours or with no active accounts, you'll also see 200 — the endpoint only flags during the window when the agent is *expected* to be running.
+
+If you see 503 with `reasons` populated, that's the alert payload — it tells you which signal failed.
+
+## Step 2 — set up an external monitor
+
+Free-tier options that work fine for this:
+
+- **UptimeRobot** — 50 monitors free, 5-minute interval, email alerts. The most common choice.
+- **BetterStack (Better Uptime)** — 10 monitors free, 3-minute interval, slicker UI.
+- **cron-job.org** — free, 1-minute interval, less polish but free-er.
+
+UptimeRobot walkthrough (any of the above works the same way):
+
+1. Sign up at [uptimerobot.com](https://uptimerobot.com), confirm email.
+2. Dashboard → **+ Add New Monitor**.
+3. Configure:
+   - **Monitor Type:** HTTP(s)
+   - **Friendly Name:** `agbro scheduler correctness`
+   - **URL:** `https://agbro-production.up.railway.app/api/health/scheduler-correctness`
+   - **Monitoring Interval:** 5 minutes (free tier minimum)
+   - **Alert Contacts:** add your email
+4. **Create Monitor**.
+
+## Step 3 — verify the alert path
+
+You don't want to find out the alert is broken when there's a real outage. Test it:
+
+1. Temporarily set `isPaused: true` on your Account row (Railway dashboard → DB → run `UPDATE "Account" SET "isPaused"=true WHERE "userId"='<your-id>'`).
+2. Wait 2-3 minutes for the next scheduler tick. The endpoint will now return 503 because no AgentRun fired during market hours.
+3. Within ~5 min UptimeRobot should email you.
+4. Flip `isPaused` back to false.
+5. UptimeRobot will email again when the endpoint flips back to 200.
+
+If you don't get either email, your alert path is broken — fix that *now* rather than after the next outage.
+
+## What the alert catches
+
+- `tickCount === 0` after boot delay + 5min: the in-process scheduler started but never produced a tick. Original bug shape.
+- 0 schedule-triggered AgentRuns in the last 2 hours during market hours, with ≥1 active account: ticking but findMany returns 0 accounts. Exact original bug shape.
+
+## What the alert does NOT catch
+
+- A bad agent (running on cadence but making losing trades). That's a strategy question, not an availability question.
+- Crypto DCA failures (different code path). Crypto runs 24/7 so a separate alert isn't time-pressing; daily review of `/crypto/positions` covers it.
+- Single-tick errors that recover next tick. Designed-in noise filter — flagging on every transient would generate alert fatigue.
