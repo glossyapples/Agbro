@@ -18,6 +18,13 @@
 
 const INTERVAL_MS = 2 * 60 * 1000; // 2 minutes
 const BOOT_DELAY_MS = 20 * 1000;
+// Hard ceiling on a single tick. If the body hangs (e.g., a Prisma
+// connection-pool stall that never rejects), `status.running` would
+// stick at `true` forever and every subsequent tick logs "skipped —
+// previous still running" until process restart. Six minutes matches
+// the lease TTL — past that, the lease is reclaimable anyway. Audit
+// C13.
+const TICK_HARD_CEILING_MS = 6 * 60 * 1000;
 
 // Module-level state so /api/scheduler/status can report definitively
 // whether the scheduler is up without having to dig through Railway logs.
@@ -113,6 +120,20 @@ async function tickOnce(): Promise<void> {
   status.running = true;
   status.lastTickStartedAt = new Date().toISOString();
   const start = Date.now();
+  // Hard-ceiling watchdog. If the tick body hasn't returned within
+  // TICK_HARD_CEILING_MS, force-clear status.running so subsequent
+  // ticks aren't permanently locked out. The body keeps running in
+  // the background; we just stop waiting for it. Audit C13.
+  let watchdog: NodeJS.Timeout | null = null;
+  let watchdogFired = false;
+  watchdog = setTimeout(() => {
+    watchdogFired = true;
+    status.running = false;
+    status.lastTickError = `tick exceeded ${TICK_HARD_CEILING_MS / 1000}s ceiling — running flag force-cleared`;
+    console.error(
+      `[scheduler] tick #${status.tickCount + 1} HUNG — exceeded ${TICK_HARD_CEILING_MS / 1000}s ceiling, releasing running flag`
+    );
+  }, TICK_HARD_CEILING_MS);
   try {
     // Dynamic import keeps Alpaca SDK (+ its dotenv/fs transitive
     // dependency) out of the instrumentation bundle. Safe at this
@@ -140,7 +161,11 @@ async function tickOnce(): Promise<void> {
     status.lastTickError = msg.slice(0, 500);
     console.error(`[scheduler] tick #${status.tickCount + 1} FAILED: ${msg}`);
   } finally {
-    status.running = false;
+    if (watchdog != null) clearTimeout(watchdog);
+    // Only clear if the watchdog hasn't already done it — avoids a
+    // race where a slow tick that finishes JUST after the watchdog
+    // toggles the flag back to true and then false again.
+    if (!watchdogFired) status.running = false;
   }
 }
 

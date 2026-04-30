@@ -19,10 +19,12 @@ const HOLDER_ID = `agbro-${process.pid}-${Math.random().toString(36).slice(2, 10
 
 // Default TTL is a crash safety-net: long enough that a healthy tick
 // won't expire mid-run, short enough that a crashed replica's lease
-// is reclaimable on the next tick. 3 minutes handles the weekly-
-// meeting tick (which fans out meetings async but returns in seconds)
-// comfortably.
-const DEFAULT_TTL_MS = 3 * 60_000;
+// is reclaimable on the next tick. Must strictly exceed the route
+// handler's maxDuration (5 min on /api/cron/tick) — otherwise a slow
+// tick that runs the full 5 min would have its lease expire mid-body
+// and a second replica could acquire while the first is still inside
+// runTickBody, double-firing crypto cycle + regime detect. Audit C12.
+const DEFAULT_TTL_MS = 6 * 60_000;
 
 export type LeaseAcquisition =
   | { acquired: true; holderId: string; leaseId: string }
