@@ -153,8 +153,32 @@ async function tickOnce(): Promise<void> {
     };
     status.lastTickError = null;
     status.tickCount += 1;
+    // Surface skip reasons + ran/failed userIds in the line we can
+    // actually read in Railway. Without this, every tick just prints
+    // "skipped=1" with no clue WHY — the [wrn] level lines from the
+    // gate logs come through empty, leaving no diagnostic trail.
+    const reasonCounts = new Map<string, number>();
+    const ranIds: string[] = [];
+    const failedReasons: string[] = [];
+    for (const o of result.outcomes) {
+      if ('skipped' in o) {
+        reasonCounts.set(o.reason, (reasonCounts.get(o.reason) ?? 0) + 1);
+      } else if ('ran' in o) {
+        ranIds.push(o.userId);
+      } else if ('failed' in o) {
+        failedReasons.push(`${o.userId}:${o.reason}`);
+      }
+    }
+    const reasonsStr =
+      reasonCounts.size > 0
+        ? ' skipReasons=' +
+          [...reasonCounts.entries()].map(([r, n]) => `${r}×${n}`).join(',')
+        : '';
+    const ranStr = ranIds.length > 0 ? ` ran=[${ranIds.join(',')}]` : '';
+    const failedStr =
+      failedReasons.length > 0 ? ` failed=[${failedReasons.join('|')}]` : '';
     console.log(
-      `[scheduler] tick #${status.tickCount} done in ${elapsed}ms — total=${result.total} ran=${result.ran} skipped=${result.skipped} failed=${result.failed} regimeChanged=${result.regimeChanged}`
+      `[scheduler] tick #${status.tickCount} done in ${elapsed}ms — total=${result.total} ran=${result.ran} skipped=${result.skipped} failed=${result.failed} regimeChanged=${result.regimeChanged}${reasonsStr}${ranStr}${failedStr}`
     );
   } catch (err) {
     const msg = (err as Error).message ?? String(err);
