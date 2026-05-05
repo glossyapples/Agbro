@@ -1,15 +1,19 @@
 // GET /api/performance?range=1D|1W|1M|3M|YTD|1Y|ALL
 //
-// Returns the Robinhood-style chart payload: portfolio equity time-series
-// from Alpaca's own portfolio_history (so it matches what Alpaca shows in
-// their UI), plus a SPY benchmark overlay expressed as % return from the
-// range start. Both series share the same y-axis (% from start) so they're
-// directly comparable.
+// Stocks-only performance chart. The Stocks tab shows stocks; crypto
+// has its own tab and its own /api/crypto/performance endpoint. Mixing
+// crypto book values into this route's equity series caused the
+// headline "current equity" to vary by selected range (because the
+// crypto book at the last historical timestamp differed by range) and
+// produced nonsensical P&L numbers, so the integration is gone.
 //
-// Falls back to an empty-but-valid response if Alpaca is unreachable or the
-// account is brand new (no history yet) — the UI renders "Waiting for data"
-// instead of showing a red error. Trading-decision code is never in this
-// path, so chart flakes never affect the agent.
+// Returns:
+//   - summary: { currentEquity, rangePnl, rangePnlPct, spyPnlPct }
+//   - portfolio: time-series of stocks+cash equity (Alpaca's number)
+//   - spy: SPY benchmark % return overlay
+//
+// Falls back to an empty-but-valid response if Alpaca is unreachable
+// or the account is brand new (no history yet).
 
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
@@ -19,7 +23,6 @@ import {
   getBrokerAccount,
   type PortfolioHistoryRange,
 } from '@/lib/alpaca';
-import { computeCryptoChart, type Range as CryptoRange } from '@/lib/crypto/performance';
 import { apiError, requireUser } from '@/lib/api';
 import { log } from '@/lib/logger';
 
@@ -46,6 +49,7 @@ const SPY_TIMEFRAME: Record<PortfolioHistoryRange, string> = {
 export async function GET(req: Request) {
   const user = await requireUser();
   if (user instanceof NextResponse) return user;
+  void user;
 
   const url = new URL(req.url);
   const parsed = Query.safeParse({ range: url.searchParams.get('range') ?? undefined });
@@ -55,82 +59,76 @@ export async function GET(req: Request) {
   const range = parsed.data.range;
 
   try {
-    const [portfolio, broker, cryptoChart] = await Promise.all([
+    const [portfolio, broker] = await Promise.all([
       getPortfolioHistory(range).catch((err) => {
         log.warn('performance.portfolio_history_failed', { range }, err);
         return [];
       }),
-      // Live broker state for the current-equity scalar. Alpaca's
-      // portfolio_history lags real-time deposits + post-close
-      // movements; using portfolio_value keeps the headline honest
-      // when users check outside market hours or right after a
-      // deposit. Falls back to the series last point if unavailable.
+      // Live broker state for the canonical current-equity scalar.
+      // Same number for every range — broker reads "now", independent
+      // of the selected window. Chart equity series can lag (Alpaca's
+      // portfolio_history is sampled and trails real-time by minutes),
+      // but the headline must not.
       getBrokerAccount().catch((err) => {
         log.warn('performance.broker_read_failed', { range }, err);
         return null;
       }),
-      // Per-tick crypto book values for the same range, so we can
-      // restore "total wealth" semantics in the chart. Alpaca's paper-
-      // trading portfolio_history.equity excludes crypto, which means
-      // a crypto buy shows up as a cliff in cash. Adding crypto back
-      // at each timestamp nets the category shift to zero.
-      computeCryptoChart(user.id, range as CryptoRange).catch(() => ({
-        book: [] as Array<{ t: number; v: number; pct: number }>,
-      })),
     ]);
 
-    // Walk the crypto book in lock-step with the portfolio timestamps.
-    // Both arrays are sorted asc; for each portfolio point, advance
-    // through the crypto series and remember the latest book value
-    // at-or-before that timestamp. Pre-purchase = +$0, post-purchase
-    // = +(qty × price-at-T) computed from trades + bars.
-    const cryptoBook = cryptoChart.book;
-    let cryptoIdx = 0;
-    let lastCrypto = 0;
-    // Per-point series carrying BOTH alpaca's deposit-adjusted P&L and
-    // the crypto book value, so we can compute a correct deposit-adjusted
-    // total return that doesn't show fake "losses" when the user adds
-    // cash to the account or transfers stocks-cash into crypto.
-    const merged = portfolio.map((p) => {
-      while (cryptoIdx < cryptoBook.length && cryptoBook[cryptoIdx].t <= p.timestampMs) {
-        lastCrypto = cryptoBook[cryptoIdx].v;
-        cryptoIdx += 1;
-      }
-      return {
-        timestampMs: p.timestampMs,
-        equity: p.equity + lastCrypto,
-        // Alpaca's profit_loss is deposit-adjusted: external deposits
-        // and withdrawals are excluded so this is "what the market
-        // gave you" only. Adding (crypto[t] − crypto[T0]) recovers
-        // crypto P&L that Alpaca can't see, while netting out the
-        // stocks→crypto cash transfers it incorrectly counts as
-        // outflows.
-        alpacaPl: p.profitLoss,
-        crypto: lastCrypto,
-      };
-    });
+    // Headline = stocks + cash from the broker, full stop. NOT
+    // range-dependent. The chart's last sampled equity may differ by
+    // a few hundred dollars because Alpaca samples portfolio_history
+    // at 5-min/1-hour/1-day intervals depending on range, so the most
+    // recent point is always slightly stale — that's fine for the
+    // line but wrong for the headline.
+    const currentEquity =
+      broker != null
+        ? Number(broker.portfolioValueCents) / 100
+        : portfolio[portfolio.length - 1]?.equity ?? null;
 
-    // True deposit-adjusted P&L over the range, broken into the two
-    // pieces. cryptoStart is the crypto book value at the first
-    // portfolio point — anything bought before that is part of the
-    // basis and shouldn't be re-counted.
-    const cryptoStart = merged[0]?.crypto ?? 0;
-    // Per-point % return: truePl divided by invested capital AT THAT POINT
-    // (= equity − truePl). We do NOT divide by portfolio[0].equity —
-    // for a freshly-funded account Alpaca's first non-null equity is
-    // sometimes a few thousand dollars (a transient pre-deposit value)
-    // even though the user's actual capital is $100k+. Dividing by
-    // that small number produces nonsensical "gains" like +11.54% on
-    // a $411 P&L.
-    const portfolioSeries = merged.map((p) => {
-      const truePl = p.alpacaPl + (p.crypto - cryptoStart);
-      const investedAtT = p.equity - truePl;
-      return {
-        t: p.timestampMs,
-        v: p.equity,
-        pct: investedAtT > 0 ? (truePl / investedAtT) * 100 : 0,
-      };
-    });
+    // Range P&L = the dollar change Alpaca's portfolio_history records
+    // over the window, with the deposit-adjusted profit_loss field
+    // preferred when present (real Alpaca accounts excludes external
+    // deposits/withdrawals from this number; paper accounts may not).
+    // Fall back to raw equity diff if profit_loss is missing or zero.
+    const last = portfolio[portfolio.length - 1] ?? null;
+    const first = portfolio[0] ?? null;
+    const rangePnl = (() => {
+      if (last == null || first == null) return null;
+      // Prefer profit_loss when alpaca returned a non-trivial value —
+      // it's the deposit-adjusted number on real accounts. Equity diff
+      // includes deposits.
+      if (Math.abs(last.profitLoss) > 0.01) return last.profitLoss;
+      return last.equity - first.equity;
+    })();
+
+    // % gain measured against invested capital (currentEquity − rangePnl),
+    // i.e. backwards-derived "what you put in" given the current value
+    // and the gain. This avoids the divide-by-tiny-first-bar bug where
+    // Alpaca's first non-null equity for a new account is sometimes a
+    // pre-deposit transient (a few thousand dollars), making a real
+    // $400 gain render as +11.54%.
+    const investedCapital =
+      currentEquity != null && rangePnl != null ? currentEquity - rangePnl : null;
+    const rangePnlPct =
+      investedCapital != null && investedCapital > 0 && rangePnl != null
+        ? (rangePnl / investedCapital) * 100
+        : 0;
+
+    // Chart line: per-point % return relative to the same invested-capital
+    // basis the headline uses. Anchored so the right edge of the line
+    // equals the headline rangePnlPct (chart and headline can't disagree).
+    const portfolioSeries =
+      first != null && investedCapital != null && investedCapital > 0
+        ? portfolio.map((p) => {
+            const pl = Math.abs(p.profitLoss) > 0.01 ? p.profitLoss : p.equity - first.equity;
+            return {
+              t: p.timestampMs,
+              v: p.equity,
+              pct: (pl / investedCapital) * 100,
+            };
+          })
+        : [];
 
     // SPY overlay — skip if we have no portfolio points to align to.
     let spySeries: Array<{ t: number; pct: number }> = [];
@@ -156,35 +154,12 @@ export async function GET(req: Request) {
       }));
     }
 
-    const last = merged[merged.length - 1];
-    // Headline = total wealth (broker portfolio value + current crypto book).
-    // broker.portfolioValueCents covers stocks + cash; add crypto to match
-    // the chart's "total wealth" semantics.
-    const lastCryptoNow = last?.crypto ?? 0;
-    const currentEquity =
-      broker != null
-        ? Number(broker.portfolioValueCents) / 100 + lastCryptoNow
-        : last?.equity ?? null;
-    // Range P&L = Alpaca's deposit-adjusted profit_loss (stocks side) +
-    // crypto book delta over the range. This stops external deposits
-    // and stocks→crypto transfers from showing up as fake gains/losses.
-    const rangePnl =
-      last != null ? last.alpacaPl + (lastCryptoNow - cryptoStart) : null;
-    // % gain measured against invested capital (currentEquity − rangePnl),
-    // i.e. "what you put in". Avoids the divide-by-tiny-firstBarEquity
-    // bug where a $411 gain rendered as +11.54% because Alpaca's first
-    // recorded equity for a new account was $3,569 (pre-deposit transient).
-    const investedCapital =
-      currentEquity != null && rangePnl != null ? currentEquity - rangePnl : null;
     const summary =
-      last && currentEquity != null
+      currentEquity != null
         ? {
             currentEquity,
             rangePnl: rangePnl ?? 0,
-            rangePnlPct:
-              investedCapital != null && investedCapital > 0
-                ? ((rangePnl ?? 0) / investedCapital) * 100
-                : 0,
+            rangePnlPct,
             spyPnlPct: spySeries[spySeries.length - 1]?.pct ?? null,
           }
         : null;

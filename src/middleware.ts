@@ -40,6 +40,6 @@ export function middleware(req: NextRequest) {
 // Next.js internals, static assets.
 export const config = {
   matcher: [
-    '/((?!api/auth|api/cron|api/health|api/scheduler/status|api/debug/scheduler-trace|api/debug/alpaca-probe|api/debug/meetings-status|_next/static|_next/image|favicon.ico|manifest.webmanifest|.*\\.(?:png|jpg|jpeg|svg|webp|ico)$).*)',
+    '/((?!api/auth|api/cron|api/health|api/scheduler/status|api/debug/scheduler-trace|api/debug/alpaca-probe|api/debug/meetings-status|api/debug/performance-raw|_next/static|_next/image|favicon.ico|manifest.webmanifest|.*\\.(?:png|jpg|jpeg|svg|webp|ico)$).*)',
   ],
 };
