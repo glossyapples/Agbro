@@ -75,59 +75,67 @@ export async function GET(req: Request) {
       }),
     ]);
 
-    // Headline = stocks + cash from the broker, full stop. NOT
-    // range-dependent. The chart's last sampled equity may differ by
-    // a few hundred dollars because Alpaca samples portfolio_history
-    // at 5-min/1-hour/1-day intervals depending on range, so the most
-    // recent point is always slightly stale — that's fine for the
-    // line but wrong for the headline.
+    // Headline = stocks + cash from the broker. Range-independent and
+    // always live; we don't trust Alpaca's portfolio_history "last
+    // point" because the paper-account series has been observed to
+    // report stale or wrong values (e.g. a 1W last bar showing $82k
+    // when the live account is $100k).
     const currentEquity =
       broker != null
         ? Number(broker.portfolioValueCents) / 100
         : portfolio[portfolio.length - 1]?.equity ?? null;
 
-    // Range P&L = the dollar change Alpaca's portfolio_history records
-    // over the window, with the deposit-adjusted profit_loss field
-    // preferred when present (real Alpaca accounts excludes external
-    // deposits/withdrawals from this number; paper accounts may not).
-    // Fall back to raw equity diff if profit_loss is missing or zero.
-    const last = portfolio[portfolio.length - 1] ?? null;
-    const first = portfolio[0] ?? null;
-    const rangePnl = (() => {
-      if (last == null || first == null) return null;
-      // Prefer profit_loss when alpaca returned a non-trivial value —
-      // it's the deposit-adjusted number on real accounts. Equity diff
-      // includes deposits.
-      if (Math.abs(last.profitLoss) > 0.01) return last.profitLoss;
-      return last.equity - first.equity;
-    })();
+    // First "meaningful" point in the series: skip leading zero-equity
+    // bars (they're "the account didn't exist yet" placeholders for
+    // ranges longer than the account's age). Without this skip, the
+    // 1M/3M ranges anchor on $0 and turn the entire deposit into a
+    // bogus "gain".
+    const firstMeaningful = portfolio.find((p) => p.equity > 0) ?? null;
 
-    // % gain measured against invested capital (currentEquity − rangePnl),
-    // i.e. backwards-derived "what you put in" given the current value
-    // and the gain. This avoids the divide-by-tiny-first-bar bug where
-    // Alpaca's first non-null equity for a new account is sometimes a
-    // pre-deposit transient (a few thousand dollars), making a real
-    // $400 gain render as +11.54%.
-    const investedCapital =
-      currentEquity != null && rangePnl != null ? currentEquity - rangePnl : null;
+    // Range P&L = (live broker equity) − (first meaningful equity in
+    // range). Raw equity diff, NOT alpaca.profit_loss. profit_loss on
+    // paper accounts has been observed to be wildly wrong (e.g. -$18k
+    // for a week where the account only moved +$449); raw diff at
+    // least matches the equity numbers the user can see in Alpaca's
+    // own UI. Mid-range deposits / withdrawals will count as gains /
+    // losses here — that's a real product limitation we'd need a
+    // deposit ledger to fix.
+    const rangePnl =
+      currentEquity != null && firstMeaningful != null
+        ? currentEquity - firstMeaningful.equity
+        : null;
+
     const rangePnlPct =
-      investedCapital != null && investedCapital > 0 && rangePnl != null
-        ? (rangePnl / investedCapital) * 100
+      firstMeaningful != null && firstMeaningful.equity > 0 && rangePnl != null
+        ? (rangePnl / firstMeaningful.equity) * 100
         : 0;
 
-    // Chart line: per-point % return relative to the same invested-capital
-    // basis the headline uses. Anchored so the right edge of the line
-    // equals the headline rangePnlPct (chart and headline can't disagree).
+    // Chart line: per-point % return from the first meaningful equity.
+    // Replace the last sample with the live broker value so the chart
+    // ends at the same number the headline shows; otherwise a stale
+    // last bar from Alpaca leaves the chart line dangling above or
+    // below the headline.
     const portfolioSeries =
-      first != null && investedCapital != null && investedCapital > 0
-        ? portfolio.map((p) => {
-            const pl = Math.abs(p.profitLoss) > 0.01 ? p.profitLoss : p.equity - first.equity;
-            return {
+      firstMeaningful != null && firstMeaningful.equity > 0
+        ? (() => {
+            const meaningful = portfolio.filter((p) => p.equity > 0);
+            const series = meaningful.map((p) => ({
               t: p.timestampMs,
               v: p.equity,
-              pct: (pl / investedCapital) * 100,
-            };
-          })
+              pct: ((p.equity - firstMeaningful.equity) / firstMeaningful.equity) * 100,
+            }));
+            // Force the right edge to match the headline.
+            if (series.length > 0 && currentEquity != null) {
+              const last = series[series.length - 1];
+              series[series.length - 1] = {
+                t: last.t,
+                v: currentEquity,
+                pct:
+                  ((currentEquity - firstMeaningful.equity) / firstMeaningful.equity) * 100,
+              };
+            }
+            return series;
+          })()
         : [];
 
     // SPY overlay — skip if we have no portfolio points to align to.
