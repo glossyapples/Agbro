@@ -115,18 +115,22 @@ export async function GET(req: Request) {
     // portfolio point — anything bought before that is part of the
     // basis and shouldn't be re-counted.
     const cryptoStart = merged[0]?.crypto ?? 0;
-    const stocksBasis = (merged[0]?.equity ?? 0) - cryptoStart; // = portfolio[0].equity (deposit-adjusted basis)
-    const totalBasis = merged[0]?.equity ?? 0; // wealth at range start (stocks + crypto)
+    // Per-point % return: truePl divided by invested capital AT THAT POINT
+    // (= equity − truePl). We do NOT divide by portfolio[0].equity —
+    // for a freshly-funded account Alpaca's first non-null equity is
+    // sometimes a few thousand dollars (a transient pre-deposit value)
+    // even though the user's actual capital is $100k+. Dividing by
+    // that small number produces nonsensical "gains" like +11.54% on
+    // a $411 P&L.
     const portfolioSeries = merged.map((p) => {
       const truePl = p.alpacaPl + (p.crypto - cryptoStart);
+      const investedAtT = p.equity - truePl;
       return {
         t: p.timestampMs,
         v: p.equity,
-        pct: totalBasis > 0 ? (truePl / totalBasis) * 100 : 0,
+        pct: investedAtT > 0 ? (truePl / investedAtT) * 100 : 0,
       };
     });
-
-    void stocksBasis; // currently informational; kept for future per-bucket P&L breakdowns
 
     // SPY overlay — skip if we have no portfolio points to align to.
     let spySeries: Array<{ t: number; pct: number }> = [];
@@ -166,13 +170,21 @@ export async function GET(req: Request) {
     // and stocks→crypto transfers from showing up as fake gains/losses.
     const rangePnl =
       last != null ? last.alpacaPl + (lastCryptoNow - cryptoStart) : null;
+    // % gain measured against invested capital (currentEquity − rangePnl),
+    // i.e. "what you put in". Avoids the divide-by-tiny-firstBarEquity
+    // bug where a $411 gain rendered as +11.54% because Alpaca's first
+    // recorded equity for a new account was $3,569 (pre-deposit transient).
+    const investedCapital =
+      currentEquity != null && rangePnl != null ? currentEquity - rangePnl : null;
     const summary =
       last && currentEquity != null
         ? {
             currentEquity,
             rangePnl: rangePnl ?? 0,
             rangePnlPct:
-              totalBasis > 0 ? ((rangePnl ?? 0) / totalBasis) * 100 : 0,
+              investedCapital != null && investedCapital > 0
+                ? ((rangePnl ?? 0) / investedCapital) * 100
+                : 0,
             spyPnlPct: spySeries[spySeries.length - 1]?.pct ?? null,
           }
         : null;
