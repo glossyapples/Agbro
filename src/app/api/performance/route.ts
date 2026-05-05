@@ -87,7 +87,11 @@ export async function GET(req: Request) {
     const cryptoBook = cryptoChart.book;
     let cryptoIdx = 0;
     let lastCrypto = 0;
-    const stocksPortfolio = portfolio.map((p) => {
+    // Per-point series carrying BOTH alpaca's deposit-adjusted P&L and
+    // the crypto book value, so we can compute a correct deposit-adjusted
+    // total return that doesn't show fake "losses" when the user adds
+    // cash to the account or transfers stocks-cash into crypto.
+    const merged = portfolio.map((p) => {
       while (cryptoIdx < cryptoBook.length && cryptoBook[cryptoIdx].t <= p.timestampMs) {
         lastCrypto = cryptoBook[cryptoIdx].v;
         cryptoIdx += 1;
@@ -95,17 +99,34 @@ export async function GET(req: Request) {
       return {
         timestampMs: p.timestampMs,
         equity: p.equity + lastCrypto,
+        // Alpaca's profit_loss is deposit-adjusted: external deposits
+        // and withdrawals are excluded so this is "what the market
+        // gave you" only. Adding (crypto[t] − crypto[T0]) recovers
+        // crypto P&L that Alpaca can't see, while netting out the
+        // stocks→crypto cash transfers it incorrectly counts as
+        // outflows.
+        alpacaPl: p.profitLoss,
+        crypto: lastCrypto,
       };
     });
 
-    // Anchor returns to the first point so portfolio and SPY share a y-axis.
-    const basis = stocksPortfolio[0]?.equity ?? null;
-    const portfolioSeries = stocksPortfolio.map((p) => ({
-      t: p.timestampMs,
-      v: p.equity,
-      // pct return from range start — this is what the chart line draws
-      pct: basis && basis > 0 ? ((p.equity - basis) / basis) * 100 : 0,
-    }));
+    // True deposit-adjusted P&L over the range, broken into the two
+    // pieces. cryptoStart is the crypto book value at the first
+    // portfolio point — anything bought before that is part of the
+    // basis and shouldn't be re-counted.
+    const cryptoStart = merged[0]?.crypto ?? 0;
+    const stocksBasis = (merged[0]?.equity ?? 0) - cryptoStart; // = portfolio[0].equity (deposit-adjusted basis)
+    const totalBasis = merged[0]?.equity ?? 0; // wealth at range start (stocks + crypto)
+    const portfolioSeries = merged.map((p) => {
+      const truePl = p.alpacaPl + (p.crypto - cryptoStart);
+      return {
+        t: p.timestampMs,
+        v: p.equity,
+        pct: totalBasis > 0 ? (truePl / totalBasis) * 100 : 0,
+      };
+    });
+
+    void stocksBasis; // currently informational; kept for future per-bucket P&L breakdowns
 
     // SPY overlay — skip if we have no portfolio points to align to.
     let spySeries: Array<{ t: number; pct: number }> = [];
@@ -131,20 +152,27 @@ export async function GET(req: Request) {
       }));
     }
 
-    const last = stocksPortfolio[stocksPortfolio.length - 1];
-    // Headline matches chart semantics now (total wealth incl. crypto),
-    // so use broker.portfolioValueCents directly.
+    const last = merged[merged.length - 1];
+    // Headline = total wealth (broker portfolio value + current crypto book).
+    // broker.portfolioValueCents covers stocks + cash; add crypto to match
+    // the chart's "total wealth" semantics.
+    const lastCryptoNow = last?.crypto ?? 0;
     const currentEquity =
       broker != null
-        ? Number(broker.portfolioValueCents) / 100
+        ? Number(broker.portfolioValueCents) / 100 + lastCryptoNow
         : last?.equity ?? null;
+    // Range P&L = Alpaca's deposit-adjusted profit_loss (stocks side) +
+    // crypto book delta over the range. This stops external deposits
+    // and stocks→crypto transfers from showing up as fake gains/losses.
+    const rangePnl =
+      last != null ? last.alpacaPl + (lastCryptoNow - cryptoStart) : null;
     const summary =
       last && currentEquity != null
         ? {
             currentEquity,
-            rangePnl: currentEquity - (basis ?? currentEquity),
+            rangePnl: rangePnl ?? 0,
             rangePnlPct:
-              basis && basis > 0 ? ((currentEquity - basis) / basis) * 100 : 0,
+              totalBasis > 0 ? ((rangePnl ?? 0) / totalBasis) * 100 : 0,
             spyPnlPct: spySeries[spySeries.length - 1]?.pct ?? null,
           }
         : null;
