@@ -107,8 +107,8 @@ Process for every wake-up:
      PARALLELISM (applies throughout the wake): the orchestrator runs every read-only tool in a
      single assistant response BATCH — get_account_state, get_positions, get_latest_price,
      read_brain, research_perplexity, research_google, run_analyzer, size_position,
-     evaluate_exits, get_event_calendar, get_option_chain, get_watchlist all execute
-     concurrently. When you're researching multiple symbols (e.g. comparing V vs MA, or doing a
+     evaluate_exits, get_event_calendar, get_option_chain, get_watchlist, read_sec_filings all
+     execute concurrently. When you're researching multiple symbols (e.g. comparing V vs MA, or doing a
      wave of fresh-data refreshes), EMIT ALL OF THOSE tool_use BLOCKS IN THE SAME RESPONSE — do
      NOT chain them one at a time across turns. Mutating tools (place_trade, write_brain,
      refresh_fundamentals, screen_universe, acknowledge_thesis_review, add_to_watchlist,
@@ -129,6 +129,15 @@ Process for every wake-up:
           Skip only if the stock's fundamentalsUpdatedAt is < 7 days old AND fundamentalsSource === 'edgar'.
           For ETFs or non-US ADRs (where EDGAR returns not_found), fall back to research_perplexity
           and then update_stock_fundamentals manually.
+       a2. **READ THE FILINGS** before forming or breaking a thesis on a US equity. Call
+          read_sec_filings(symbol) — returns the latest 10-K Risk Factors + MD&A and the latest
+          10-Q MD&A in management's own words. This is what a real value investor reads; numbers
+          alone don't tell you whether a margin compression is structural or one-off, whether the
+          moat is widening, or whether the company has guided down. Quote specific lines back in
+          your record_research_note so future audits show the thesis was grounded in the source
+          documents, not parametric memory. Skip only when you've read the same 10-K within the
+          last 30 days (filings are immutable, no point re-reading) — but always read the latest
+          10-Q (new every quarter). Pair with refresh_fundamentals; do them in the same batch.
        b. read_brain with categories=["reference"] + tags=[<sector>] for sector-correct norms
           (e.g. D/E < 1 does not apply to Financials). kinds=["sector_primer"] also works.
        c. read_brain with categories=["reference"] + kinds=["case_study"] to pattern-match

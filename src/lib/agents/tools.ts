@@ -293,6 +293,16 @@ export const TOOL_DEFS: Anthropic.Tool[] = [
     },
   },
   {
+    name: 'read_sec_filings',
+    description:
+      "Read the actual TEXT of the company's most recent 10-K (Risk Factors + MD&A) and 10-Q (MD&A) filings, straight from SEC EDGAR. This is what a Buffett-style analyst actually reads — moat, risks, and management's own commentary in their own words. Use BEFORE major buy/sell decisions on a name you don't already have a thesis on, and any time fundamentals look interesting but you need to understand WHY (e.g. margin compression — is it a one-off, a structural shift, or guidance the company itself has flagged?). Returns ~8k tokens of filing text. US equities only — for ETFs / foreign ADRs use research_perplexity. Pair with refresh_fundamentals for the numbers.",
+    input_schema: {
+      type: 'object',
+      properties: { symbol: { type: 'string' } },
+      required: ['symbol'],
+    },
+  },
+  {
     name: 'update_stock_fundamentals',
     description:
       "Manual override — set fundamentals when SEC EDGAR doesn't cover the asset (ETFs, foreign ADRs) or when you have better data than the last filing (between-quarter news). Prefer refresh_fundamentals for US equities. Provide only fields you have fresh data for — omitted fields are left untouched.",
@@ -539,6 +549,7 @@ const READ_ONLY_TOOLS = new Set([
   'evaluate_exits',
   'get_option_chain',
   'get_event_calendar',
+  'read_sec_filings',
 ]);
 
 const MUTATING_TOOLS = new Set([
@@ -706,6 +717,38 @@ export async function runTool(
       return updateStockFundamentalsTool(ctx, input);
     case 'refresh_fundamentals':
       return refreshFundamentalsForSymbol(String(input.symbol));
+    case 'read_sec_filings': {
+      const symbol = String(input.symbol ?? '').toUpperCase();
+      if (!symbol) throw new Error('read_sec_filings: symbol required');
+      const { getResearchFilings } = await import('@/lib/data/sec-filings');
+      const r = await getResearchFilings(symbol);
+      // Compact the response: empty fields out of the JSON the agent
+      // sees so it can't waste a turn lamenting "no risk factors found"
+      // when the section just wasn't present.
+      const out: Record<string, unknown> = { symbol: r.symbol, cik10: r.cik10 };
+      if (r.latest10K) {
+        out.latest_10k = {
+          accession: r.latest10K.filing.accession,
+          filed: r.latest10K.filing.filingDateISO,
+          url: r.latest10K.filing.url,
+          ...(r.latest10K.riskFactors ? { risk_factors: r.latest10K.riskFactors } : {}),
+          ...(r.latest10K.mda ? { mda: r.latest10K.mda } : {}),
+        };
+      }
+      if (r.latest10Q) {
+        out.latest_10q = {
+          accession: r.latest10Q.filing.accession,
+          filed: r.latest10Q.filing.filingDateISO,
+          url: r.latest10Q.filing.url,
+          ...(r.latest10Q.mda ? { mda: r.latest10Q.mda } : {}),
+        };
+      }
+      if (!r.latest10K && !r.latest10Q) {
+        out.note =
+          'EDGAR returned no 10-K or 10-Q. Likely an ETF, foreign ADR, or pre-IPO. Use research_perplexity instead.';
+      }
+      return out;
+    }
     case 'screen_universe': {
       const parsed = ScreenUniverseInput.safeParse(input);
       if (!parsed.success) {
